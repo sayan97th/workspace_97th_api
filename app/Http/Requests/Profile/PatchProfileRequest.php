@@ -21,6 +21,7 @@ class PatchProfileRequest extends FormRequest
             'last_name' => ['sometimes', 'string', 'max:255'],
             'email' => ['sometimes', 'string', 'email', 'max:255', Rule::unique(User::class)->ignore($this->user()->id)],
             'phone' => ['sometimes', 'nullable', 'string', 'max:30'],
+            'timezone' => ['sometimes', 'nullable', 'string', 'timezone:all'],
         ];
     }
 }

@@ -32,6 +32,7 @@ class ProfileController extends Controller
             'last_name' => $validated['last_name'],
             'email' => $validated['email'],
             'phone' => $validated['phone'] ?? null,
+            'timezone' => $validated['timezone'] ?? null,
         ]);
 
         return response()->json([
@@ -66,8 +67,10 @@ class ProfileController extends Controller
             'full_name' => $user->full_name,
             'email' => $user->email,
             'phone' => $user->phone,
+            'timezone' => $user->timezone,
             'profile_photo_url' => $user->profile_photo_url,
             'email_verified_at' => $user->email_verified_at,
+            'created_at' => $user->created_at,
         ];
     }
 }

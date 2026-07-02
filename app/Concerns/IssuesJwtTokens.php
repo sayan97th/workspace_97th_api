@@ -21,6 +21,7 @@ trait IssuesJwtTokens
             'full_name' => $user->full_name,
             'email' => $user->email,
             'phone' => $user->phone,
+            'timezone' => $user->timezone,
             'profile_photo_url' => $user->profile_photo_url,
             'email_verified_at' => $user->email_verified_at,
             'is_active' => $user->is_active,
