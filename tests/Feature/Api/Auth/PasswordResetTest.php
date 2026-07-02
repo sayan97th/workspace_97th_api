@@ -18,6 +18,24 @@ test('forgot password sends a reset link for a known email', function () {
     Notification::assertSentTo($user, ResetPassword::class);
 });
 
+test('the password reset email links to the frontend, not the Inertia app', function () {
+    Notification::fake();
+
+    $user = User::factory()->create();
+
+    $this->postJson('/api/auth/forgot-password', ['email' => $user->email]);
+
+    Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use ($user) {
+        $action_url = $notification->toMail($user)->actionUrl;
+
+        expect($action_url)
+            ->toStartWith(rtrim(config('app.frontend_url'), '/').'/reset-password/'.$notification->token.'?')
+            ->and($action_url)->toContain('email='.urlencode($user->email));
+
+        return true;
+    });
+});
+
 test('forgot password does not reveal whether an email exists', function () {
     Notification::fake();
 
