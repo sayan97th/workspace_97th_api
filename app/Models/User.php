@@ -25,6 +25,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property int $id
  * @property string $name
  * @property string $email
+ * @property string|null $google_id
  * @property Carbon|null $email_verified_at
  * @property string $password
  * @property string|null $phone
@@ -44,7 +45,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, Team> $teams
  * @property-read Collection<int, Role> $roles
  */
-#[Fillable(['name', 'email', 'password', 'current_team_id', 'phone', 'profile_photo_path', 'is_active'])]
+#[Fillable(['name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'profile_photo_path', 'is_active'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 #[Appends(['profile_photo_url'])]
 class User extends Authenticatable implements JWTSubject, PasskeyUser

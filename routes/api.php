@@ -3,6 +3,9 @@
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\Auth\GoogleAuthController;
+use App\Http\Controllers\Auth\PasswordResetController;
+use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
@@ -12,6 +15,14 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
     Route::post('login', [AuthController::class, 'login']);
+    Route::post('two-factor-challenge', [AuthController::class, 'twoFactorChallenge']);
+    Route::post('forgot-password', [PasswordResetController::class, 'forgotPassword']);
+    Route::post('reset-password', [PasswordResetController::class, 'resetPassword']);
+
+    Route::prefix('google')->group(function () {
+        Route::get('redirect', [GoogleAuthController::class, 'redirect']);
+        Route::get('callback', [GoogleAuthController::class, 'callback']);
+    });
 
     Route::middleware('auth:api')->group(function () {
         Route::get('me', [AuthController::class, 'me']);
@@ -31,6 +42,16 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::put('password', [PasswordController::class, 'update']);
         Route::post('photo', [ProfilePhotoController::class, 'store']);
         Route::delete('photo', [ProfilePhotoController::class, 'destroy']);
+    });
+
+    // Two-factor authentication management
+    Route::prefix('auth/two-factor')->group(function () {
+        Route::get('/', [TwoFactorController::class, 'status']);
+        Route::post('/', [TwoFactorController::class, 'setup']);
+        Route::post('confirm', [TwoFactorController::class, 'confirm']);
+        Route::delete('/', [TwoFactorController::class, 'disable']);
+        Route::get('recovery-codes', [TwoFactorController::class, 'recoveryCodes']);
+        Route::post('recovery-codes', [TwoFactorController::class, 'regenerateRecoveryCodes']);
     });
 
     // Admin — staff-level roles and above
