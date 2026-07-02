@@ -19,6 +19,8 @@ test('callback creates a new user with a personal team and the client role', fun
     Socialite::fake('google', SocialiteUser::fake([
         'id' => 'google-123',
         'name' => 'Jane Doe',
+        'given_name' => 'Jane',
+        'family_name' => 'Doe',
         'email' => 'jane@example.com',
     ]));
 
@@ -38,7 +40,9 @@ test('callback backfills google_id for an existing user matched by email', funct
 
     Socialite::fake('google', SocialiteUser::fake([
         'id' => 'google-123',
-        'name' => $user->name,
+        'name' => $user->full_name,
+        'given_name' => $user->first_name,
+        'family_name' => $user->last_name,
         'email' => 'jane@example.com',
     ]));
 
@@ -52,7 +56,9 @@ test('callback issues a token directly for a user already linked by google_id', 
 
     Socialite::fake('google', SocialiteUser::fake([
         'id' => 'google-123',
-        'name' => $user->name,
+        'name' => $user->full_name,
+        'given_name' => $user->first_name,
+        'family_name' => $user->last_name,
         'email' => $user->email,
     ]));
 
@@ -66,7 +72,9 @@ test('callback redirects with an error for a disabled account', function () {
 
     Socialite::fake('google', SocialiteUser::fake([
         'id' => 'google-123',
-        'name' => $user->name,
+        'name' => $user->full_name,
+        'given_name' => $user->first_name,
+        'family_name' => $user->last_name,
         'email' => $user->email,
     ]));
 

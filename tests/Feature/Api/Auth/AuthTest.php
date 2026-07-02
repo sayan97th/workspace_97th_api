@@ -9,7 +9,8 @@ beforeEach(function () {
 
 test('a user can register and receives a token with the client role', function () {
     $response = $this->postJson('/api/auth/register', [
-        'name' => 'Jane Doe',
+        'first_name' => 'Jane',
+        'last_name' => 'Doe',
         'email' => 'jane@example.com',
         'password' => 'password123',
         'password_confirmation' => 'password123',

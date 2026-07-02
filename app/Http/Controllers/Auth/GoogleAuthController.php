@@ -53,19 +53,18 @@ class GoogleAuthController extends Controller
             }
         } else {
             $user = DB::transaction(function () use ($google_user) {
-                $name = $google_user->getName()
-                    ?: $google_user->getNickname()
-                    ?: Str::before($google_user->getEmail(), '@');
+                [$first_name, $last_name] = $this->resolveNameParts($google_user);
 
                 $user = User::create([
-                    'name' => $name,
+                    'first_name' => $first_name,
+                    'last_name' => $last_name,
                     'email' => $google_user->getEmail(),
                     'google_id' => $google_user->getId(),
                     'password' => Str::random(32),
                     'email_verified_at' => now(),
                 ]);
 
-                $this->createTeam->handle($user, $user->name."'s Team", isPersonal: true);
+                $this->createTeam->handle($user, $user->full_name."'s Team", isPersonal: true);
 
                 $user->assignRole('client');
 
@@ -79,6 +78,37 @@ class GoogleAuthController extends Controller
             'token' => $token,
             'expires_in' => $this->guard()->factory()->getTTL() * 60,
         ]));
+    }
+
+    /**
+     * Resolve the first and last name from the Google OAuth profile.
+     *
+     * Google's raw profile payload exposes `given_name`/`family_name`
+     * directly, which is more reliable than splitting the display name.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function resolveNameParts(\Laravel\Socialite\Contracts\User $google_user): array
+    {
+        $given_name = null;
+        $family_name = null;
+
+        if ($google_user instanceof \Laravel\Socialite\Two\User) {
+            $given_name = $google_user->user['given_name'] ?? null;
+            $family_name = $google_user->user['family_name'] ?? null;
+        }
+
+        if (\is_string($given_name) && $given_name !== '') {
+            return [$given_name, \is_string($family_name) ? $family_name : ''];
+        }
+
+        $display_name = $google_user->getName()
+            ?: $google_user->getNickname()
+            ?: Str::before($google_user->getEmail(), '@');
+
+        $parts = preg_split('/\s+/', trim($display_name), 2) ?: [$display_name];
+
+        return [$parts[0] !== '' ? $parts[0] : $display_name, $parts[1] ?? ''];
     }
 
     /**

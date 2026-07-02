@@ -34,12 +34,13 @@ class AuthController extends Controller
 
         $user = DB::transaction(function () use ($validated) {
             $user = User::create([
-                'name' => $validated['name'],
+                'first_name' => $validated['first_name'],
+                'last_name' => $validated['last_name'],
                 'email' => $validated['email'],
                 'password' => $validated['password'],
             ]);
 
-            $this->createTeam->handle($user, $user->name."'s Team", isPersonal: true);
+            $this->createTeam->handle($user, $user->full_name."'s Team", isPersonal: true);
 
             $user->assignRole('client');
 

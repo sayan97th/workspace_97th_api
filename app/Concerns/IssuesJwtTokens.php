@@ -16,7 +16,9 @@ trait IssuesJwtTokens
     {
         return [
             'id' => $user->id,
-            'name' => $user->name,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
+            'full_name' => $user->full_name,
             'email' => $user->email,
             'phone' => $user->phone,
             'profile_photo_url' => $user->profile_photo_url,

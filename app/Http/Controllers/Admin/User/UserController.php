@@ -13,7 +13,7 @@ class UserController extends Controller
 {
     private const STAFF_ROLES = ['super_admin', 'admin', 'staff'];
 
-    private const ALLOWED_SORT_FIELDS = ['name', 'email', 'created_at'];
+    private const ALLOWED_SORT_FIELDS = ['first_name', 'last_name', 'email', 'created_at'];
 
     /**
      * GET /api/admin/users
@@ -66,7 +66,8 @@ class UserController extends Controller
 
         if ($search !== null && $search !== '') {
             $query->where(function ($q) use ($search) {
-                $q->where('name', 'LIKE', "%{$search}%")
+                $q->where('first_name', 'LIKE', "%{$search}%")
+                    ->orWhere('last_name', 'LIKE', "%{$search}%")
                     ->orWhere('email', 'LIKE', "%{$search}%");
             });
         }

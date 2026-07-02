@@ -28,7 +28,8 @@ class ProfileController extends Controller
 
         $user = $request->user();
         $user->update([
-            'name' => $validated['name'],
+            'first_name' => $validated['first_name'],
+            'last_name' => $validated['last_name'],
             'email' => $validated['email'],
             'phone' => $validated['phone'] ?? null,
         ]);
@@ -60,7 +61,9 @@ class ProfileController extends Controller
     {
         return [
             'id' => $user->id,
-            'name' => $user->name,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
+            'full_name' => $user->full_name,
             'email' => $user->email,
             'phone' => $user->phone,
             'profile_photo_url' => $user->profile_photo_url,

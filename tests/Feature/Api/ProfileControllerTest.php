@@ -19,21 +19,23 @@ test('an authenticated user can fully update their profile', function () {
     $user = User::factory()->create();
 
     $response = $this->actingAs($user, 'api')->putJson('/api/profile', [
-        'name' => 'Updated Name',
+        'first_name' => 'Updated',
+        'last_name' => 'Name',
         'email' => 'updated@example.com',
         'phone' => '555-0199',
     ]);
 
-    $response->assertOk()->assertJsonPath('user.name', 'Updated Name');
+    $response->assertOk()->assertJsonPath('user.first_name', 'Updated')->assertJsonPath('user.last_name', 'Name');
 
     $user->refresh();
-    expect($user->name)->toBe('Updated Name');
+    expect($user->first_name)->toBe('Updated');
+    expect($user->last_name)->toBe('Name');
     expect($user->email)->toBe('updated@example.com');
     expect($user->phone)->toBe('555-0199');
 });
 
 test('an authenticated user can partially update their profile', function () {
-    $user = User::factory()->create(['name' => 'Original Name']);
+    $user = User::factory()->create(['first_name' => 'Original', 'last_name' => 'Name']);
 
     $response = $this->actingAs($user, 'api')->patchJson('/api/profile', [
         'phone' => '555-0177',
@@ -42,7 +44,8 @@ test('an authenticated user can partially update their profile', function () {
     $response->assertOk();
 
     $user->refresh();
-    expect($user->name)->toBe('Original Name');
+    expect($user->first_name)->toBe('Original');
+    expect($user->last_name)->toBe('Name');
     expect($user->phone)->toBe('555-0177');
 });
 
@@ -52,7 +55,8 @@ test('profile update rejects an email already in use', function () {
 
     $this->actingAs($user, 'api')
         ->putJson('/api/profile', [
-            'name' => $user->name,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
             'email' => 'taken@example.com',
         ])
         ->assertStatus(422)

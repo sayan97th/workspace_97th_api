@@ -147,7 +147,7 @@ test('team deletion requires name confirmation', function () {
 });
 
 test('deleting current team switches to alphabetically first remaining team', function () {
-    $user = User::factory()->create(['name' => 'Mike']);
+    $user = User::factory()->create(['first_name' => 'Mike', 'last_name' => '']);
 
     $zuluTeam = Team::factory()->create(['name' => 'Zulu Team']);
     $zuluTeam->members()->attach($user, ['role' => TeamRole::Owner->value]);
@@ -241,7 +241,7 @@ test('members can leave non personal teams', function () {
 
 test('leaving current team switches to alphabetically first remaining team', function () {
     $owner = User::factory()->create();
-    $member = User::factory()->create(['name' => 'Mike']);
+    $member = User::factory()->create(['first_name' => 'Mike', 'last_name' => '']);
 
     $zuluTeam = Team::factory()->create(['name' => 'Zulu Team']);
     $zuluTeam->members()->attach($owner, ['role' => TeamRole::Owner->value]);

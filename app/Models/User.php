@@ -23,7 +23,8 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
 
 /**
  * @property int $id
- * @property string $name
+ * @property string $first_name
+ * @property string $last_name
  * @property string $email
  * @property string|null $google_id
  * @property Carbon|null $email_verified_at
@@ -38,6 +39,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property int|null $current_team_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
+ * @property-read string $full_name
  * @property-read string|null $profile_photo_url
  * @property-read Team|null $currentTeam
  * @property-read Collection<int, Team> $ownedTeams
@@ -45,9 +47,9 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, Team> $teams
  * @property-read Collection<int, Role> $roles
  */
-#[Fillable(['name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'profile_photo_path', 'is_active'])]
+#[Fillable(['first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'profile_photo_path', 'is_active'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
-#[Appends(['profile_photo_url'])]
+#[Appends(['full_name', 'profile_photo_url'])]
 class User extends Authenticatable implements JWTSubject, PasskeyUser
 {
     /** @use HasFactory<UserFactory> */
@@ -111,6 +113,18 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
             get: fn () => $this->profile_photo_path
                 ? Storage::disk('public')->url($this->profile_photo_path)
                 : null,
+        );
+    }
+
+    /**
+     * Get the user's full name, combining their first and last name.
+     *
+     * @return Attribute<string, never>
+     */
+    protected function fullName(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => trim("{$this->first_name} {$this->last_name}"),
         );
     }
 }
