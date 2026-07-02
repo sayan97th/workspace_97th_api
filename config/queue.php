@@ -126,4 +126,26 @@ return [
         'table' => 'failed_jobs',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Email Throttle Settings
+    |--------------------------------------------------------------------------
+    |
+    | These settings control the rate at which bulk emails are dispatched to
+    | prevent SMTP provider rate limits and connection blocking.
+    |
+    | email_throttle_delay: Seconds between each individual email job dispatch.
+    |   Each job in a bulk batch is staggered by this many seconds (job N runs
+    |   after N * delay seconds). Lower values send faster but risk SMTP blocks.
+    |
+    | email_rate_limit: Max emails per minute enforced by the "emails" queue
+    |   rate limiter (registered in AppServiceProvider), used as a safety cap
+    |   in addition to the throttled dispatch delay above.
+    |
+    */
+
+    'email_throttle_delay' => (int) env('QUEUE_EMAIL_THROTTLE_DELAY', 3),
+
+    'email_rate_limit' => (int) env('QUEUE_EMAIL_RATE_LIMIT', 20),
+
 ];
