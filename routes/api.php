@@ -51,6 +51,9 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::get('/', [WorkspaceController::class, 'index']);
         Route::post('/', [WorkspaceController::class, 'store']);
         Route::get('{workspace}', [WorkspaceController::class, 'show']);
+        Route::patch('{workspace}', [WorkspaceController::class, 'update']);
+        Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
+        Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
 
         Route::prefix('{workspace}/navigation')->group(function () {
             Route::get('/', [WorkspaceNavigationItemController::class, 'index']);

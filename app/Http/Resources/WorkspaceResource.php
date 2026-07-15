@@ -39,6 +39,7 @@ class WorkspaceResource extends JsonResource
             'mono' => $this->mono,
             'color' => $this->color,
             'product' => $this->product,
+            'privacy' => $this->privacy,
             'is_home' => $this->is_home,
             'description' => $this->description,
             'position' => $this->position,

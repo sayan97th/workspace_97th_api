@@ -18,6 +18,7 @@ use Illuminate\Support\Str;
  * @property string $mono
  * @property string $color
  * @property string $product
+ * @property string $privacy
  * @property bool $is_home
  * @property string|null $description
  * @property int $position
@@ -28,7 +29,7 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, WorkspaceNavigationItem> $rootNavigationItems
  * @property-read Collection<int, User> $users
  */
-#[Fillable(['name', 'slug', 'mono', 'color', 'product', 'is_home', 'description', 'position'])]
+#[Fillable(['name', 'slug', 'mono', 'color', 'product', 'privacy', 'is_home', 'description', 'position'])]
 class Workspace extends Model
 {
     use SoftDeletes;
