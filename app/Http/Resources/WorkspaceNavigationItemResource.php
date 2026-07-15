@@ -22,13 +22,29 @@ class WorkspaceNavigationItemResource extends JsonResource
             'parent_id' => $this->parent_id,
             'type' => $this->type,
             'label' => $this->label,
+            'description' => $this->description,
             'slug' => $this->slug,
             'icon' => $this->icon,
             'view_key' => $this->view_key,
             'href' => $this->href,
             'display_style' => $this->display_style,
+            'board_type' => $this->board_type,
             'is_favorite' => $this->is_favorite,
             'position' => $this->position,
+            'created_at' => $this->created_at,
+            'creator' => $this->whenLoaded('creator', fn () => $this->creator ? [
+                'id' => $this->creator->id,
+                'full_name' => $this->creator->full_name,
+                'profile_photo_url' => $this->creator->profile_photo_url,
+            ] : null),
+            // Boards don't have their own owner list, so they inherit the workspace's owners.
+            'owners' => $this->relationLoaded('workspace') && $this->workspace->relationLoaded('owners')
+                ? $this->workspace->owners->map(fn ($owner) => [
+                    'id' => $owner->id,
+                    'full_name' => $owner->full_name,
+                    'profile_photo_url' => $owner->profile_photo_url,
+                ])->values()
+                : [],
             'children' => self::collection($this->whenLoaded('childrenRecursive')),
         ];
     }

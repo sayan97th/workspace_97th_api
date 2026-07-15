@@ -26,6 +26,7 @@ class StoreWorkspaceNavigationItemRequest extends FormRequest
                 WorkspaceNavigationItem::TYPE_LEAF,
             ])],
             'label' => ['required', 'string', 'max:255'],
+            'description' => ['sometimes', 'nullable', 'string'],
             'parent_id' => [
                 'sometimes', 'nullable', 'integer',
                 Rule::exists('workspace_navigation_items', 'id')
@@ -35,6 +36,11 @@ class StoreWorkspaceNavigationItemRequest extends FormRequest
             'view_key' => ['sometimes', 'nullable', 'string', 'max:255'],
             'href' => ['sometimes', 'nullable', 'string', 'max:255'],
             'display_style' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'board_type' => ['sometimes', 'string', Rule::in([
+                WorkspaceNavigationItem::BOARD_TYPE_MAIN,
+                WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+                WorkspaceNavigationItem::BOARD_TYPE_SHAREABLE,
+            ])],
             'is_favorite' => ['sometimes', 'boolean'],
             'position' => ['sometimes', 'integer', 'min:0'],
         ];

@@ -9,6 +9,7 @@ use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
+use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use Illuminate\Support\Facades\Route;
@@ -64,6 +65,12 @@ Route::middleware(['auth:api', 'active'])->group(function () {
             Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy']);
         });
     });
+
+    // Boards — resolve a single navigation item (leaf or group) by its
+    // globally-unique id, for id-based deep links like `/boards/{id}` on the
+    // frontend. No workspace slug needed: the item's own row says which
+    // workspace it belongs to.
+    Route::get('boards/{item}', [BoardController::class, 'show']);
 
     // Two-factor authentication management
     Route::prefix('auth/two-factor')->group(function () {

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -22,13 +23,16 @@ use Illuminate\Support\Carbon;
  * @property int|null $parent_id
  * @property string $type
  * @property string $label
+ * @property string|null $description
  * @property string $slug
  * @property string|null $icon
  * @property string|null $view_key
  * @property string|null $href
  * @property string|null $display_style
+ * @property string $board_type
  * @property bool $is_favorite
  * @property int $position
+ * @property int|null $created_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
@@ -36,27 +40,40 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem|null $parent
  * @property-read Collection<int, WorkspaceNavigationItem> $children
  * @property-read Collection<int, WorkspaceNavigationItem> $childrenRecursive
+ * @property-read User|null $creator
  */
 #[Fillable([
     'workspace_id',
     'parent_id',
     'type',
     'label',
+    'description',
     'slug',
     'icon',
     'view_key',
     'href',
     'display_style',
+    'board_type',
     'is_favorite',
     'position',
+    'created_by_id',
 ])]
 class WorkspaceNavigationItem extends Model
 {
-    use SoftDeletes;
+    use HasFactory, SoftDeletes;
 
     public const TYPE_GROUP = 'group';
 
     public const TYPE_LEAF = 'leaf';
+
+    /** Visible to every workspace member — the default for a new board. */
+    public const BOARD_TYPE_MAIN = 'main';
+
+    /** Only visible to people explicitly added to the board. */
+    public const BOARD_TYPE_PRIVATE = 'private';
+
+    /** Visible to workspace members and can also be shared with people outside it. */
+    public const BOARD_TYPE_SHAREABLE = 'shareable';
 
     /**
      * The workspace this item belongs to.
@@ -95,7 +112,38 @@ class WorkspaceNavigationItem extends Model
      */
     public function childrenRecursive(): HasMany
     {
-        return $this->children()->with('childrenRecursive');
+        return $this->children()->with(['childrenRecursive', 'creator', 'workspace.owners']);
+    }
+
+    /**
+     * The user who created this item, shown as "Created by" in the info popover.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by_id');
+    }
+
+    /**
+     * Every ancestor from the workspace root down to (not including) this item,
+     * walking the adjacency list one `parent_id` hop at a time. There's no
+     * nested-set or materialized-path column to short-circuit this, but nesting
+     * is shallow in practice so the extra queries are cheap.
+     *
+     * @return Collection<int, WorkspaceNavigationItem>
+     */
+    public function ancestors(): Collection
+    {
+        $trail = [];
+        $node = $this->parent;
+
+        while ($node !== null) {
+            $trail[] = $node;
+            $node = $node->parent;
+        }
+
+        return new Collection(array_reverse($trail));
     }
 
     /**

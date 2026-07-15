@@ -10,6 +10,7 @@ use App\Http\Resources\WorkspaceNavigationItemResource;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -23,7 +24,7 @@ class WorkspaceNavigationItemController extends Controller
     public function index(Workspace $workspace): JsonResponse
     {
         $tree = $workspace->rootNavigationItems()
-            ->with('childrenRecursive')
+            ->with(['childrenRecursive', 'creator', 'workspace.owners'])
             ->get();
 
         return response()->json([
@@ -43,18 +44,21 @@ class WorkspaceNavigationItemController extends Controller
             'parent_id' => $parent_id,
             'type' => $validated['type'],
             'label' => $validated['label'],
+            'description' => $validated['description'] ?? null,
             'slug' => $this->uniqueSlug($workspace, $parent_id, $validated['label']),
             'icon' => $validated['icon'] ?? null,
             'view_key' => $validated['view_key'] ?? null,
             'href' => $validated['href'] ?? null,
             'display_style' => $validated['display_style'] ?? null,
+            'board_type' => $validated['board_type'] ?? WorkspaceNavigationItem::BOARD_TYPE_MAIN,
             'is_favorite' => $validated['is_favorite'] ?? false,
             'position' => $validated['position'] ?? $this->nextPosition($workspace, $parent_id),
+            'created_by_id' => $request->user()?->id,
         ]);
 
         return response()->json([
             'message' => 'Navigation item created successfully.',
-            'item' => new WorkspaceNavigationItemResource($item),
+            'item' => new WorkspaceNavigationItemResource($item->load(['creator', 'workspace.owners'])),
         ], 201);
     }
 
@@ -78,7 +82,7 @@ class WorkspaceNavigationItemController extends Controller
 
         return response()->json([
             'message' => 'Navigation item updated successfully.',
-            'item' => new WorkspaceNavigationItemResource($item->fresh()),
+            'item' => new WorkspaceNavigationItemResource($item->fresh()->load(['creator', 'workspace.owners'])),
         ]);
     }
 
@@ -116,14 +120,14 @@ class WorkspaceNavigationItemController extends Controller
     /**
      * POST /api/workspaces/{workspace}/navigation/{item}/duplicate
      */
-    public function duplicate(Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
+    public function duplicate(Request $request, Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
     {
         $this->ensureItemBelongsToWorkspace($workspace, $item);
 
         $item->load('childrenRecursive');
 
-        $copy = $this->copySubtree($item, $item->parent_id, $this->nextPosition($workspace, $item->parent_id));
-        $copy->load('childrenRecursive');
+        $copy = $this->copySubtree($item, $item->parent_id, $this->nextPosition($workspace, $item->parent_id), $request->user()?->id);
+        $copy->load(['childrenRecursive', 'creator', 'workspace.owners']);
 
         return response()->json([
             'message' => 'Navigation item duplicated successfully.',
@@ -209,23 +213,26 @@ class WorkspaceNavigationItemController extends Controller
     /**
      * Recursively deep-copy an item and its subtree under a new parent.
      */
-    private function copySubtree(WorkspaceNavigationItem $item, ?int $parent_id, int $position): WorkspaceNavigationItem
+    private function copySubtree(WorkspaceNavigationItem $item, ?int $parent_id, int $position, ?int $created_by_id): WorkspaceNavigationItem
     {
         $copy = $item->workspace->navigationItems()->create([
             'parent_id' => $parent_id,
             'type' => $item->type,
             'label' => $parent_id === $item->parent_id ? $item->label.' (copy)' : $item->label,
+            'description' => $item->description,
             'slug' => $this->uniqueSlug($item->workspace, $parent_id, $item->label),
             'icon' => $item->icon,
             'view_key' => $item->view_key,
             'href' => $item->href,
             'display_style' => $item->display_style,
+            'board_type' => $item->board_type,
             'is_favorite' => false,
             'position' => $position,
+            'created_by_id' => $created_by_id,
         ]);
 
         foreach ($item->childrenRecursive as $child) {
-            $this->copySubtree($child, $copy->id, $child->position);
+            $this->copySubtree($child, $copy->id, $child->position, $created_by_id);
         }
 
         return $copy;

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -28,11 +29,12 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, WorkspaceNavigationItem> $navigationItems
  * @property-read Collection<int, WorkspaceNavigationItem> $rootNavigationItems
  * @property-read Collection<int, User> $users
+ * @property-read Collection<int, User> $owners
  */
 #[Fillable(['name', 'slug', 'mono', 'color', 'product', 'privacy', 'is_home', 'description', 'position'])]
 class Workspace extends Model
 {
-    use SoftDeletes;
+    use HasFactory, SoftDeletes;
 
     /**
      * Bootstrap the model and its traits.
@@ -126,6 +128,17 @@ class Workspace extends Model
         return $this->belongsToMany(User::class, 'workspace_user')
             ->withPivot(['role', 'is_recent'])
             ->withTimestamps();
+    }
+
+    /**
+     * Members with the "owner" role, shown as a board's owners in its info popover
+     * (boards don't have their own owner list, so they inherit the workspace's).
+     *
+     * @return BelongsToMany<User, $this>
+     */
+    public function owners(): BelongsToMany
+    {
+        return $this->users()->wherePivot('role', 'owner');
     }
 
     /**
