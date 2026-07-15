@@ -3,12 +3,15 @@
 namespace Database\Seeders;
 
 use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
 {
-    use WithoutModelEvents;
+    // Deliberately doesn't use WithoutModelEvents: WorkspaceSeeder (called
+    // below) relies on the `creating` hook from HasRandomBigId to assign
+    // navigation item ids, and that trait wraps this whole run() — including
+    // nested seeder calls — in Model::withoutEvents() regardless of whether
+    // WorkspaceSeeder opts back in on its own.
 
     /**
      * Seed the application's database.
