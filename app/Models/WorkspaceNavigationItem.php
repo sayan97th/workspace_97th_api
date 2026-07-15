@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Concerns\HasRandomBigId;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -60,7 +61,12 @@ use Illuminate\Support\Carbon;
 ])]
 class WorkspaceNavigationItem extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, HasRandomBigId, SoftDeletes;
+
+    /** The id is a randomly-generated 10-digit number, not an auto-increment. */
+    public $incrementing = false;
+
+    protected $keyType = 'int';
 
     public const TYPE_GROUP = 'group';
 

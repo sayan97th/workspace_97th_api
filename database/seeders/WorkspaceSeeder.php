@@ -5,12 +5,12 @@ namespace Database\Seeders;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 class WorkspaceSeeder extends Seeder
 {
-    use WithoutModelEvents;
+    // Deliberately fires model events (unlike most seeders): navigation items
+    // rely on the `creating` hook from HasRandomBigId to assign their id.
 
     /**
      * The workspace catalog shown in the switcher / "Browse all" modal.
