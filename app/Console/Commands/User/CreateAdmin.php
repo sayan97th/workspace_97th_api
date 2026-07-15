@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Throwable;
 
+// php artisan admin:create-admin
 class CreateAdmin extends Command
 {
     use PasswordValidationRules, ProfileValidationRules;

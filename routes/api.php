@@ -9,6 +9,8 @@ use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
+use App\Http\Controllers\Workspace\WorkspaceController;
+use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Auth routes ────────────────────────────────────────────────────────────
@@ -42,6 +44,22 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::put('password', [PasswordController::class, 'update']);
         Route::post('photo', [ProfilePhotoController::class, 'store']);
         Route::delete('photo', [ProfilePhotoController::class, 'destroy']);
+    });
+
+    // Workspaces — dynamic sidebar + nested navigation tree
+    Route::prefix('workspaces')->group(function () {
+        Route::get('/', [WorkspaceController::class, 'index']);
+        Route::post('/', [WorkspaceController::class, 'store']);
+        Route::get('{workspace}', [WorkspaceController::class, 'show']);
+
+        Route::prefix('{workspace}/navigation')->group(function () {
+            Route::get('/', [WorkspaceNavigationItemController::class, 'index']);
+            Route::post('/', [WorkspaceNavigationItemController::class, 'store']);
+            Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
+            Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
+            Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate']);
+            Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy']);
+        });
     });
 
     // Two-factor authentication management

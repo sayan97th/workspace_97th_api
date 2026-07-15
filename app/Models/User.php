@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -47,6 +48,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, Membership> $teamMemberships
  * @property-read Collection<int, Team> $teams
  * @property-read Collection<int, Role> $roles
+ * @property-read Collection<int, Workspace> $workspaces
  */
 #[Fillable(['first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'timezone', 'profile_photo_path', 'is_active'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
@@ -115,6 +117,18 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
                 ? Storage::disk('public')->url($this->profile_photo_path)
                 : null,
         );
+    }
+
+    /**
+     * The workspaces this user is a member of.
+     *
+     * @return BelongsToMany<Workspace, $this>
+     */
+    public function workspaces(): BelongsToMany
+    {
+        return $this->belongsToMany(Workspace::class, 'workspace_user')
+            ->withPivot(['role', 'is_recent'])
+            ->withTimestamps();
     }
 
     /**
