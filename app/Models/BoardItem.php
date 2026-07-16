@@ -1,0 +1,93 @@
+<?php
+
+namespace App\Models;
+
+use App\Concerns\HasRandomBigId;
+use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
+
+/**
+ * A single row ("pulse") on a board. Its id is a random 10-digit number (see
+ * {@link HasRandomBigId}), which is the id used in `/boards/{board_id}/pulses/{id}`
+ * deep links to open the item detail drawer.
+ *
+ * @property int $id
+ * @property int $board_id
+ * @property int $group_id
+ * @property string $name
+ * @property int $position
+ * @property int|null $created_by_id
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
+ * @property Carbon|null $deleted_at
+ * @property-read WorkspaceNavigationItem $board
+ * @property-read BoardGroup $group
+ * @property-read User|null $creator
+ * @property-read Collection<int, BoardItemValue> $values
+ */
+#[Fillable(['board_id', 'group_id', 'name', 'position', 'created_by_id'])]
+class BoardItem extends Model
+{
+    use HasFactory, HasRandomBigId, SoftDeletes;
+
+    /** The id is a randomly-generated 10-digit number, not an auto-increment. */
+    public $incrementing = false;
+
+    protected $keyType = 'int';
+
+    /**
+     * The board (navigation leaf) this item belongs to.
+     *
+     * @return BelongsTo<WorkspaceNavigationItem, $this>
+     */
+    public function board(): BelongsTo
+    {
+        return $this->belongsTo(WorkspaceNavigationItem::class, 'board_id');
+    }
+
+    /**
+     * The group ("table") this item currently sits in.
+     *
+     * @return BelongsTo<BoardGroup, $this>
+     */
+    public function group(): BelongsTo
+    {
+        return $this->belongsTo(BoardGroup::class, 'group_id');
+    }
+
+    /**
+     * The user who created this item.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by_id');
+    }
+
+    /**
+     * This item's column values, keyed by column via `column_id`.
+     *
+     * @return HasMany<BoardItemValue, $this>
+     */
+    public function values(): HasMany
+    {
+        return $this->hasMany(BoardItemValue::class, 'item_id');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'position' => 'integer',
+        ];
+    }
+}

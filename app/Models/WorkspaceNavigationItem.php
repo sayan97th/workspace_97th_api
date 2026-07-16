@@ -42,6 +42,10 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, WorkspaceNavigationItem> $children
  * @property-read Collection<int, WorkspaceNavigationItem> $childrenRecursive
  * @property-read User|null $creator
+ * @property-read Collection<int, BoardColumn> $columns
+ * @property-read Collection<int, BoardGroup> $groups
+ * @property-read Collection<int, BoardItem> $items
+ * @property-read Collection<int, BoardView> $views
  */
 #[Fillable([
     'workspace_id',
@@ -129,6 +133,46 @@ class WorkspaceNavigationItem extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_id');
+    }
+
+    /**
+     * This board's column schema, ordered for display.
+     *
+     * @return HasMany<BoardColumn, $this>
+     */
+    public function columns(): HasMany
+    {
+        return $this->hasMany(BoardColumn::class, 'board_id')->orderBy('position');
+    }
+
+    /**
+     * This board's groups ("tables"), ordered for display.
+     *
+     * @return HasMany<BoardGroup, $this>
+     */
+    public function groups(): HasMany
+    {
+        return $this->hasMany(BoardGroup::class, 'board_id')->orderBy('position');
+    }
+
+    /**
+     * Every item ("pulse") on this board, across all groups.
+     *
+     * @return HasMany<BoardItem, $this>
+     */
+    public function items(): HasMany
+    {
+        return $this->hasMany(BoardItem::class, 'board_id');
+    }
+
+    /**
+     * This board's saved views ("tabs"), ordered for display.
+     *
+     * @return HasMany<BoardView, $this>
+     */
+    public function views(): HasMany
+    {
+        return $this->hasMany(BoardView::class, 'board_id')->orderBy('position');
     }
 
     /**

@@ -6,6 +6,10 @@ use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Auth\TwoFactorController;
+use App\Http\Controllers\Board\BoardColumnController;
+use App\Http\Controllers\Board\BoardGroupController;
+use App\Http\Controllers\Board\BoardItemController;
+use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
@@ -71,6 +75,43 @@ Route::middleware(['auth:api', 'active'])->group(function () {
     // frontend. No workspace slug needed: the item's own row says which
     // workspace it belongs to.
     Route::get('boards/{item}', [BoardController::class, 'show']);
+
+    // Board content — the reusable "table board" engine: any number of
+    // tables (groups) per board, items (pulses) with typed column values,
+    // and saved views/tabs that double as saved filter configurations.
+    Route::prefix('boards/{item}')->group(function () {
+        Route::prefix('columns')->group(function () {
+            Route::get('/', [BoardColumnController::class, 'index']);
+            Route::post('/', [BoardColumnController::class, 'store']);
+            Route::patch('{column}', [BoardColumnController::class, 'update']);
+            Route::patch('{column}/move', [BoardColumnController::class, 'move']);
+            Route::delete('{column}', [BoardColumnController::class, 'destroy']);
+        });
+
+        Route::prefix('groups')->group(function () {
+            Route::get('/', [BoardGroupController::class, 'index']);
+            Route::post('/', [BoardGroupController::class, 'store']);
+            Route::patch('{group}', [BoardGroupController::class, 'update']);
+            Route::patch('{group}/move', [BoardGroupController::class, 'move']);
+            Route::delete('{group}', [BoardGroupController::class, 'destroy']);
+        });
+
+        Route::prefix('items')->group(function () {
+            Route::get('/', [BoardItemController::class, 'index']);
+            Route::post('/', [BoardItemController::class, 'store']);
+            Route::get('{board_item}', [BoardItemController::class, 'show']);
+            Route::patch('{board_item}', [BoardItemController::class, 'update']);
+            Route::patch('{board_item}/values', [BoardItemController::class, 'updateValues']);
+            Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
+        });
+
+        Route::prefix('views')->group(function () {
+            Route::get('/', [BoardViewController::class, 'index']);
+            Route::post('/', [BoardViewController::class, 'store']);
+            Route::patch('{board_view}', [BoardViewController::class, 'update']);
+            Route::delete('{board_view}', [BoardViewController::class, 'destroy']);
+        });
+    });
 
     // Two-factor authentication management
     Route::prefix('auth/two-factor')->group(function () {
