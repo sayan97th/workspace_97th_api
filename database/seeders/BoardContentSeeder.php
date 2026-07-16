@@ -4,18 +4,22 @@ namespace Database\Seeders;
 
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
+use App\Models\BoardItem;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
  * Seeds two demo boards that exercise the reusable "table board" engine
  * (`App\Http\Controllers\Board\*`) end to end: any number of tables (groups)
- * per board, one column of every supported type, items with values, and two
+ * per board, one column of every supported type, items with values, two
  * views per board (a primary "Main table" plus a saved-filter view) to prove
- * the save/restore round trip.
+ * the save/restore round trip, and a full comment thread — with a mention,
+ * a reaction, a like and a file attachment — on the first item of each
+ * board, so the item detail drawer's Updates tab has real data immediately.
  *
  * Deliberately fires model events (like WorkspaceSeeder): board items/views
  * rely on the `creating` hook from HasRandomBigId to assign their id.
@@ -88,13 +92,19 @@ class BoardContentSeeder extends Seeder
             ]);
         }
 
+        $first_item = null;
         foreach ($groups as $group) {
             for ($i = 0; $i < $items_per_group; $i++) {
-                $this->seedItem($board, $group, $columns, $user_ids, $i);
+                $item = $this->seedItem($board, $group, $columns, $user_ids, $i);
+                $first_item ??= $item;
             }
         }
 
         $this->seedViews($board, $columns);
+
+        if ($first_item !== null) {
+            $this->seedComments($first_item, $user_ids);
+        }
     }
 
     /**
@@ -139,7 +149,7 @@ class BoardContentSeeder extends Seeder
      * @param  array<string, BoardColumn>  $columns
      * @param  array<int, int>  $user_ids
      */
-    private function seedItem(WorkspaceNavigationItem $board, BoardGroup $group, array $columns, array $user_ids, int $index): void
+    private function seedItem(WorkspaceNavigationItem $board, BoardGroup $group, array $columns, array $user_ids, int $index): BoardItem
     {
         $statuses = ['not_started', 'in_progress', 'done'];
         $tag_sets = [['design'], ['backend', 'urgent'], ['design', 'backend'], []];
@@ -158,6 +168,51 @@ class BoardContentSeeder extends Seeder
             ['column_id' => $columns['tags']->id, 'value' => $tag_sets[$index % 4]],
             ['column_id' => $columns['budget']->id, 'value' => ($index + 1) * 500],
             ['column_id' => $columns['is_blocked']->id, 'value' => $index % 3 === 0],
+        ]);
+
+        return $item;
+    }
+
+    /**
+     * Seeds one item with a full comment thread — an update with a
+     * mention, an emoji reaction, a like and a file attachment, plus a
+     * reply — so the drawer's Updates tab has real data to show right away.
+     *
+     * @param  array<int, int>  $user_ids
+     */
+    private function seedComments(BoardItem $item, array $user_ids): void
+    {
+        if (count($user_ids) < 2) {
+            return;
+        }
+
+        [$author_id, $replier_id] = $user_ids;
+        $mentioned_id = $user_ids[2] ?? $replier_id;
+
+        $comment = $item->comments()->create([
+            'user_id' => $author_id,
+            'body' => 'Kicking this off — @'.User::find($mentioned_id)?->full_name.' can you take a first pass?',
+        ]);
+        $comment->mentions()->create(['user_id' => $mentioned_id]);
+        $comment->likes()->create(['user_id' => $replier_id]);
+        $comment->reactions()->create(['user_id' => $replier_id, 'emoji' => '👍']);
+        $comment->views()->create(['user_id' => $replier_id]);
+
+        $attachment_path = "board-comment-attachments/{$item->id}/".Str::uuid().'.txt';
+        Storage::disk('public')->put($attachment_path, "Seeded demo attachment for {$item->name}.");
+        $comment->attachments()->create([
+            'uploaded_by_id' => $author_id,
+            'file_name' => 'kickoff-notes.txt',
+            'file_path' => $attachment_path,
+            'extension' => 'txt',
+            'mime_type' => 'text/plain',
+            'size_bytes' => Storage::disk('public')->size($attachment_path),
+        ]);
+
+        $comment->replies()->create([
+            'item_id' => $item->id,
+            'user_id' => $replier_id,
+            'body' => 'On it — will have notes ready by end of day.',
         ]);
     }
 

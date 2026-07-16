@@ -30,6 +30,7 @@ use Illuminate\Support\Carbon;
  * @property-read BoardGroup $group
  * @property-read User|null $creator
  * @property-read Collection<int, BoardItemValue> $values
+ * @property-read Collection<int, BoardItemComment> $comments
  */
 #[Fillable(['board_id', 'group_id', 'name', 'position', 'created_by_id'])]
 class BoardItem extends Model
@@ -79,6 +80,17 @@ class BoardItem extends Model
     public function values(): HasMany
     {
         return $this->hasMany(BoardItemValue::class, 'item_id');
+    }
+
+    /**
+     * This item's comments/updates, including replies (see
+     * {@see \App\Http\Controllers\Board\BoardItemCommentController}).
+     *
+     * @return HasMany<BoardItemComment, $this>
+     */
+    public function comments(): HasMany
+    {
+        return $this->hasMany(BoardItemComment::class, 'item_id');
     }
 
     /**
