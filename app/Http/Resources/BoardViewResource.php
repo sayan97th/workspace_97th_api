@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Models\BoardView;
 use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Attributes\PreserveKeys;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
@@ -11,8 +12,15 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `filter_state`/`sort_state`/etc fields are exactly what
  * `PATCH /api/boards/{item}/views/{board_view}` accepts to save changes.
  *
+ * `#[PreserveKeys]` is required: `filter_state.quick_filter_selections` is a
+ * map of column-id => option ids (e.g. `{"23": ["in_progress"]}`), and
+ * `JsonResource`'s array filtering treats any nested array with all-numeric
+ * keys as a list to reindex — silently dropping the column-id key and
+ * corrupting the saved filter on every read.
+ *
  * @mixin BoardView
  */
+#[PreserveKeys]
 class BoardViewResource extends JsonResource
 {
     /**
