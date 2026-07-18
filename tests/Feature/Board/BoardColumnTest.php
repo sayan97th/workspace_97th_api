@@ -33,6 +33,34 @@ test('a column can be created with a type-specific config', function () {
         ->assertJsonPath('column.config.options.0.id', 'done');
 });
 
+test('a status column created without a config gets default options seeded', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns", [
+        'key' => 'stage',
+        'label' => 'Stage',
+        'type' => BoardColumn::TYPE_STATUS,
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonCount(3, 'column.config.options')
+        ->assertJsonPath('column.config.options.0.label', 'Working on it');
+});
+
+test('a non-status column created without a config has no options', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns", [
+        'key' => 'notes',
+        'label' => 'Notes',
+        'type' => BoardColumn::TYPE_TEXT,
+    ]);
+
+    $response->assertCreated()->assertJsonPath('column.config', null);
+});
+
 test('an invalid column type is rejected', function () {
     $user = User::factory()->create();
     $board = createColumnTestBoard();

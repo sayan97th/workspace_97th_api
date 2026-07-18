@@ -10,6 +10,7 @@ use App\Http\Resources\BoardColumnResource;
 use App\Models\BoardColumn;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Str;
 
 class BoardColumnController extends Controller
 {
@@ -36,7 +37,7 @@ class BoardColumnController extends Controller
             'type' => $validated['type'],
             'position' => $validated['position'] ?? $this->nextPosition($item),
             'width' => $validated['width'] ?? 180,
-            'config' => $validated['config'] ?? null,
+            'config' => $validated['config'] ?? $this->defaultConfigFor($validated['type']),
             'hideable' => $validated['hideable'] ?? true,
             'pinnable' => $validated['pinnable'] ?? true,
         ]);
@@ -106,5 +107,27 @@ class BoardColumnController extends Controller
     private function nextPosition(WorkspaceNavigationItem $item): int
     {
         return (int) $item->columns()->max('position') + 1;
+    }
+
+    /**
+     * Sensible starting `config` for a freshly created column when the caller
+     * didn't supply one. Status columns get Monday-style default labels so a
+     * new column is immediately usable; every other type starts blank.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function defaultConfigFor(string $type): ?array
+    {
+        if ($type !== BoardColumn::TYPE_STATUS) {
+            return null;
+        }
+
+        return [
+            'options' => [
+                ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d'],
+                ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875'],
+                ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c'],
+            ],
+        ];
     }
 }
