@@ -29,6 +29,7 @@ class WorkspaceNavigationItemResource extends JsonResource
             'href' => $this->href,
             'display_style' => $this->display_style,
             'board_type' => $this->board_type,
+            'item_column_label' => $this->item_column_label,
             'is_favorite' => $this->is_favorite,
             'position' => $this->position,
             'created_at' => $this->created_at,

@@ -28,6 +28,7 @@ class UpdateWorkspaceNavigationItemRequest extends FormRequest
                 WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
                 WorkspaceNavigationItem::BOARD_TYPE_SHAREABLE,
             ])],
+            'item_column_label' => ['sometimes', 'nullable', 'string', 'max:255'],
             'is_favorite' => ['sometimes', 'boolean'],
         ];
     }

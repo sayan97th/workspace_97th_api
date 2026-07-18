@@ -31,6 +31,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $href
  * @property string|null $display_style
  * @property string $board_type
+ * @property string|null $item_column_label
  * @property bool $is_favorite
  * @property int $position
  * @property int|null $created_by_id
@@ -59,6 +60,7 @@ use Illuminate\Support\Carbon;
     'href',
     'display_style',
     'board_type',
+    'item_column_label',
     'is_favorite',
     'position',
     'created_by_id',
