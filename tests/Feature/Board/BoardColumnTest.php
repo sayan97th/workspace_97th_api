@@ -80,6 +80,52 @@ test('a column key must be unique per board', function () {
         ->assertUnprocessable();
 });
 
+test('a status column created without a config seeds active default options', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/columns", ['key' => 'stage', 'label' => 'Stage', 'type' => BoardColumn::TYPE_STATUS])
+        ->assertCreated()
+        ->assertJsonPath('column.config.options.0.is_active', true);
+});
+
+test('a status column\'s labels can be renamed, recolored, given a description, deactivated, and deleted', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $column = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'type' => BoardColumn::TYPE_STATUS,
+        'config' => ['options' => [
+            ['id' => 'done', 'label' => 'Done', 'color' => '#00c875', 'is_active' => true],
+            ['id' => 'stuck', 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => true],
+        ]],
+    ]);
+
+    // Rename + recolor + describe "done", deactivate "stuck".
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/{$column->id}", [
+        'config' => ['options' => [
+            ['id' => 'done', 'label' => 'Completed', 'color' => '#037f4c', 'is_active' => true, 'description' => 'Finished and reviewed'],
+            ['id' => 'stuck', 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => false],
+        ]],
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('column.config.options.0.label', 'Completed')
+        ->assertJsonPath('column.config.options.0.color', '#037f4c')
+        ->assertJsonPath('column.config.options.0.description', 'Finished and reviewed')
+        ->assertJsonPath('column.config.options.1.is_active', false);
+
+    // Delete "stuck" outright.
+    $delete_response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/{$column->id}", [
+        'config' => ['options' => [
+            ['id' => 'done', 'label' => 'Completed', 'color' => '#037f4c', 'is_active' => true, 'description' => 'Finished and reviewed'],
+        ]],
+    ]);
+
+    $delete_response->assertOk()->assertJsonCount(1, 'column.config.options');
+});
+
 test('a column can be moved to a new position', function () {
     $user = User::factory()->create();
     $board = createColumnTestBoard();

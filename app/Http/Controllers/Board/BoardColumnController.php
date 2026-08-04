@@ -124,9 +124,9 @@ class BoardColumnController extends Controller
 
         return [
             'options' => [
-                ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d'],
-                ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875'],
-                ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c'],
+                ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d', 'is_active' => true],
+                ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875', 'is_active' => true],
+                ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => true],
             ],
         ];
     }
