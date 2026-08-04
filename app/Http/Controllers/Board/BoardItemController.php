@@ -28,7 +28,7 @@ class BoardItemController extends Controller
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        $query = $item->items()->with('values')->orderBy('group_id')->orderBy('position');
+        $query = $item->items()->with('values')->withCount('comments')->orderBy('group_id')->orderBy('position');
 
         $query = $this->filter_service->applySearch($query, $request->query('search'));
 
