@@ -75,6 +75,12 @@ Route::middleware(['auth:api', 'active'])->group(function () {
     // globally-unique id, for id-based deep links like `/boards/{id}` on the
     // frontend. No workspace slug needed: the item's own row says which
     // workspace it belongs to.
+    //
+    // `boards/client-hub` must be registered before the `{item}` wildcard —
+    // Client Hub renders at the static `/client-hub` frontend route and never
+    // gets its navigation item id from the URL, so it resolves its board id
+    // through this literal route instead.
+    Route::get('boards/client-hub', [BoardController::class, 'showClientHub']);
     Route::get('boards/{item}', [BoardController::class, 'show']);
 
     // Board content — the reusable "table board" engine: any number of

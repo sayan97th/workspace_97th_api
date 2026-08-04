@@ -17,6 +17,7 @@ class StoreBoardViewRequest extends FormRequest
     {
         return [
             'label' => ['required', 'string', 'max:255'],
+            'icon' => ['sometimes', 'nullable', 'string', 'max:64'],
             'is_primary' => ['sometimes', 'boolean'],
             'position' => ['sometimes', 'integer', 'min:0'],
             'filter_state' => ['sometimes', 'nullable', 'array'],

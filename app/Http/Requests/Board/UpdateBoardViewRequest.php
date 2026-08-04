@@ -21,6 +21,7 @@ class UpdateBoardViewRequest extends FormRequest
     {
         return [
             'label' => ['sometimes', 'string', 'max:255'],
+            'icon' => ['sometimes', 'nullable', 'string', 'max:64'],
             'position' => ['sometimes', 'integer', 'min:0'],
             'filter_state' => ['sometimes', 'nullable', 'array'],
             'sort_state' => ['sometimes', 'nullable', 'array'],

@@ -20,5 +20,6 @@ class DatabaseSeeder extends Seeder
         $this->call(RolePermissionSeeder::class);
         $this->call(WorkspaceSeeder::class);
         $this->call(BoardContentSeeder::class);
+        $this->call(ClientHubViewsSeeder::class);
     }
 }

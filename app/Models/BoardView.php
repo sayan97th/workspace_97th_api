@@ -20,6 +20,7 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $board_id
  * @property string $label
+ * @property string|null $icon
  * @property int $position
  * @property bool $is_primary
  * @property array<string, mixed>|null $filter_state
@@ -38,6 +39,7 @@ use Illuminate\Support\Carbon;
 #[Fillable([
     'board_id',
     'label',
+    'icon',
     'position',
     'is_primary',
     'filter_state',
