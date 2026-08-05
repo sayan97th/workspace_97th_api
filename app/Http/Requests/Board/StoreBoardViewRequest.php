@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Board;
 
+use App\Enums\BoardViewType;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -17,6 +18,8 @@ class StoreBoardViewRequest extends FormRequest
     {
         return [
             'label' => ['required', 'string', 'max:255'],
+            // Which content the tab renders — immutable once created (see App\Enums\BoardViewType), defaults to 'table'.
+            'view_type' => ['sometimes', 'string', Rule::in(BoardViewType::values())],
             'icon' => ['sometimes', 'nullable', 'string', 'max:64'],
             'is_primary' => ['sometimes', 'boolean'],
             'position' => ['sometimes', 'integer', 'min:0'],

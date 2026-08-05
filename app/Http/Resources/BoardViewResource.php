@@ -32,6 +32,7 @@ class BoardViewResource extends JsonResource
             'id' => $this->id,
             'board_id' => $this->board_id,
             'label' => $this->label,
+            'view_type' => $this->view_type,
             'icon' => $this->icon,
             'position' => $this->position,
             'is_primary' => $this->is_primary,

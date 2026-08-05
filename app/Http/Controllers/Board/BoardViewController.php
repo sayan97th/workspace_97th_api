@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Board;
 
+use App\Enums\BoardViewType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\StoreBoardViewRequest;
 use App\Http\Requests\Board\UpdateBoardViewRequest;
@@ -52,6 +53,7 @@ class BoardViewController extends Controller
 
         $item->views()->create([
             'label' => 'Main table',
+            'view_type' => BoardViewType::Table->value,
             'position' => 0,
             'is_primary' => true,
             'row_height' => 'single',
@@ -67,6 +69,7 @@ class BoardViewController extends Controller
 
         $view = $item->views()->create([
             ...$validated,
+            'view_type' => $validated['view_type'] ?? BoardViewType::Table->value,
             'position' => $validated['position'] ?? $this->nextPosition($item),
             'is_primary' => $validated['is_primary'] ?? false,
             'row_height' => $validated['row_height'] ?? 'single',
@@ -144,6 +147,7 @@ class BoardViewController extends Controller
 
             $view_copy = $item->views()->create([
                 'label' => "{$board_view->label} (copy)",
+                'view_type' => $board_view->view_type,
                 'icon' => $board_view->icon,
                 'position' => $this->nextPosition($item),
                 'is_primary' => false,

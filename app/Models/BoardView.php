@@ -22,6 +22,7 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $board_id
  * @property string $label
+ * @property string $view_type
  * @property string|null $icon
  * @property int $position
  * @property bool $is_primary
@@ -47,6 +48,7 @@ use Illuminate\Support\Carbon;
 #[Fillable([
     'board_id',
     'label',
+    'view_type',
     'icon',
     'position',
     'is_primary',

@@ -5,6 +5,7 @@ use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemValue;
 use App\Models\BoardView;
+use App\Models\BoardViewUserOrder;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -29,6 +30,48 @@ test('a view can be created as a new tab', function () {
         ->assertCreated()
         ->assertJsonPath('view.label', 'By owner')
         ->assertJsonPath('view.is_primary', false);
+});
+
+test('a view defaults to the table view type when none is given', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/views", ['label' => 'By owner'])
+        ->assertCreated()
+        ->assertJsonPath('view.view_type', 'table');
+});
+
+test('a view can be created with a specific view type', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/views", ['label' => 'Sprint board', 'view_type' => 'kanban'])
+        ->assertCreated()
+        ->assertJsonPath('view.view_type', 'kanban');
+
+    $this->assertDatabaseHas('board_views', ['board_id' => $board->id, 'label' => 'Sprint board', 'view_type' => 'kanban']);
+});
+
+test('creating a view with an unrecognized view type is rejected', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/views", ['label' => 'Bad view', 'view_type' => 'not_a_real_type'])
+        ->assertInvalid(['view_type']);
+});
+
+test('duplicating a view carries over its view type', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->kanban()->create(['board_id' => $board->id]);
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/views/{$view->id}/duplicate")
+        ->assertCreated()
+        ->assertJsonPath('view.view_type', 'kanban');
 });
 
 test('saving filters on a view persists and round-trips the exact state', function () {
@@ -271,7 +314,7 @@ test('a personal view order is saved per user and overwritten on repeat saves', 
         ->assertOk()
         ->assertJsonPath('personal_order', [$second->id, $third->id, $primary->id]);
 
-    expect(\App\Models\BoardViewUserOrder::where('user_id', $user->id)->where('board_id', $board->id)->count())->toBe(1);
+    expect(BoardViewUserOrder::where('user_id', $user->id)->where('board_id', $board->id)->count())->toBe(1);
 });
 
 test('a personal view order silently drops ids that do not belong to the board', function () {
