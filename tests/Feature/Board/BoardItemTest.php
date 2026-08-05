@@ -2,6 +2,7 @@
 
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
+use App\Models\BoardView;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -97,4 +98,44 @@ test('deleting an item soft-deletes it, excluding it from the index', function (
         ->assertOk()
         ->assertJsonCount(0, 'data');
     $this->assertSoftDeleted('board_items', ['id' => $item->id]);
+});
+
+test('items are scoped per tab — an item is only returned for the tab its group belongs to', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $primary_tab = $group->boardView;
+    $other_tab = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+    $other_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $other_tab->id]);
+
+    $primary_item = $board->items()->create(['group_id' => $group->id, 'name' => 'Primary tab task', 'position' => 0]);
+    $board->items()->create(['group_id' => $other_group->id, 'name' => 'Other tab task', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/items?view_id={$primary_tab->id}")
+        ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $primary_item->id);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/items?view_id={$other_tab->id}")
+        ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.name', 'Other tab task');
+});
+
+test('inline cell edits ignore a column that belongs to a different tab of the same board', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_TEXT]);
+
+    $other_tab = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+    $column_from_other_tab = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $other_tab->id, 'type' => BoardColumn::TYPE_TEXT]);
+
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/values", [
+        'values' => [
+            (string) $column->id => 'updated text',
+            (string) $column_from_other_tab->id => 'should be ignored',
+        ],
+    ]);
+
+    $response->assertOk()->assertJsonPath("item.values.{$column->id}", 'updated text');
+    $this->assertDatabaseMissing('board_item_values', ['item_id' => $item->id, 'column_id' => $column_from_other_tab->id]);
 });

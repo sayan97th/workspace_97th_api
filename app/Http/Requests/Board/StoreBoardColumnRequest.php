@@ -20,10 +20,21 @@ class StoreBoardColumnRequest extends FormRequest
         $board = $this->route('item');
         $board_id = $board instanceof WorkspaceNavigationItem ? $board->id : null;
 
+        // `key` uniqueness is per-tab, not per-board — resolve which tab this
+        // request targets the same way `BoardViewResolver::resolveForWrite`
+        // does (explicit `view_id`, falling back to the board's primary tab),
+        // so the uniqueness check lines up with where the column actually lands.
+        $view_id = $this->input('view_id')
+            ?? WorkspaceNavigationItem::find($board_id)?->views()->where('is_primary', true)->value('id');
+
         return [
+            'view_id' => [
+                'sometimes', 'nullable', 'integer',
+                Rule::exists('board_views', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),
+            ],
             'key' => [
                 'required', 'string', 'max:100', 'regex:/^[a-z0-9_]+$/',
-                Rule::unique('board_columns', 'key')->where(fn ($query) => $query->where('board_id', $board_id)),
+                Rule::unique('board_columns', 'key')->where(fn ($query) => $query->where('board_view_id', $view_id)),
             ],
             'label' => ['required', 'string', 'max:255'],
             'type' => ['required', 'string', Rule::in([

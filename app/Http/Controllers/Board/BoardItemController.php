@@ -8,27 +8,43 @@ use App\Http\Requests\Board\UpdateBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
 use App\Http\Resources\BoardItemDetailResource;
 use App\Http\Resources\BoardItemResource;
+use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardItemFilterService;
+use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class BoardItemController extends Controller
 {
-    public function __construct(private readonly BoardItemFilterService $filter_service) {}
+    public function __construct(
+        private readonly BoardItemFilterService $filter_service,
+        private readonly BoardViewResolver $view_resolver,
+    ) {}
 
     /**
      * GET /api/boards/{item}/items
      *
-     * Returns every item on the board with its values, optionally narrowed
-     * by a `search` term. Grouping/sorting/hiding/coloring is derived
-     * client-side by `useBoardToolbar` from this full set — see the plan's
-     * "filter execution model" note.
+     * Returns every item in the tab (`view_id` if given, otherwise the
+     * board's primary tab) with its values, optionally narrowed by a
+     * `search` term. An item's tab is derived through its group
+     * (`board_groups.board_view_id`), since every item requires a group.
+     * Grouping/sorting/hiding/coloring is derived client-side by
+     * `useBoardToolbar` from this full set — see the plan's "filter
+     * execution model" note.
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        $query = $item->items()->with('values')->withCount('comments')->orderBy('group_id')->orderBy('position');
+        $view = $this->view_resolver->resolveForRead($item, $this->viewIdParam($request));
+
+        if (! $view) {
+            return response()->json(['data' => []]);
+        }
+
+        $query = $item->items()
+            ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
+            ->with('values')->withCount('comments')->orderBy('group_id')->orderBy('position');
 
         $query = $this->filter_service->applySearch($query, $request->query('search'));
 
@@ -125,13 +141,15 @@ class BoardItemController extends Controller
 
     /**
      * Upserts one {@link \App\Models\BoardItemValue} per entry in `$values`,
-     * silently skipping any column id that doesn't belong to this board.
+     * silently skipping any column id that doesn't belong to this item's own
+     * tab (columns are per-tab, so a column from a different tab of the same
+     * board is rejected too, not just columns from other boards).
      *
      * @param  array<string, mixed>  $values
      */
     private function syncValues(WorkspaceNavigationItem $item, BoardItem $board_item, array $values): void
     {
-        $valid_column_ids = $item->columns()->pluck('id')->all();
+        $valid_column_ids = BoardColumn::where('board_view_id', $board_item->group->board_view_id)->pluck('id')->all();
 
         foreach ($values as $column_id => $value) {
             if (! in_array((int) $column_id, $valid_column_ids, true)) {
@@ -159,5 +177,13 @@ class BoardItemController extends Controller
     private function nextPosition(WorkspaceNavigationItem $item, int $group_id): int
     {
         return (int) $item->items()->where('group_id', $group_id)->max('position') + 1;
+    }
+
+    /**
+     * Reads `view_id` from the query string for GET requests.
+     */
+    private function viewIdParam(Request $request): ?int
+    {
+        return $request->filled('view_id') ? (int) $request->query('view_id') : null;
     }
 }

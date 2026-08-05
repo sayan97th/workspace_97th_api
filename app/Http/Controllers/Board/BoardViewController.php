@@ -23,6 +23,8 @@ class BoardViewController extends Controller
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        $this->ensurePrimaryViewExists($item);
+
         $personal_order = BoardViewUserOrder::where('user_id', $request->user()?->id)
             ->where('board_id', $item->id)
             ->value('view_order');
@@ -30,6 +32,28 @@ class BoardViewController extends Controller
         return response()->json([
             'data' => BoardViewResource::collection($item->views),
             'personal_order' => $personal_order,
+        ]);
+    }
+
+    /**
+     * Guarantees every board has a primary tab to scope its content into —
+     * created lazily on first `views` load rather than at board-creation
+     * time, so boards created before per-tab content scoping existed still
+     * get one. Content-index endpoints (`BoardColumnController`,
+     * `BoardGroupController`, `BoardItemController`) resolve to an empty
+     * list until this has run at least once for a given board.
+     */
+    private function ensurePrimaryViewExists(WorkspaceNavigationItem $item): void
+    {
+        if ($item->views()->where('is_primary', true)->exists()) {
+            return;
+        }
+
+        $item->views()->create([
+            'label' => 'Main table',
+            'position' => 0,
+            'is_primary' => true,
+            'row_height' => 'single',
         ]);
     }
 

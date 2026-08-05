@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\BoardGroup;
+use App\Models\BoardView;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -64,4 +65,33 @@ test('deleting a group cascades to its items', function () {
 
     $this->assertDatabaseMissing('board_groups', ['id' => $group->id]);
     $this->assertDatabaseMissing('board_items', ['id' => $item->id]);
+});
+
+test('groups are scoped per tab — two tabs on the same board return disjoint groups', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $tab_one = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $tab_two = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+    BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $tab_one->id, 'name' => 'Tab one table']);
+    BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $tab_two->id, 'name' => 'Tab two table']);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/groups?view_id={$tab_one->id}")
+        ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.name', 'Tab one table');
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/groups?view_id={$tab_two->id}")
+        ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.name', 'Tab two table');
+});
+
+test('a group created for a specific tab is persisted against that tab', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $tab = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/groups", ['view_id' => $tab->id, 'name' => 'Backlog'])
+        ->assertCreated();
+
+    $this->assertDatabaseHas('board_groups', ['board_id' => $board->id, 'board_view_id' => $tab->id, 'name' => 'Backlog']);
 });

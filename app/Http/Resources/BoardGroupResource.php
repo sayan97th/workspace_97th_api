@@ -19,6 +19,7 @@ class BoardGroupResource extends JsonResource
         return [
             'id' => $this->id,
             'board_id' => $this->board_id,
+            'board_view_id' => $this->board_view_id,
             'name' => $this->name,
             'accent_color' => $this->accent_color,
             'position' => $this->position,

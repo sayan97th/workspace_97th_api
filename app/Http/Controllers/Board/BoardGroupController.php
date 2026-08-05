@@ -8,21 +8,29 @@ use App\Http\Requests\Board\StoreBoardGroupRequest;
 use App\Http\Requests\Board\UpdateBoardGroupRequest;
 use App\Http\Resources\BoardGroupResource;
 use App\Models\BoardGroup;
+use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class BoardGroupController extends Controller
 {
+    public function __construct(private readonly BoardViewResolver $view_resolver) {}
+
     /**
      * GET /api/boards/{item}/groups
      *
-     * A board's groups are its "tables" — any number (1…N) can exist, each
-     * rendered as its own titled table by the frontend's `BoardTable`.
+     * A tab's groups are its "tables" — any number (1…N) can exist, each
+     * rendered as its own titled table by the frontend's `BoardTable`. Scoped
+     * to one tab — `view_id` if given, otherwise the board's primary tab.
      */
-    public function index(WorkspaceNavigationItem $item): JsonResponse
+    public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        $view = $this->view_resolver->resolveForRead($item, $this->viewIdParam($request));
+
         return response()->json([
-            'data' => BoardGroupResource::collection($item->groups),
+            'data' => BoardGroupResource::collection($view?->groups ?? collect()),
         ]);
     }
 
@@ -32,11 +40,13 @@ class BoardGroupController extends Controller
     public function store(StoreBoardGroupRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $validated = $request->validated();
+        $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
 
-        $group = $item->groups()->create([
+        $group = $view->groups()->create([
+            'board_id' => $item->id,
             'name' => $validated['name'],
             'accent_color' => $validated['accent_color'] ?? '#579bfc',
-            'position' => $validated['position'] ?? $this->nextPosition($item),
+            'position' => $validated['position'] ?? $this->nextPosition($view),
         ]);
 
         return response()->json([
@@ -101,10 +111,18 @@ class BoardGroupController extends Controller
     }
 
     /**
-     * The next free position among the board's groups (append to the end).
+     * The next free position among the tab's groups (append to the end).
      */
-    private function nextPosition(WorkspaceNavigationItem $item): int
+    private function nextPosition(BoardView $view): int
     {
-        return (int) $item->groups()->max('position') + 1;
+        return (int) $view->groups()->max('position') + 1;
+    }
+
+    /**
+     * Reads `view_id` from the query string for GET requests.
+     */
+    private function viewIdParam(Request $request): ?int
+    {
+        return $request->filled('view_id') ? (int) $request->query('view_id') : null;
     }
 }

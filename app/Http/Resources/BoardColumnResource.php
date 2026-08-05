@@ -19,6 +19,7 @@ class BoardColumnResource extends JsonResource
         return [
             'id' => $this->id,
             'board_id' => $this->board_id,
+            'board_view_id' => $this->board_view_id,
             'key' => $this->key,
             'label' => $this->label,
             'type' => $this->type,

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Concerns\BelongsToBoardView;
 use Database\Factories\BoardColumnFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
@@ -12,12 +13,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 /**
- * A single column definition on a board (workspace navigation leaf), e.g.
+ * A single column definition on one tab (`board_view_id`) of a board, e.g.
  * "Status" or "Assigned to". The column `type` drives how {@link BoardItemValue}
- * values are shaped and how the frontend renders/edits cells.
+ * values are shaped and how the frontend renders/edits cells. Columns are
+ * independent per tab — two tabs on the same board may define the same `key`.
  *
  * @property int $id
  * @property int $board_id
+ * @property int $board_view_id
  * @property string $key
  * @property string $label
  * @property string $type
@@ -29,10 +32,12 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read WorkspaceNavigationItem $board
+ * @property-read BoardView $boardView
  * @property-read Collection<int, BoardItemValue> $values
  */
 #[Fillable([
     'board_id',
+    'board_view_id',
     'key',
     'label',
     'type',
@@ -45,7 +50,7 @@ use Illuminate\Support\Carbon;
 class BoardColumn extends Model
 {
     /** @use HasFactory<BoardColumnFactory> */
-    use HasFactory;
+    use BelongsToBoardView, HasFactory;
 
     public const TYPE_TEXT = 'text';
 
@@ -69,6 +74,16 @@ class BoardColumn extends Model
     public function board(): BelongsTo
     {
         return $this->belongsTo(WorkspaceNavigationItem::class, 'board_id');
+    }
+
+    /**
+     * The tab (view) this column belongs to.
+     *
+     * @return BelongsTo<BoardView, $this>
+     */
+    public function boardView(): BelongsTo
+    {
+        return $this->belongsTo(BoardView::class, 'board_view_id');
     }
 
     /**

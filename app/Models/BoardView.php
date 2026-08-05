@@ -4,9 +4,11 @@ namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 /**
@@ -39,6 +41,8 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem $board
  * @property-read User|null $creator
  * @property-read User|null $lockedBy
+ * @property-read Collection<int, BoardColumn> $columns
+ * @property-read Collection<int, BoardGroup> $groups
  */
 #[Fillable([
     'board_id',
@@ -95,6 +99,26 @@ class BoardView extends Model
     public function lockedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'locked_by_id');
+    }
+
+    /**
+     * This tab's own columns — independent from every other tab on the board.
+     *
+     * @return HasMany<BoardColumn, $this>
+     */
+    public function columns(): HasMany
+    {
+        return $this->hasMany(BoardColumn::class, 'board_view_id')->orderBy('position');
+    }
+
+    /**
+     * This tab's own groups ("tables") — independent from every other tab on the board.
+     *
+     * @return HasMany<BoardGroup, $this>
+     */
+    public function groups(): HasMany
+    {
+        return $this->hasMany(BoardGroup::class, 'board_view_id')->orderBy('position');
     }
 
     /**

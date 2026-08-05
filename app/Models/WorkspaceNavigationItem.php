@@ -138,7 +138,9 @@ class WorkspaceNavigationItem extends Model
     }
 
     /**
-     * This board's column schema, ordered for display.
+     * Every column across every tab of this board. Per-tab content now flows
+     * through {@link BoardView::columns()} — use that when you need just one
+     * tab's columns.
      *
      * @return HasMany<BoardColumn, $this>
      */
@@ -148,7 +150,9 @@ class WorkspaceNavigationItem extends Model
     }
 
     /**
-     * This board's groups ("tables"), ordered for display.
+     * Every group ("table") across every tab of this board. Per-tab content
+     * now flows through {@link BoardView::groups()} — use that when you need
+     * just one tab's groups.
      *
      * @return HasMany<BoardGroup, $this>
      */

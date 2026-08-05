@@ -8,19 +8,29 @@ use App\Http\Requests\Board\StoreBoardColumnRequest;
 use App\Http\Requests\Board\UpdateBoardColumnRequest;
 use App\Http\Resources\BoardColumnResource;
 use App\Models\BoardColumn;
+use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class BoardColumnController extends Controller
 {
+    public function __construct(private readonly BoardViewResolver $view_resolver) {}
+
     /**
      * GET /api/boards/{item}/columns
+     *
+     * Scoped to one tab — `view_id` if given, otherwise the board's primary
+     * tab. Returns an empty list when that tab doesn't exist yet.
      */
-    public function index(WorkspaceNavigationItem $item): JsonResponse
+    public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        $view = $this->view_resolver->resolveForRead($item, $this->viewIdParam($request));
+
         return response()->json([
-            'data' => BoardColumnResource::collection($item->columns),
+            'data' => BoardColumnResource::collection($view?->columns ?? collect()),
         ]);
     }
 
@@ -30,12 +40,14 @@ class BoardColumnController extends Controller
     public function store(StoreBoardColumnRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $validated = $request->validated();
+        $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
 
-        $column = $item->columns()->create([
+        $column = $view->columns()->create([
+            'board_id' => $item->id,
             'key' => $validated['key'],
             'label' => $validated['label'],
             'type' => $validated['type'],
-            'position' => $validated['position'] ?? $this->nextPosition($item),
+            'position' => $validated['position'] ?? $this->nextPosition($view),
             'width' => $validated['width'] ?? 180,
             'config' => $validated['config'] ?? $this->defaultConfigFor($validated['type']),
             'hideable' => $validated['hideable'] ?? true,
@@ -102,11 +114,19 @@ class BoardColumnController extends Controller
     }
 
     /**
-     * The next free position among the board's columns (append to the end).
+     * The next free position among the tab's columns (append to the end).
      */
-    private function nextPosition(WorkspaceNavigationItem $item): int
+    private function nextPosition(BoardView $view): int
     {
-        return (int) $item->columns()->max('position') + 1;
+        return (int) $view->columns()->max('position') + 1;
+    }
+
+    /**
+     * Reads `view_id` from the query string for GET requests.
+     */
+    private function viewIdParam(Request $request): ?int
+    {
+        return $request->filled('view_id') ? (int) $request->query('view_id') : null;
     }
 
     /**
