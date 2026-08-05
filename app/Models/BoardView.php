@@ -23,6 +23,9 @@ use Illuminate\Support\Carbon;
  * @property string|null $icon
  * @property int $position
  * @property bool $is_primary
+ * @property bool $pinned
+ * @property bool $is_locked
+ * @property int|null $locked_by_id
  * @property array<string, mixed>|null $filter_state
  * @property array<int, mixed>|null $sort_state
  * @property string|null $group_by_option_id
@@ -35,6 +38,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $updated_at
  * @property-read WorkspaceNavigationItem $board
  * @property-read User|null $creator
+ * @property-read User|null $lockedBy
  */
 #[Fillable([
     'board_id',
@@ -42,6 +46,9 @@ use Illuminate\Support\Carbon;
     'icon',
     'position',
     'is_primary',
+    'pinned',
+    'is_locked',
+    'locked_by_id',
     'filter_state',
     'sort_state',
     'group_by_option_id',
@@ -81,6 +88,16 @@ class BoardView extends Model
     }
 
     /**
+     * The user who last locked this view, if it's currently locked.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function lockedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'locked_by_id');
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
@@ -88,6 +105,8 @@ class BoardView extends Model
         return [
             'position' => 'integer',
             'is_primary' => 'boolean',
+            'pinned' => 'boolean',
+            'is_locked' => 'boolean',
             'filter_state' => 'array',
             'sort_state' => 'array',
             'hidden_column_ids' => 'array',

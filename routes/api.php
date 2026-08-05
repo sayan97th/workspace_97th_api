@@ -124,8 +124,12 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::prefix('views')->group(function () {
             Route::get('/', [BoardViewController::class, 'index']);
             Route::post('/', [BoardViewController::class, 'store']);
+            Route::put('order', [BoardViewController::class, 'updatePersonalOrder']);
             Route::patch('{board_view}', [BoardViewController::class, 'update']);
             Route::delete('{board_view}', [BoardViewController::class, 'destroy']);
+            Route::post('{board_view}/duplicate', [BoardViewController::class, 'duplicate']);
+            Route::post('{board_view}/pin', [BoardViewController::class, 'togglePin']);
+            Route::post('{board_view}/lock', [BoardViewController::class, 'toggleLock']);
         });
     });
 
