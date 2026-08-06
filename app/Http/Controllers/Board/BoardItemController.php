@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\StoreBoardItemRequest;
+use App\Http\Requests\Board\UpdateBoardItemCoverRequest;
 use App\Http\Requests\Board\UpdateBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
 use App\Http\Resources\BoardItemDetailResource;
@@ -15,6 +16,8 @@ use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class BoardItemController extends Controller
 {
@@ -136,6 +139,56 @@ class BoardItemController extends Controller
 
         return response()->json([
             'message' => 'Item deleted successfully.',
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/items/{board_item}/cover
+     *
+     * Sets (or replaces) the Kanban card's Trello-style cover image, mirroring
+     * {@see \App\Http\Controllers\Board\BoardItemCommentController::store()}'s
+     * attachment-upload pattern.
+     */
+    public function updateCover(UpdateBoardItemCoverRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+
+        $previous_path = $board_item->cover_image_path;
+
+        $file = $request->file('cover');
+        $path = $file->storeAs(
+            "board-item-covers/{$board_item->id}",
+            Str::uuid().'.'.$file->getClientOriginalExtension(),
+            'public'
+        );
+
+        $board_item->update(['cover_image_path' => $path]);
+
+        if ($previous_path) {
+            Storage::disk('public')->delete($previous_path);
+        }
+
+        return response()->json([
+            'message' => 'Cover image updated successfully.',
+            'item' => new BoardItemResource($board_item->fresh('values')),
+        ]);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/items/{board_item}/cover
+     */
+    public function removeCover(WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+
+        if ($board_item->cover_image_path) {
+            Storage::disk('public')->delete($board_item->cover_image_path);
+            $board_item->update(['cover_image_path' => null]);
+        }
+
+        return response()->json([
+            'message' => 'Cover image removed successfully.',
+            'item' => new BoardItemResource($board_item->fresh('values')),
         ]);
     }
 

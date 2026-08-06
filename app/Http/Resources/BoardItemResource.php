@@ -26,6 +26,7 @@ class BoardItemResource extends JsonResource
             'group_id' => $this->group_id,
             'name' => $this->name,
             'position' => $this->position,
+            'cover_image_url' => $this->cover_image_url,
             // Only `index()` eager-loads the `comments` count (the board table's row
             // chat icon); other actions that return this resource (store/update/
             // updateValues) fall back to 0 rather than a real count.
