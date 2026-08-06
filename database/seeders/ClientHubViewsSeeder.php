@@ -8,15 +8,17 @@ use Illuminate\Database\Seeder;
 /**
  * Seeds the Client Hub board's tabs (`board_views`) so the real "rename tab" /
  * "add icon" / "switch tab to see different content" flow has something to
- * show out of the box. Client Hub's table itself stays frontend mock data
- * (`src/data/client-hub-data.ts`) by design, but its tabs are real —
- * `ClientHubBoard.tsx` resolves the board id via `GET /api/boards/client-hub`
- * and manages these rows through the same generic `boards/{item}/views`
- * endpoints every other board uses.
+ * show out of the box. Client Hub is a fully generic, database-backed board
+ * (no special frontend component or `view_key` — it renders through the same
+ * `TableBoardView` engine every other board uses), so its tabs are managed
+ * through the same generic `boards/{item}/views` endpoints too.
  *
  * Each non-primary tab demonstrates a different real filtering mechanism
  * (group-by, a quick-filter facet, the person filter) so switching tabs
  * genuinely narrows the table to different rows, not just a cosmetic label.
+ * Run after {@see ClientHubContentSeeder} would also work, but this seeder
+ * only depends on the board existing — {@see ClientHubContentSeeder} patches
+ * these tabs' filters afterward once real groups/users exist.
  */
 class ClientHubViewsSeeder extends Seeder
 {
@@ -25,7 +27,7 @@ class ClientHubViewsSeeder extends Seeder
      */
     public function run(): void
     {
-        $board = WorkspaceNavigationItem::where('view_key', 'client_hub')->first();
+        $board = WorkspaceNavigationItem::where('label', 'Client Hub')->first();
 
         if (! $board) {
             return;

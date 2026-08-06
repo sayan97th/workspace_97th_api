@@ -90,7 +90,7 @@ class WorkspaceSeeder extends Seeder
 
         return [
             ['type' => $leaf, 'label' => 'Workspace home', 'slug' => 'workspace-home', 'icon' => 'home', 'href' => '/workspace-home', 'view_key' => 'workspace_home'],
-            ['type' => $leaf, 'label' => 'Client Hub', 'slug' => 'client-hub', 'is_favorite' => true, 'href' => '/client-hub', 'view_key' => 'client_hub'],
+            ['type' => $leaf, 'label' => 'Client Hub', 'slug' => 'client-hub', 'is_favorite' => true, 'display_style' => 'table', 'board_type' => WorkspaceNavigationItem::BOARD_TYPE_MAIN],
             ['type' => $group, 'label' => '97th Floor Development', 'slug' => 'development', 'children' => [
                 ['type' => $leaf, 'label' => 'Palomar Roadmap & Software Engineering', 'slug' => 'palomar'],
                 ['type' => $leaf, 'label' => '97th Floor Web Dev', 'slug' => 'web-dev'],

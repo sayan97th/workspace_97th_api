@@ -23,23 +23,4 @@ class BoardController extends Controller
 
         return response()->json(new BoardResource($item));
     }
-
-    /**
-     * GET /api/boards/client-hub
-     *
-     * Client Hub is rendered by the frontend at the static `/client-hub` route
-     * (not the id-routed `/boards/{id}` page), so it never receives its own
-     * navigation item id as a route param. This resolves the singleton Client
-     * Hub leaf (seeded with `view_key = 'client_hub'`) so the frontend can use
-     * its id as the `board_id` for the shared `boards/{item}/views` endpoints
-     * — reusing the generic saved-views engine for Client Hub's tabs without
-     * touching its mock-data table content.
-     */
-    public function showClientHub(): JsonResponse
-    {
-        $item = WorkspaceNavigationItem::where('view_key', 'client_hub')->firstOrFail();
-        $item->load(['creator', 'workspace.owners']);
-
-        return response()->json(new BoardResource($item));
-    }
 }
