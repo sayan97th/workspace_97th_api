@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
@@ -24,6 +25,7 @@ use Illuminate\Support\Facades\Storage;
  * @property int $board_id
  * @property int $group_id
  * @property string $name
+ * @property string|null $description
  * @property int $position
  * @property string|null $cover_image_path
  * @property int|null $created_by_id
@@ -36,8 +38,9 @@ use Illuminate\Support\Facades\Storage;
  * @property-read User|null $creator
  * @property-read Collection<int, BoardItemValue> $values
  * @property-read Collection<int, BoardItemComment> $comments
+ * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
  */
-#[Fillable(['board_id', 'group_id', 'name', 'position', 'cover_image_path', 'created_by_id'])]
+#[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'cover_image_path', 'created_by_id'])]
 #[Appends(['cover_image_url'])]
 class BoardItem extends Model
 {
@@ -97,6 +100,19 @@ class BoardItem extends Model
     public function comments(): HasMany
     {
         return $this->hasMany(BoardItemComment::class, 'item_id');
+    }
+
+    /**
+     * Every attachment across this item's comments, for the card's
+     * "archivos adjuntos" count (see {@see BoardItemController::index()}'s
+     * `withCount('commentAttachments')`) — mirrors the `comments` count's
+     * `withCount()` pattern rather than a raw subquery.
+     *
+     * @return HasManyThrough<BoardItemCommentAttachment, BoardItemComment, $this>
+     */
+    public function commentAttachments(): HasManyThrough
+    {
+        return $this->hasManyThrough(BoardItemCommentAttachment::class, BoardItemComment::class, 'item_id', 'comment_id');
     }
 
     /**

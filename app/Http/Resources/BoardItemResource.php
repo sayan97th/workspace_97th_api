@@ -25,12 +25,15 @@ class BoardItemResource extends JsonResource
             'board_id' => $this->board_id,
             'group_id' => $this->group_id,
             'name' => $this->name,
+            'description' => $this->description,
             'position' => $this->position,
             'cover_image_url' => $this->cover_image_url,
-            // Only `index()` eager-loads the `comments` count (the board table's row
-            // chat icon); other actions that return this resource (store/update/
+            // Only `index()` eager-loads the `comments`/`commentAttachments` counts
+            // (the board table's row chat icon and the Kanban card's attachment
+            // count); other actions that return this resource (store/update/
             // updateValues) fall back to 0 rather than a real count.
             'comment_count' => $this->whenCounted('comments', default: 0),
+            'attachment_count' => $this->whenCounted('commentAttachments', default: 0),
             // Cast to a plain object: if every column id in this map happens to be an
             // integer key, Laravel's JsonResource::removeMissingValues() treats the
             // array as a list and silently reindexes it from 0 via array_values(),

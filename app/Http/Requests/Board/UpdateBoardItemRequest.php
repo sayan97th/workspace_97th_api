@@ -21,6 +21,7 @@ class UpdateBoardItemRequest extends FormRequest
 
         return [
             'name' => ['sometimes', 'string', 'max:255'],
+            'description' => ['sometimes', 'nullable', 'string'],
             'group_id' => [
                 'sometimes', 'integer',
                 Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),

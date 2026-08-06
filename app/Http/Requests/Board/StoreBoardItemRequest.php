@@ -21,6 +21,7 @@ class StoreBoardItemRequest extends FormRequest
 
         return [
             'name' => ['required', 'string', 'max:255'],
+            'description' => ['sometimes', 'nullable', 'string'],
             'group_id' => [
                 'required', 'integer',
                 Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),

@@ -47,7 +47,7 @@ class BoardItemController extends Controller
 
         $query = $item->items()
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
-            ->with('values')->withCount('comments')->orderBy('group_id')->orderBy('position');
+            ->with('values')->withCount(['comments', 'commentAttachments'])->orderBy('group_id')->orderBy('position');
 
         $query = $this->filter_service->applySearch($query, $request->query('search'));
 
@@ -80,6 +80,7 @@ class BoardItemController extends Controller
         $board_item = $item->items()->create([
             'group_id' => $validated['group_id'],
             'name' => $validated['name'],
+            'description' => $validated['description'] ?? null,
             'position' => $validated['position'] ?? $this->nextPosition($item, $validated['group_id']),
             'created_by_id' => $request->user()?->id,
         ]);
