@@ -111,8 +111,6 @@ Route::middleware(['auth:api', 'active'])->group(function () {
             Route::get('{board_item}', [BoardItemController::class, 'show']);
             Route::patch('{board_item}', [BoardItemController::class, 'update']);
             Route::patch('{board_item}/values', [BoardItemController::class, 'updateValues']);
-            Route::post('{board_item}/cover', [BoardItemController::class, 'updateCover']);
-            Route::delete('{board_item}/cover', [BoardItemController::class, 'removeCover']);
             Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
 
             Route::prefix('{board_item}/comments')->group(function () {

@@ -24,7 +24,10 @@ class StoreBoardItemCommentRequest extends FormRequest
         $item_id = $board_item instanceof BoardItem ? $board_item->id : null;
 
         return [
-            'body' => ['required', 'string', 'max:5000'],
+            // A comment needs either body text or at least one attachment — not
+            // necessarily both, so a card can be attached a file directly (no
+            // written update required), mirroring Trello's "Attachment" button.
+            'body' => ['required_without:attachments', 'nullable', 'string', 'max:5000'],
             'parent_id' => [
                 'nullable', 'integer',
                 Rule::exists('board_item_comments', 'id')->where(

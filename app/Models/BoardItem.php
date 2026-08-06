@@ -3,9 +3,7 @@
 namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
-use Illuminate\Database\Eloquent\Attributes\Appends;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -14,7 +12,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Storage;
 
 /**
  * A single row ("pulse") on a board. Its id is a random 10-digit number (see
@@ -27,12 +24,10 @@ use Illuminate\Support\Facades\Storage;
  * @property string $name
  * @property string|null $description
  * @property int $position
- * @property string|null $cover_image_path
  * @property int|null $created_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
- * @property-read string|null $cover_image_url
  * @property-read WorkspaceNavigationItem $board
  * @property-read BoardGroup $group
  * @property-read User|null $creator
@@ -40,8 +35,7 @@ use Illuminate\Support\Facades\Storage;
  * @property-read Collection<int, BoardItemComment> $comments
  * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
  */
-#[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'cover_image_path', 'created_by_id'])]
-#[Appends(['cover_image_url'])]
+#[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'created_by_id'])]
 class BoardItem extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
@@ -113,19 +107,6 @@ class BoardItem extends Model
     public function commentAttachments(): HasManyThrough
     {
         return $this->hasManyThrough(BoardItemCommentAttachment::class, BoardItemComment::class, 'item_id', 'comment_id');
-    }
-
-    /**
-     * Trello-style card cover, resolved to a public URL — see
-     * {@see \App\Http\Controllers\Board\BoardItemController::updateCover()}.
-     *
-     * @return Attribute<string|null, never>
-     */
-    protected function coverImageUrl(): Attribute
-    {
-        return Attribute::make(
-            get: fn () => $this->cover_image_path ? Storage::disk('public')->url($this->cover_image_path) : null,
-        );
     }
 
     /**

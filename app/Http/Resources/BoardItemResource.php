@@ -27,7 +27,6 @@ class BoardItemResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'position' => $this->position,
-            'cover_image_url' => $this->cover_image_url,
             // Only `index()` eager-loads the `comments`/`commentAttachments` counts
             // (the board table's row chat icon and the Kanban card's attachment
             // count); other actions that return this resource (store/update/

@@ -50,7 +50,7 @@ class BoardItemCommentController extends Controller
         $comment = $board_item->comments()->create([
             'parent_id' => $validated['parent_id'] ?? null,
             'user_id' => $request->user()?->id,
-            'body' => $validated['body'],
+            'body' => $validated['body'] ?? '',
         ]);
 
         $mentioned_user_ids = collect($validated['mentioned_user_ids'] ?? [])->unique();

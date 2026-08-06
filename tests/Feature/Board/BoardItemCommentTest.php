@@ -51,6 +51,35 @@ test('a comment can be posted with mentions and an attachment', function () {
     Storage::disk('public')->assertExists($attachment->file_path);
 });
 
+test('a comment can be posted with only an attachment and no body text', function () {
+    Storage::fake('public');
+    $item = createCommentTestItem();
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user, 'api')->post(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments",
+        ['attachments' => [UploadedFile::fake()->image('photo.png')]],
+        ['Accept' => 'application/json']
+    );
+
+    $response->assertCreated()
+        ->assertJsonPath('comment.body', '')
+        ->assertJsonCount(1, 'comment.attachments')
+        ->assertJsonPath('comment.attachments.0.file_name', 'photo.png');
+
+    $this->assertDatabaseHas('board_item_comments', ['item_id' => $item->id, 'user_id' => $user->id, 'body' => '']);
+});
+
+test('a comment with neither body text nor an attachment is rejected', function () {
+    $item = createCommentTestItem();
+    $user = User::factory()->create();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments", [])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('body');
+});
+
 test('a reply can be posted under a top-level comment and is nested one level', function () {
     $item = createCommentTestItem();
     $author = User::factory()->create();
