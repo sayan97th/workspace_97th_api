@@ -32,7 +32,7 @@ class BoardViewController extends Controller
             ->value('view_order');
 
         return response()->json([
-            'data' => BoardViewResource::collection($item->views),
+            'data' => BoardViewResource::collection($item->views()->with('creator')->get()),
             'personal_order' => $personal_order,
         ]);
     }
@@ -75,6 +75,7 @@ class BoardViewController extends Controller
             'row_height' => $validated['row_height'] ?? 'single',
             'created_by_id' => $request->user()?->id,
         ]);
+        $view->setRelation('creator', $request->user());
 
         return response()->json([
             'message' => 'View created successfully.',
@@ -97,7 +98,7 @@ class BoardViewController extends Controller
 
         return response()->json([
             'message' => 'View saved successfully.',
-            'view' => new BoardViewResource($board_view->fresh()),
+            'view' => new BoardViewResource($board_view->fresh(['creator'])),
         ]);
     }
 
@@ -155,6 +156,7 @@ class BoardViewController extends Controller
                 'is_locked' => false,
                 'locked_by_id' => null,
                 'row_height' => $board_view->row_height,
+                'doc_content' => $board_view->doc_content,
                 'created_by_id' => $request->user()?->id,
             ]);
 
@@ -214,7 +216,7 @@ class BoardViewController extends Controller
 
         return response()->json([
             'message' => 'View duplicated successfully.',
-            'view' => new BoardViewResource($copy->fresh()),
+            'view' => new BoardViewResource($copy->fresh(['creator'])),
         ], 201);
     }
 
@@ -233,7 +235,7 @@ class BoardViewController extends Controller
 
         return response()->json([
             'message' => $board_view->pinned ? 'View pinned successfully.' : 'View unpinned successfully.',
-            'view' => new BoardViewResource($board_view),
+            'view' => new BoardViewResource($board_view->load('creator')),
         ]);
     }
 
@@ -256,7 +258,7 @@ class BoardViewController extends Controller
 
         return response()->json([
             'message' => $is_locked ? 'View locked successfully.' : 'View unlocked successfully.',
-            'view' => new BoardViewResource($board_view),
+            'view' => new BoardViewResource($board_view->load('creator')),
         ]);
     }
 

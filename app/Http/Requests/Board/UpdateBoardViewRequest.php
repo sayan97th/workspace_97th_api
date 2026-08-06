@@ -30,6 +30,8 @@ class UpdateBoardViewRequest extends FormRequest
             'pinned_column_ids' => ['sometimes', 'nullable', 'array'],
             'row_height' => ['sometimes', 'string', Rule::in(['single', 'double', 'triple'])],
             'conditional_color_rules' => ['sometimes', 'nullable', 'array'],
+            // Markdown source, saved by a `doc`-type view's autosave.
+            'doc_content' => ['sometimes', 'nullable', 'string'],
         ];
     }
 }

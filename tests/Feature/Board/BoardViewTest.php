@@ -101,6 +101,42 @@ test('saving filters on a view persists and round-trips the exact state', functi
     expect($saved_view['row_height'])->toBe('double');
 });
 
+test('saving doc content on a doc view persists and round-trips the markdown', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false, 'view_type' => 'doc']);
+
+    $markdown = "# Heading\n\nSome **bold** text and a list:\n\n- one\n- two";
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/views/{$view->id}", ['doc_content' => $markdown])
+        ->assertOk()
+        ->assertJsonPath('view.doc_content', $markdown);
+
+    $reload_response = $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/views");
+    $saved_view = collect($reload_response->json('data'))->firstWhere('id', $view->id);
+
+    expect($saved_view['doc_content'])->toBe($markdown);
+});
+
+test('duplicating a doc view carries over its doc content', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->create([
+        'board_id' => $board->id,
+        'is_primary' => false,
+        'view_type' => 'doc',
+        'doc_content' => '# Original notes',
+    ]);
+
+    $response = $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/views/{$view->id}/duplicate")
+        ->assertCreated()
+        ->assertJsonPath('view.doc_content', '# Original notes');
+
+    expect($response->json('view.id'))->not->toBe($view->id);
+});
+
 test('the primary view cannot be deleted', function () {
     $user = User::factory()->create();
     $board = createViewTestBoard();

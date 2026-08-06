@@ -23,6 +23,7 @@ use Illuminate\Support\Carbon;
  * @property int $board_id
  * @property string $label
  * @property string $view_type
+ * @property string|null $doc_content
  * @property string|null $icon
  * @property int $position
  * @property bool $is_primary
@@ -49,6 +50,7 @@ use Illuminate\Support\Carbon;
     'board_id',
     'label',
     'view_type',
+    'doc_content',
     'icon',
     'position',
     'is_primary',

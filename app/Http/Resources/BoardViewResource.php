@@ -33,6 +33,8 @@ class BoardViewResource extends JsonResource
             'board_id' => $this->board_id,
             'label' => $this->label,
             'view_type' => $this->view_type,
+            // Markdown source for a `doc`-type view — null/unused for every other kind.
+            'doc_content' => $this->doc_content,
             'icon' => $this->icon,
             'position' => $this->position,
             'is_primary' => $this->is_primary,
@@ -46,6 +48,13 @@ class BoardViewResource extends JsonResource
             'pinned_column_ids' => $this->pinned_column_ids,
             'row_height' => $this->row_height,
             'conditional_color_rules' => $this->conditional_color_rules,
+            'created_at' => $this->created_at,
+            'updated_at' => $this->updated_at,
+            'creator' => $this->whenLoaded('creator', fn () => $this->creator ? [
+                'id' => $this->creator->id,
+                'full_name' => $this->creator->full_name,
+                'profile_photo_url' => $this->creator->profile_photo_url,
+            ] : null),
         ];
     }
 }

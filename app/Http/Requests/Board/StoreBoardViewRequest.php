@@ -30,6 +30,7 @@ class StoreBoardViewRequest extends FormRequest
             'pinned_column_ids' => ['sometimes', 'nullable', 'array'],
             'row_height' => ['sometimes', 'string', Rule::in(['single', 'double', 'triple'])],
             'conditional_color_rules' => ['sometimes', 'nullable', 'array'],
+            'doc_content' => ['sometimes', 'nullable', 'string'],
         ];
     }
 }
