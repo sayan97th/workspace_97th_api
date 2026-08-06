@@ -44,9 +44,12 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('board_columns', function (Blueprint $table) {
+            // The foreign key constraint must be dropped before its
+            // supporting indexes, or MySQL refuses to drop them (error 1553).
+            $table->dropForeign(['board_view_id']);
             $table->dropUnique(['board_view_id', 'key']);
             $table->dropIndex(['board_view_id', 'position']);
-            $table->dropConstrainedForeignId('board_view_id');
+            $table->dropColumn('board_view_id');
         });
 
         Schema::table('board_columns', function (Blueprint $table) {
@@ -54,8 +57,9 @@ return new class extends Migration
         });
 
         Schema::table('board_groups', function (Blueprint $table) {
+            $table->dropForeign(['board_view_id']);
             $table->dropIndex(['board_view_id', 'position']);
-            $table->dropConstrainedForeignId('board_view_id');
+            $table->dropColumn('board_view_id');
         });
     }
 };
