@@ -126,6 +126,16 @@ class BoardView extends Model
     }
 
     /**
+     * This tab's own uploaded files — only meaningful for a `file_gallery`-type view.
+     *
+     * @return HasMany<BoardViewFile, $this>
+     */
+    public function files(): HasMany
+    {
+        return $this->hasMany(BoardViewFile::class, 'board_view_id')->orderByDesc('created_at');
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
