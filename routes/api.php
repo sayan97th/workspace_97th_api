@@ -11,6 +11,7 @@ use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardViewController;
+use App\Http\Controllers\Board\BoardViewImageController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
@@ -132,6 +133,7 @@ Route::middleware(['auth:api', 'active'])->group(function () {
             Route::post('{board_view}/duplicate', [BoardViewController::class, 'duplicate']);
             Route::post('{board_view}/pin', [BoardViewController::class, 'togglePin']);
             Route::post('{board_view}/lock', [BoardViewController::class, 'toggleLock']);
+            Route::post('{board_view}/images', [BoardViewImageController::class, 'store']);
         });
     });
 
