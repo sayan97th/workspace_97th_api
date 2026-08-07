@@ -76,7 +76,9 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
         Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
+        Route::get('{workspace}/invitations', [WorkspaceInvitationController::class, 'index']);
         Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);
+        Route::delete('{workspace}/invitations/{invitation:id}', [WorkspaceInvitationController::class, 'destroy']);
         Route::get('{workspace}/content/recent', [ContentController::class, 'recent']);
 
         Route::prefix('{workspace}/navigation')->group(function () {

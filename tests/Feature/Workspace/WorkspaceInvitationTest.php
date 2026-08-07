@@ -174,6 +174,220 @@ test('an expired invitation cannot be accepted', function () {
     expect(User::where('email', 'toolate@example.com')->exists())->toBeFalse();
 });
 
+test('a workspace owner can list every sent invitation, newest first', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $older = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'older@example.com',
+        'invited_by' => $owner->id,
+        'created_at' => now()->subDay(),
+    ]);
+    $newer = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'newer@example.com',
+        'invited_by' => $owner->id,
+        'created_at' => now(),
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations");
+
+    $response->assertOk()
+        ->assertJsonPath('data.0.id', $newer->id)
+        ->assertJsonPath('data.1.id', $older->id)
+        ->assertJsonPath('data.0.inviter.id', $owner->id)
+        ->assertJsonPath('meta.total', 2);
+});
+
+test('members cannot list a workspace\'s sent invitations', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+
+    $response = $this->actingAs($member, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations");
+
+    $response->assertStatus(403);
+});
+
+test('sent invitations can be searched by email and filtered by status/role', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $pending = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'pending@example.com',
+        'role' => 'viewer',
+        'invited_by' => $owner->id,
+    ]);
+    WorkspaceInvitation::factory()->expired()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'expired@example.com',
+        'role' => 'member',
+        'invited_by' => $owner->id,
+    ]);
+    WorkspaceInvitation::factory()->accepted()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'accepted@example.com',
+        'role' => 'member',
+        'invited_by' => $owner->id,
+    ]);
+
+    $search = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations?search=pending");
+    $search->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $pending->id)
+        ->assertJsonPath('data.0.status', 'pending');
+
+    $status_filter = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations?status=expired");
+    $status_filter->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.email', 'expired@example.com')
+        ->assertJsonPath('data.0.status', 'expired');
+
+    $role_filter = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations?role=viewer");
+    $role_filter->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.email', 'pending@example.com');
+});
+
+test('sent invitations can be sorted by any column in either direction', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'bravo@example.com',
+        'invited_by' => $owner->id,
+    ]);
+    WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'alpha@example.com',
+        'invited_by' => $owner->id,
+    ]);
+
+    $ascending = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations?sort_field=email&sort_direction=asc");
+    $ascending->assertOk()
+        ->assertJsonPath('data.0.email', 'alpha@example.com')
+        ->assertJsonPath('data.1.email', 'bravo@example.com');
+
+    $descending = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations?sort_field=email&sort_direction=desc");
+    $descending->assertOk()
+        ->assertJsonPath('data.0.email', 'bravo@example.com')
+        ->assertJsonPath('data.1.email', 'alpha@example.com');
+});
+
+test('sent invitations can be narrowed to a date range', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $old = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'old@example.com',
+        'invited_by' => $owner->id,
+        'created_at' => now()->subDays(10),
+    ]);
+    $recent = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'recent@example.com',
+        'invited_by' => $owner->id,
+        'created_at' => now(),
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations?date_from=".now()->subDays(2)->toDateString());
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $recent->id);
+
+    expect($old->id)->not->toBe($recent->id);
+});
+
+test('a workspace owner can revoke a pending invitation', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->deleteJson("/api/workspaces/{$workspace->slug}/invitations/{$invitation->id}");
+
+    $response->assertOk();
+    $this->assertDatabaseMissing('workspace_invitations', ['id' => $invitation->id]);
+});
+
+test('an accepted invitation cannot be revoked', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->accepted()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->deleteJson("/api/workspaces/{$workspace->slug}/invitations/{$invitation->id}");
+
+    $response->assertUnprocessable();
+    $this->assertDatabaseHas('workspace_invitations', ['id' => $invitation->id]);
+});
+
+test('members cannot revoke a workspace\'s invitations', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+
+    $invitation = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->actingAs($member, 'api')
+        ->deleteJson("/api/workspaces/{$workspace->slug}/invitations/{$invitation->id}");
+
+    $response->assertStatus(403);
+    $this->assertDatabaseHas('workspace_invitations', ['id' => $invitation->id]);
+});
+
+test('an invitation cannot be revoked through a workspace it does not belong to', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $other_workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $other_workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->deleteJson("/api/workspaces/{$other_workspace->slug}/invitations/{$invitation->id}");
+
+    $response->assertNotFound();
+});
+
 test('an invitation can be declined', function () {
     $owner = User::factory()->create();
     $workspace = Workspace::factory()->create();
