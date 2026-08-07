@@ -17,8 +17,10 @@ use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Workspace\BoardController;
+use App\Http\Controllers\Workspace\BoardViewController as WorkspaceBoardViewController;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
+use App\Http\Controllers\Workspace\WorkspacePermissionController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Auth routes ────────────────────────────────────────────────────────────
@@ -62,6 +64,8 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
+        Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
+        Route::get('{workspace}/board-views/recent', [WorkspaceBoardViewController::class, 'recent']);
 
         Route::prefix('{workspace}/navigation')->group(function () {
             Route::get('/', [WorkspaceNavigationItemController::class, 'index']);
@@ -78,6 +82,18 @@ Route::middleware(['auth:api', 'active'])->group(function () {
     // frontend. No workspace slug needed: the item's own row says which
     // workspace it belongs to.
     Route::get('boards/{item}', [BoardController::class, 'show']);
+
+    // Board views, listed across boards — powers Manage Workspace's Content
+    // tab ("every board view I have access to"), as opposed to
+    // `boards/{item}/views` which lists a single board's own tabs.
+    Route::get('board-views', [WorkspaceBoardViewController::class, 'index']);
+
+    // The default workspace-role permission matrix — shared config, not a
+    // single workspace's own settings. Any authenticated member can view it
+    // (Manage Workspace's Permissions tab); only staff can edit it.
+    Route::get('workspace-permissions', [WorkspacePermissionController::class, 'index']);
+    Route::middleware('role:super_admin,admin,staff')
+        ->patch('workspace-permissions', [WorkspacePermissionController::class, 'update']);
 
     // Board content — the reusable "table board" engine: any number of
     // tables (groups) per board, items (pulses) with typed column values,

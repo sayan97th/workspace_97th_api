@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Workspace;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\StoreWorkspaceRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceRequest;
+use App\Http\Resources\WorkspaceMemberResource;
 use App\Http\Resources\WorkspaceResource;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -89,6 +91,20 @@ class WorkspaceController extends Controller
         ]);
 
         $workspace->users()->attach($user->id, ['role' => 'owner', 'is_recent' => true]);
+
+        // Every workspace gets a "Manage Workspace" entry point for free, the
+        // same way the seeded workspaces do (see WorkspaceSeeder).
+        $workspace->navigationItems()->create([
+            'parent_id' => null,
+            'type' => WorkspaceNavigationItem::TYPE_LEAF,
+            'label' => 'Manage Workspace',
+            'slug' => 'manage-workspace',
+            'icon' => 'home',
+            'view_key' => 'workspace_manage',
+            'is_favorite' => false,
+            'position' => 0,
+            'created_by_id' => $user->id,
+        ]);
 
         $workspace->setAttribute('membership_role', 'owner');
         $workspace->setAttribute('membership_is_recent', true);
@@ -194,6 +210,21 @@ class WorkspaceController extends Controller
 
         return response()->json([
             'message' => 'You have left the workspace.',
+        ]);
+    }
+
+    /**
+     * GET /api/workspaces/{workspace}/members
+     *
+     * The full member roster (with role) for the Manage Workspace
+     * "Collaborations" tab.
+     */
+    public function members(Workspace $workspace): JsonResponse
+    {
+        $members = $workspace->users()->orderBy('first_name')->orderBy('last_name')->get();
+
+        return response()->json([
+            'data' => WorkspaceMemberResource::collection($members),
         ]);
     }
 

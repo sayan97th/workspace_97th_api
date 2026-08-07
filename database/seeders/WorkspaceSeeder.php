@@ -51,6 +51,38 @@ class WorkspaceSeeder extends Seeder
         // Rebuild the Fulfillment navigation tree from scratch (idempotent).
         $fulfillment->navigationItems()->withTrashed()->forceDelete();
         $this->createNodes($fulfillment, $this->fulfillmentTree(), null);
+
+        // Every other seeded workspace has no tree of its own, but still needs
+        // a "Manage Workspace" entry point — Fulfillment's own copy comes from
+        // the first node of fulfillmentTree() above.
+        foreach ($this->workspaces as $data) {
+            if ($data['slug'] === 'fulfillment') {
+                continue;
+            }
+
+            $this->ensureManageWorkspaceItem(Workspace::where('slug', $data['slug'])->firstOrFail());
+        }
+    }
+
+    /**
+     * Idempotently gives a workspace a root "Manage Workspace" leaf.
+     */
+    private function ensureManageWorkspaceItem(Workspace $workspace): void
+    {
+        if ($workspace->navigationItems()->where('view_key', 'workspace_manage')->exists()) {
+            return;
+        }
+
+        $workspace->navigationItems()->create([
+            'parent_id' => null,
+            'type' => WorkspaceNavigationItem::TYPE_LEAF,
+            'label' => 'Manage Workspace',
+            'slug' => 'manage-workspace',
+            'icon' => 'home',
+            'view_key' => 'workspace_manage',
+            'is_favorite' => false,
+            'position' => 0,
+        ]);
     }
 
     /**
@@ -89,7 +121,7 @@ class WorkspaceSeeder extends Seeder
         $leaf = WorkspaceNavigationItem::TYPE_LEAF;
 
         return [
-            ['type' => $leaf, 'label' => 'Workspace home', 'slug' => 'workspace-home', 'icon' => 'home', 'href' => '/workspace-home', 'view_key' => 'workspace_home'],
+            ['type' => $leaf, 'label' => 'Manage Workspace', 'slug' => 'manage-workspace', 'icon' => 'home', 'view_key' => 'workspace_manage'],
             ['type' => $leaf, 'label' => 'Client Hub', 'slug' => 'client-hub', 'is_favorite' => true, 'display_style' => 'table', 'board_type' => WorkspaceNavigationItem::BOARD_TYPE_MAIN],
             ['type' => $group, 'label' => '97th Floor Development', 'slug' => 'development', 'children' => [
                 ['type' => $leaf, 'label' => 'Palomar Roadmap & Software Engineering', 'slug' => 'palomar'],
