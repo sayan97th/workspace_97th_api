@@ -31,6 +31,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property Carbon|null $email_verified_at
  * @property string $password
  * @property string|null $phone
+ * @property string|null $job_title
  * @property string|null $timezone
  * @property string|null $profile_photo_path
  * @property bool $is_active
@@ -49,8 +50,9 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, Team> $teams
  * @property-read Collection<int, Role> $roles
  * @property-read Collection<int, Workspace> $workspaces
+ * @property-read Collection<int, AccountTeam> $accountTeams
  */
-#[Fillable(['first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'timezone', 'profile_photo_path', 'is_active'])]
+#[Fillable(['first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'job_title', 'timezone', 'profile_photo_path', 'is_active'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 #[Appends(['full_name', 'profile_photo_url'])]
 class User extends Authenticatable implements JWTSubject, PasskeyUser
@@ -141,5 +143,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
         return Attribute::make(
             get: fn () => trim("{$this->first_name} {$this->last_name}"),
         );
+    }
+
+    /**
+     * The account-wide {@see AccountTeam}s this user has been assigned to.
+     *
+     * @return BelongsToMany<AccountTeam, $this>
+     */
+    public function accountTeams(): BelongsToMany
+    {
+        return $this->belongsToMany(AccountTeam::class, 'account_team_user')
+            ->withTimestamps();
     }
 }

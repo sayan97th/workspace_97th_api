@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\AccountTeam\AccountTeamController;
+use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
 use App\Http\Controllers\Auth\AuthController;
@@ -180,6 +182,24 @@ Route::middleware(['auth:api', 'active'])->group(function () {
             Route::get('/', [RoleController::class, 'index']);
             Route::post('users/{user}/assign', [RoleController::class, 'assignRole']);
             Route::post('users/{user}/revoke', [RoleController::class, 'revokeRole']);
+        });
+    });
+
+    // Account Teams — company-wide staff groupings (Monday-style "Teams"),
+    // independent of any single workspace. Staff-level roles and above, same
+    // gate as the rest of the account-management surface.
+    Route::middleware('role:super_admin,admin,staff')->group(function () {
+        Route::get('account-team-members', [AccountTeamMemberController::class, 'all']);
+        Route::get('account-team-candidates', [AccountTeamMemberController::class, 'candidates']);
+
+        Route::prefix('account-teams')->group(function () {
+            Route::get('/', [AccountTeamController::class, 'index']);
+            Route::post('/', [AccountTeamController::class, 'store']);
+            Route::get('{team}', [AccountTeamController::class, 'show']);
+            Route::patch('{team}', [AccountTeamController::class, 'update']);
+            Route::delete('{team}', [AccountTeamController::class, 'destroy']);
+            Route::get('{team}/members', [AccountTeamMemberController::class, 'forTeam']);
+            Route::put('{team}/members', [AccountTeamMemberController::class, 'sync']);
         });
     });
 });

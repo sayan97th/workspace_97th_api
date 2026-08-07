@@ -24,5 +24,6 @@ class DatabaseSeeder extends Seeder
         $this->call(ClientHubViewsSeeder::class);
         $this->call(ClientHubContentSeeder::class);
         $this->call(WorkspaceContentCreatorSeeder::class);
+        $this->call(AccountTeamSeeder::class);
     }
 }
