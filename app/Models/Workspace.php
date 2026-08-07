@@ -142,6 +142,16 @@ class Workspace extends Model
     }
 
     /**
+     * Email invitations sent for this workspace (pending, expired or accepted).
+     *
+     * @return HasMany<WorkspaceInvitation, $this>
+     */
+    public function invitations(): HasMany
+    {
+        return $this->hasMany(WorkspaceInvitation::class);
+    }
+
+    /**
      * Get the attributes that should be cast.
      *
      * @return array<string, string>

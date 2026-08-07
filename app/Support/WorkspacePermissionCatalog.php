@@ -24,6 +24,7 @@ class WorkspacePermissionCatalog
         return [
             ['id' => 'owner', 'label' => 'Workspace owner'],
             ['id' => 'member', 'label' => 'Workspace member'],
+            ['id' => 'viewer', 'label' => 'Workspace viewer'],
             ['id' => 'nonmember', 'label' => 'Workspace non-member'],
         ];
     }
@@ -105,6 +106,18 @@ class WorkspacePermissionCatalog
                 'create_main_docs' => true, 'create_private_docs' => true, 'create_shareable_docs' => true,
                 'mute_notifications' => false, 'create_updates_comments' => true, 'edit_own_updates_comments' => true, 'delete_own_updates_comments' => true,
             ],
+            // Read-only by design: every grant defaults to false so a Viewer can
+            // open and browse a workspace's boards/docs but never create, edit,
+            // delete or comment on anything.
+            'viewer' => [
+                'upload_files' => false, 'delete_files' => false, 'ai_automations' => false, 'create_automations' => false, 'create_integrations' => false, 'reorder_content' => false,
+                'create_main_boards' => false, 'create_private_boards' => false, 'create_shareable_boards' => false, 'delete_own_boards' => false, 'create_board_views' => false, 'delete_own_views' => false, 'delete_others_views' => false, 'move_groups' => false,
+                'delete_own_items' => false, 'delete_others_items' => false, 'move_items' => false, 'create_docs_on_items' => false,
+                'create_main_dashboards' => false,
+                'create_main_workflow' => false, 'create_private_workflow' => false,
+                'create_main_docs' => false, 'create_private_docs' => false, 'create_shareable_docs' => false,
+                'mute_notifications' => false, 'create_updates_comments' => false, 'edit_own_updates_comments' => false, 'delete_own_updates_comments' => false,
+            ],
             'nonmember' => [
                 'upload_files' => true, 'delete_files' => false, 'ai_automations' => false, 'create_automations' => false, 'create_integrations' => false, 'reorder_content' => false,
                 'create_main_boards' => false, 'create_private_boards' => false, 'create_shareable_boards' => false, 'delete_own_boards' => false, 'create_board_views' => false, 'delete_own_views' => false, 'delete_others_views' => false, 'move_groups' => false,
@@ -123,6 +136,32 @@ class WorkspacePermissionCatalog
     public static function roleIds(): array
     {
         return array_column(self::roles(), 'id');
+    }
+
+    /**
+     * Roles a workspace owner can actually assign someone via an invitation —
+     * every catalog role except `nonmember`, which describes default access for
+     * people outside the workspace rather than a role a membership row can hold.
+     *
+     * @return array<int, string>
+     */
+    public static function invitableRoleIds(): array
+    {
+        return array_values(array_diff(self::roleIds(), ['nonmember']));
+    }
+
+    /**
+     * Human label for a single role id, e.g. for an invitation email/preview.
+     */
+    public static function labelFor(string $role_id): string
+    {
+        foreach (self::roles() as $role) {
+            if ($role['id'] === $role_id) {
+                return $role['label'];
+            }
+        }
+
+        return ucfirst($role_id);
     }
 
     /**

@@ -8,6 +8,7 @@ use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Auth\TwoFactorController;
+use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardItemCommentController;
@@ -21,6 +22,7 @@ use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceController;
+use App\Http\Controllers\Workspace\WorkspaceInvitationController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Http\Controllers\Workspace\WorkspacePermissionController;
 use Illuminate\Support\Facades\Route;
@@ -32,6 +34,13 @@ Route::prefix('auth')->group(function () {
     Route::post('two-factor-challenge', [AuthController::class, 'twoFactorChallenge']);
     Route::post('forgot-password', [PasswordResetController::class, 'forgotPassword']);
     Route::post('reset-password', [PasswordResetController::class, 'resetPassword']);
+
+    // Public — the invitee may not have an account or session yet.
+    Route::prefix('invitations')->group(function () {
+        Route::get('{invitation}', [AuthWorkspaceInvitationController::class, 'show']);
+        Route::post('{invitation}/accept', [AuthWorkspaceInvitationController::class, 'accept']);
+        Route::post('{invitation}/decline', [AuthWorkspaceInvitationController::class, 'decline']);
+    });
 
     Route::prefix('google')->group(function () {
         Route::get('redirect', [GoogleAuthController::class, 'redirect']);
@@ -67,6 +76,7 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
         Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
+        Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);
         Route::get('{workspace}/content/recent', [ContentController::class, 'recent']);
 
         Route::prefix('{workspace}/navigation')->group(function () {
