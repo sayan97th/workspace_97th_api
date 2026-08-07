@@ -87,6 +87,27 @@ class WorkspaceNavigationItem extends Model
     /** Visible to workspace members and can also be shared with people outside it. */
     public const BOARD_TYPE_SHAREABLE = 'shareable';
 
+    public const ASSET_TYPE_BOARD = 'board';
+
+    public const ASSET_TYPE_DOC = 'doc';
+
+    public const ASSET_TYPE_DASHBOARD = 'dashboard';
+
+    public const ASSET_TYPE_WORKFLOW = 'workflow';
+
+    /**
+     * `view_key`s that map to each of the Content tab's "Asset type" facets. Any
+     * `view_key` not listed here (including `board`/`project`/`portfolio`/null)
+     * falls back to {@see ASSET_TYPE_BOARD} — see {@see assetType()}.
+     *
+     * @var array<string, array<int, string>>
+     */
+    public const ASSET_TYPE_VIEW_KEYS = [
+        self::ASSET_TYPE_DOC => ['doc'],
+        self::ASSET_TYPE_DASHBOARD => ['dashboard'],
+        self::ASSET_TYPE_WORKFLOW => ['workflow'],
+    ];
+
     /**
      * The workspace this item belongs to.
      *
@@ -179,6 +200,21 @@ class WorkspaceNavigationItem extends Model
     public function views(): HasMany
     {
         return $this->hasMany(BoardView::class, 'board_id')->orderBy('position');
+    }
+
+    /**
+     * Coarse asset-type bucket for the Content tab's "Asset type" filter —
+     * board/doc/dashboard/workflow, derived from `view_key`.
+     */
+    public function assetType(): string
+    {
+        foreach (self::ASSET_TYPE_VIEW_KEYS as $type => $view_keys) {
+            if (in_array($this->view_key, $view_keys, true)) {
+                return $type;
+            }
+        }
+
+        return self::ASSET_TYPE_BOARD;
     }
 
     /**

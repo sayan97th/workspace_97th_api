@@ -88,6 +88,7 @@ Route::middleware(['auth:api', 'active'])->group(function () {
     // sidebar renders), as opposed to `boards/{item}/views` which lists a
     // single board's own tabs.
     Route::get('content', [ContentController::class, 'index']);
+    Route::get('content/creators', [ContentController::class, 'creators']);
 
     // The default workspace-role permission matrix — shared config, not a
     // single workspace's own settings. Any authenticated member can view it

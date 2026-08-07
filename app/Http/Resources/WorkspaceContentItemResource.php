@@ -26,6 +26,7 @@ class WorkspaceContentItemResource extends JsonResource
             'id' => $this->id,
             'label' => $this->label,
             'type' => $this->type,
+            'asset_type' => $this->assetType(),
             'display_style' => $this->display_style,
             'board_type' => $this->board_type,
             'icon' => $this->icon,
