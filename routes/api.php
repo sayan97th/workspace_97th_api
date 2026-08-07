@@ -17,7 +17,7 @@ use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Workspace\BoardController;
-use App\Http\Controllers\Workspace\BoardViewController as WorkspaceBoardViewController;
+use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Http\Controllers\Workspace\WorkspacePermissionController;
@@ -65,7 +65,7 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
         Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
-        Route::get('{workspace}/board-views/recent', [WorkspaceBoardViewController::class, 'recent']);
+        Route::get('{workspace}/content/recent', [ContentController::class, 'recent']);
 
         Route::prefix('{workspace}/navigation')->group(function () {
             Route::get('/', [WorkspaceNavigationItemController::class, 'index']);
@@ -83,10 +83,11 @@ Route::middleware(['auth:api', 'active'])->group(function () {
     // workspace it belongs to.
     Route::get('boards/{item}', [BoardController::class, 'show']);
 
-    // Board views, listed across boards — powers Manage Workspace's Content
-    // tab ("every board view I have access to"), as opposed to
-    // `boards/{item}/views` which lists a single board's own tabs.
-    Route::get('board-views', [WorkspaceBoardViewController::class, 'index']);
+    // Content, listed across every board/doc — powers Manage Workspace's
+    // Content tab ("every board/doc I have access to", the same rows the
+    // sidebar renders), as opposed to `boards/{item}/views` which lists a
+    // single board's own tabs.
+    Route::get('content', [ContentController::class, 'index']);
 
     // The default workspace-role permission matrix — shared config, not a
     // single workspace's own settings. Any authenticated member can view it
