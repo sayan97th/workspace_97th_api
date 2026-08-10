@@ -26,25 +26,28 @@ class WorkspaceInvitationController extends Controller
     private const SORTABLE_FIELDS = ['email', 'role', 'status', 'expires_at', 'created_at'];
 
     /**
+     * Global roles that can manage invitations for any workspace, regardless
+     * of their own membership in it — mirrors the `role:super_admin,admin`
+     * gate used elsewhere in `routes/api.php` for account-management surfaces.
+     */
+    private const PRIVILEGED_GLOBAL_ROLES = ['super_admin', 'admin'];
+
+    /**
      * GET /api/workspaces/{workspace}/invitations
      *
      * Every invitation ever sent for the workspace (pending, expired or
      * accepted) — the "Sent invitations" view's table. Server-searched by
      * email, filterable by `status`/`role`, sortable by `sort_field`/
      * `sort_direction`, narrowable to a `date_from`/`date_to` "invited at"
-     * range, and paginated. Restricted to owners, like `store()`.
+     * range, and paginated. Restricted to owners and privileged staff, like
+     * `store()` and `destroy()`.
      */
     public function index(Request $request, Workspace $workspace): JsonResponse
     {
         /** @var User $user */
         $user = $request->user();
 
-        $membership = $this->membershipFor($workspace, $user->id);
-        if (($membership->role ?? null) !== 'owner') {
-            throw ValidationException::withMessages([
-                'workspace' => 'Only the workspace owner can view sent invitations.',
-            ])->status(403);
-        }
+        $this->authorizeInvitationManagement($workspace, $user, 'view sent invitations');
 
         $per_page = max(1, min((int) $request->integer('per_page', self::DEFAULT_PER_PAGE), self::MAX_PER_PAGE));
 
@@ -114,19 +117,14 @@ class WorkspaceInvitationController extends Controller
      *
      * Bulk-invites one or more email addresses to join the workspace with a
      * single role, resending (rather than duplicating) any invitation still
-     * pending for an address. Restricted to owners.
+     * pending for an address. Restricted to owners and privileged staff.
      */
     public function store(StoreWorkspaceInvitationRequest $request, Workspace $workspace): JsonResponse
     {
         /** @var User $user */
         $user = $request->user();
 
-        $membership = $this->membershipFor($workspace, $user->id);
-        if (($membership->role ?? null) !== 'owner') {
-            throw ValidationException::withMessages([
-                'workspace' => 'Only the workspace owner can invite members.',
-            ])->status(403);
-        }
+        $this->authorizeInvitationManagement($workspace, $user, 'invite members');
 
         $validated = $request->validated();
         $role = (string) $validated['role'];
@@ -190,8 +188,9 @@ class WorkspaceInvitationController extends Controller
      * DELETE /api/workspaces/{workspace}/invitations/{invitation}
      *
      * Revokes a still-pending invitation so its link stops working. Restricted
-     * to owners; an already-expired or already-accepted invitation can't be
-     * revoked (nothing left to revoke — decline/expiry already settled it).
+     * to owners and privileged staff; an already-expired or already-accepted
+     * invitation can't be revoked (nothing left to revoke — decline/expiry
+     * already settled it).
      */
     public function destroy(Request $request, Workspace $workspace, WorkspaceInvitation $invitation): JsonResponse
     {
@@ -200,12 +199,7 @@ class WorkspaceInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $membership = $this->membershipFor($workspace, $user->id);
-        if (($membership->role ?? null) !== 'owner') {
-            throw ValidationException::withMessages([
-                'workspace' => 'Only the workspace owner can revoke invitations.',
-            ])->status(403);
-        }
+        $this->authorizeInvitationManagement($workspace, $user, 'revoke invitations');
 
         if (! $invitation->isPending()) {
             throw ValidationException::withMessages([
@@ -229,5 +223,26 @@ class WorkspaceInvitationController extends Controller
             ->where('workspace_id', $workspace->id)
             ->where('user_id', $user_id)
             ->first();
+    }
+
+    /**
+     * Gates every invitation-management endpoint: allowed for the workspace's
+     * own owner, or for a user holding a {@see PRIVILEGED_GLOBAL_ROLES} role
+     * (staff who manage invitations across workspaces they don't belong to).
+     */
+    private function authorizeInvitationManagement(Workspace $workspace, User $user, string $action): void
+    {
+        if ($user->hasRole(self::PRIVILEGED_GLOBAL_ROLES)) {
+            return;
+        }
+
+        $membership = $this->membershipFor($workspace, $user->id);
+        if (($membership->role ?? null) === 'owner') {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'workspace' => "Only the workspace owner or an administrator can {$action}.",
+        ])->status(403);
     }
 }

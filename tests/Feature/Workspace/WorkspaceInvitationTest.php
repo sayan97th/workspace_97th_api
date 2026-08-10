@@ -40,6 +40,25 @@ test('a workspace owner can invite members by email', function () {
     Mail::assertSent(WorkspaceInvitationMail::class);
 });
 
+test('a global admin can invite members to a workspace they do not belong to', function () {
+    Mail::fake();
+
+    $owner = User::factory()->create();
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $response = $this->actingAs($admin, 'api')
+        ->postJson("/api/workspaces/{$workspace->slug}/invitations", [
+            'emails' => ['invited@example.com'],
+            'role' => 'viewer',
+        ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('data.0.email', 'invited@example.com');
+});
+
 test('members cannot invite people to a workspace', function () {
     $owner = User::factory()->create();
     $member = User::factory()->create();
@@ -202,6 +221,37 @@ test('a workspace owner can list every sent invitation, newest first', function 
         ->assertJsonPath('meta.total', 2);
 });
 
+test('a global super admin can list a workspace\'s sent invitations without being a member', function () {
+    $owner = User::factory()->create();
+    $super_admin = User::factory()->create();
+    $super_admin->assignRole('super_admin');
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->actingAs($super_admin, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations");
+
+    $response->assertOk()->assertJsonPath('meta.total', 1);
+});
+
+test('staff without a privileged role cannot list a workspace\'s sent invitations', function () {
+    $owner = User::factory()->create();
+    $staff = User::factory()->create();
+    $staff->assignRole('staff');
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $response = $this->actingAs($staff, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations");
+
+    $response->assertStatus(403);
+});
+
 test('members cannot list a workspace\'s sent invitations', function () {
     $owner = User::factory()->create();
     $member = User::factory()->create();
@@ -328,6 +378,25 @@ test('a workspace owner can revoke a pending invitation', function () {
     ]);
 
     $response = $this->actingAs($owner, 'api')
+        ->deleteJson("/api/workspaces/{$workspace->slug}/invitations/{$invitation->id}");
+
+    $response->assertOk();
+    $this->assertDatabaseMissing('workspace_invitations', ['id' => $invitation->id]);
+});
+
+test('a global admin can revoke a workspace\'s invitation without being a member', function () {
+    $owner = User::factory()->create();
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->actingAs($admin, 'api')
         ->deleteJson("/api/workspaces/{$workspace->slug}/invitations/{$invitation->id}");
 
     $response->assertOk();
