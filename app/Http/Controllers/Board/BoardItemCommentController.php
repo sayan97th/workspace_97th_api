@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Board;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\StoreBoardItemCommentRequest;
 use App\Http\Requests\Board\ToggleBoardItemCommentReactionRequest;
+use App\Http\Requests\Board\UpdateBoardItemCommentRequest;
 use App\Http\Resources\BoardItemCommentResource;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
@@ -82,6 +83,25 @@ class BoardItemCommentController extends Controller
             'message' => 'Comment posted successfully.',
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
         ], 201);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/{board_item}/comments/{comment}
+     *
+     * Edits a comment or reply's body — author-only, same as {@see destroy()}.
+     */
+    public function update(UpdateBoardItemCommentRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+
+        $comment->update(['body' => $request->validated('body'), 'edited_at' => now()]);
+
+        return response()->json([
+            'message' => 'Comment updated successfully.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
     }
 
     /**

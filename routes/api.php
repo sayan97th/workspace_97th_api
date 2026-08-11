@@ -142,6 +142,7 @@ Route::middleware(['auth:api', 'active'])->group(function () {
             Route::prefix('{board_item}/comments')->group(function () {
                 Route::get('/', [BoardItemCommentController::class, 'index']);
                 Route::post('/', [BoardItemCommentController::class, 'store']);
+                Route::patch('{comment}', [BoardItemCommentController::class, 'update']);
                 Route::delete('{comment}', [BoardItemCommentController::class, 'destroy']);
                 Route::post('{comment}/like', [BoardItemCommentController::class, 'toggleLike']);
                 Route::post('{comment}/reactions', [BoardItemCommentController::class, 'toggleReaction']);

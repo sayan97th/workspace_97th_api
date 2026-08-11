@@ -34,6 +34,7 @@ class BoardItemCommentResource extends JsonResource
             ] : null,
             'body' => $this->body,
             'created_at' => $this->created_at,
+            'is_edited' => $this->edited_at !== null,
             'like_count' => $this->likes->count(),
             'liked_by_me' => $this->likes->contains('user_id', $current_user_id),
             'view_count' => $this->views->count(),

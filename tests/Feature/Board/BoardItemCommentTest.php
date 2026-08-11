@@ -167,6 +167,39 @@ test('marking a comment as seen toggles the view count', function () {
     $on->assertOk()->assertJsonPath('comment.seen_by_me', true)->assertJsonPath('comment.view_count', 1);
 });
 
+test('a comment can only be edited by its author', function () {
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $other = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $author->id, 'body' => 'Original update']);
+
+    $this->actingAs($other, 'api')
+        ->patchJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}", ['body' => 'Hacked'])
+        ->assertForbidden();
+
+    $response = $this->actingAs($author, 'api')->patchJson(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}",
+        ['body' => 'Edited update']
+    );
+
+    $response->assertOk()
+        ->assertJsonPath('comment.body', 'Edited update')
+        ->assertJsonPath('comment.is_edited', true);
+
+    $this->assertDatabaseHas('board_item_comments', ['id' => $comment->id, 'body' => 'Edited update']);
+});
+
+test('editing a comment requires a non-empty body', function () {
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $author->id, 'body' => 'Original update']);
+
+    $this->actingAs($author, 'api')
+        ->patchJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}", ['body' => ''])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('body');
+});
+
 test('a comment can only be deleted by its author', function () {
     $item = createCommentTestItem();
     $author = User::factory()->create();

@@ -22,6 +22,7 @@ use Illuminate\Support\Carbon;
  * @property int|null $parent_id
  * @property int|null $user_id
  * @property string $body
+ * @property Carbon|null $edited_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
@@ -35,10 +36,20 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItemCommentMention> $mentions
  * @property-read Collection<int, BoardItemCommentAttachment> $attachments
  */
-#[Fillable(['item_id', 'parent_id', 'user_id', 'body'])]
+#[Fillable(['item_id', 'parent_id', 'user_id', 'body', 'edited_at'])]
 class BoardItemComment extends Model
 {
     use HasFactory, SoftDeletes;
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'edited_at' => 'datetime',
+        ];
+    }
 
     /**
      * The board item this comment belongs to.
