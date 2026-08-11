@@ -12,6 +12,7 @@ use App\Models\BoardItemComment;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class BoardItemCommentController extends Controller
@@ -108,6 +109,8 @@ class BoardItemCommentController extends Controller
      * DELETE /api/boards/{item}/items/{board_item}/comments/{comment}
      *
      * Author-only — this app has no roles/policy layer on Board controllers.
+     * Also removes the comment's attachment files from the `public` disk, so
+     * a deleted comment doesn't leave orphaned uploads behind.
      */
     public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
     {
@@ -115,6 +118,7 @@ class BoardItemCommentController extends Controller
         $this->ensureCommentBelongsToItem($board_item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
+        $this->deleteAttachmentFiles($comment);
         $comment->delete();
 
         return response()->json([
@@ -194,6 +198,20 @@ class BoardItemCommentController extends Controller
             ...$own,
             ...array_map(fn ($relation) => "replies.{$relation}", $own),
         ];
+    }
+
+    /**
+     * Deletes every attachment file the comment has on the `public` disk —
+     * skipping any that are already missing, since a repeat delete or a
+     * manually-cleared disk shouldn't turn this into a hard failure.
+     */
+    private function deleteAttachmentFiles(BoardItemComment $comment): void
+    {
+        foreach ($comment->attachments as $attachment) {
+            if (Storage::disk('public')->exists($attachment->file_path)) {
+                Storage::disk('public')->delete($attachment->file_path);
+            }
+        }
     }
 
     /**

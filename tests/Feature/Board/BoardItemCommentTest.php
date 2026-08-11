@@ -216,3 +216,49 @@ test('a comment can only be deleted by its author', function () {
 
     $this->assertSoftDeleted('board_item_comments', ['id' => $comment->id]);
 });
+
+test('deleting a comment removes its attachment files from storage', function () {
+    Storage::fake('public');
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $author->id, 'body' => 'Original update']);
+    $path = UploadedFile::fake()->create('notes.pdf', 100, 'application/pdf')
+        ->storeAs("board-comment-attachments/{$item->id}", 'notes.pdf', 'public');
+    $comment->attachments()->create([
+        'uploaded_by_id' => $author->id,
+        'file_name' => 'notes.pdf',
+        'file_path' => $path,
+        'extension' => 'pdf',
+        'mime_type' => 'application/pdf',
+        'size_bytes' => 100,
+    ]);
+
+    Storage::disk('public')->assertExists($path);
+
+    $this->actingAs($author, 'api')
+        ->deleteJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}")
+        ->assertOk();
+
+    Storage::disk('public')->assertMissing($path);
+});
+
+test('deleting a comment whose attachment file is already missing does not fail', function () {
+    Storage::fake('public');
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $author->id, 'body' => 'Original update']);
+    $comment->attachments()->create([
+        'uploaded_by_id' => $author->id,
+        'file_name' => 'gone.pdf',
+        'file_path' => "board-comment-attachments/{$item->id}/never-stored.pdf",
+        'extension' => 'pdf',
+        'mime_type' => 'application/pdf',
+        'size_bytes' => 100,
+    ]);
+
+    $this->actingAs($author, 'api')
+        ->deleteJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}")
+        ->assertOk();
+
+    $this->assertSoftDeleted('board_item_comments', ['id' => $comment->id]);
+});
