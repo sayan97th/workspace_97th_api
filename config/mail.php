@@ -49,6 +49,34 @@ return [
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 
+        /*
+         * Mailgun SMTP, used in production.
+         * Set MAIL_MAILER=mailgun in your production .env file.
+         */
+        'mailgun' => [
+            'transport' => 'smtp',
+            'host' => env('MAILGUN_SMTP_HOST', 'smtp.mailgun.org'),
+            'port' => env('MAILGUN_SMTP_PORT', 587),
+            'encryption' => env('MAILGUN_SMTP_ENCRYPTION', 'tls'),
+            'username' => env('MAILGUN_SMTP_USERNAME'),
+            'password' => env('MAILGUN_SMTP_PASSWORD'),
+            'timeout' => null,
+        ],
+
+        /*
+         * Mailtrap SMTP, used for local development and testing.
+         * Set MAIL_MAILER=mailtrap in your local or testing .env file.
+         */
+        'mailtrap' => [
+            'transport' => 'smtp',
+            'host' => env('MAILTRAP_SMTP_HOST', 'sandbox.smtp.mailtrap.io'),
+            'port' => env('MAILTRAP_SMTP_PORT', 2525),
+            'encryption' => env('MAILTRAP_SMTP_ENCRYPTION', 'tls'),
+            'username' => env('MAILTRAP_SMTP_USERNAME'),
+            'password' => env('MAILTRAP_SMTP_PASSWORD'),
+            'timeout' => null,
+        ],
+
         'ses' => [
             'transport' => 'ses',
         ],
