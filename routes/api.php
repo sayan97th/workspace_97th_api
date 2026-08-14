@@ -212,7 +212,9 @@ Route::middleware(['auth:api', 'active'])->group(function () {
             Route::patch('{team}', [AccountTeamController::class, 'update']);
             Route::delete('{team}', [AccountTeamController::class, 'destroy']);
             Route::get('{team}/members', [AccountTeamMemberController::class, 'forTeam']);
+            Route::post('{team}/members', [AccountTeamMemberController::class, 'store']);
             Route::put('{team}/members', [AccountTeamMemberController::class, 'sync']);
+            Route::delete('{team}/members/{user}', [AccountTeamMemberController::class, 'destroy']);
         });
     });
 });

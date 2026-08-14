@@ -185,6 +185,73 @@ test('the candidate directory excludes client accounts', function () {
     expect($ids)->toContain((string) $staff->id);
 });
 
+test('members can be added to a team without disturbing the existing roster', function () {
+    $staff = staffUser();
+    $team = AccountTeam::factory()->create();
+    $existing_member = staffUser();
+    $team->members()->attach($existing_member->id);
+    $new_member = staffUser();
+
+    $this->actingAs($staff, 'api')
+        ->postJson("/api/account-teams/{$team->id}/members", ['member_ids' => [$new_member->id]])
+        ->assertOk()
+        ->assertJsonPath('team.member_count', 2);
+
+    $this->assertDatabaseHas('account_team_user', ['account_team_id' => $team->id, 'user_id' => $existing_member->id]);
+    $this->assertDatabaseHas('account_team_user', ['account_team_id' => $team->id, 'user_id' => $new_member->id]);
+});
+
+test('adding members requires at least one id', function () {
+    $staff = staffUser();
+    $team = AccountTeam::factory()->create();
+
+    $this->actingAs($staff, 'api')
+        ->postJson("/api/account-teams/{$team->id}/members", ['member_ids' => []])
+        ->assertStatus(422);
+});
+
+test('a client cannot be added as a team member via the add endpoint', function () {
+    $staff = staffUser();
+    $team = AccountTeam::factory()->create();
+    $client = User::factory()->create();
+    $client->assignRole('client');
+
+    $this->actingAs($staff, 'api')
+        ->postJson("/api/account-teams/{$team->id}/members", ['member_ids' => [$client->id]])
+        ->assertStatus(422);
+});
+
+test('a single member can be removed from a team', function () {
+    $staff = staffUser();
+    $team = AccountTeam::factory()->create();
+    $member_to_remove = staffUser();
+    $remaining_member = staffUser();
+    $team->members()->attach([$member_to_remove->id, $remaining_member->id]);
+
+    $this->actingAs($staff, 'api')
+        ->deleteJson("/api/account-teams/{$team->id}/members/{$member_to_remove->id}")
+        ->assertOk()
+        ->assertJsonPath('team.member_count', 1);
+
+    $this->assertDatabaseMissing('account_team_user', ['account_team_id' => $team->id, 'user_id' => $member_to_remove->id]);
+    $this->assertDatabaseHas('account_team_user', ['account_team_id' => $team->id, 'user_id' => $remaining_member->id]);
+});
+
+test("the candidate directory can exclude a team's current members", function () {
+    $staff = staffUser();
+    $team = AccountTeam::factory()->create();
+    $existing_member = staffUser();
+    $team->members()->attach($existing_member->id);
+
+    $response = $this->actingAs($staff, 'api')
+        ->getJson("/api/account-team-candidates?exclude_team_id={$team->id}");
+
+    $response->assertOk();
+    $ids = collect($response->json('data'))->pluck('id');
+    expect($ids)->not->toContain((string) $existing_member->id);
+    expect($ids)->toContain((string) $staff->id);
+});
+
 test('the account owner is flagged in the roster', function () {
     $owner = staffUser();
     $owner->assignRole('super_admin');

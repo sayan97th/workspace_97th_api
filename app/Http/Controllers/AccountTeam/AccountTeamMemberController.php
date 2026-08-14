@@ -4,8 +4,10 @@ namespace App\Http\Controllers\AccountTeam;
 
 use App\Concerns\ValidatesStaffMemberIds;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\AccountTeam\AddAccountTeamMembersRequest;
 use App\Http\Requests\AccountTeam\SyncAccountTeamMembersRequest;
 use App\Http\Resources\AccountTeamMemberResource;
+use App\Http\Resources\AccountTeamResource;
 use App\Models\AccountTeam;
 use App\Models\User;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -55,6 +57,41 @@ class AccountTeamMemberController extends Controller
     }
 
     /**
+     * POST /api/account-teams/{team}/members
+     *
+     * Adds members to the team's existing roster without touching anyone
+     * already on it, unlike `sync()`'s full-replace used by the "Edit team"
+     * dialog. Backs the roster panel's "Add members" action.
+     */
+    public function store(AddAccountTeamMembersRequest $request, AccountTeam $team): JsonResponse
+    {
+        $team->members()->syncWithoutDetaching($request->validated('member_ids'));
+        $team->loadCount('members');
+
+        return response()->json([
+            'message' => 'Members added successfully.',
+            'team' => new AccountTeamResource($team),
+        ]);
+    }
+
+    /**
+     * DELETE /api/account-teams/{team}/members/{user}
+     *
+     * Removes a single member from the team's roster. Backs the roster
+     * panel's per-row remove action.
+     */
+    public function destroy(AccountTeam $team, User $user): JsonResponse
+    {
+        $team->members()->detach($user->id);
+        $team->loadCount('members');
+
+        return response()->json([
+            'message' => 'Member removed successfully.',
+            'team' => new AccountTeamResource($team),
+        ]);
+    }
+
+    /**
      * GET /api/account-team-members
      *
      * The account-wide "All members" dedupe: every staff user who belongs to
@@ -81,7 +118,9 @@ class AccountTeamMemberController extends Controller
      * GET /api/account-team-candidates
      *
      * The staff directory a team's member picker searches against — every
-     * staff user regardless of existing team membership.
+     * staff user regardless of existing team membership, unless
+     * `exclude_team_id` is given (the "Add members" panel, which only wants
+     * people who aren't already on that team).
      */
     public function candidates(Request $request): JsonResponse
     {
@@ -89,6 +128,13 @@ class AccountTeamMemberController extends Controller
             ->with('roles:id,name')
             ->orderBy('first_name')
             ->orderBy('last_name');
+
+        if ($exclude_team_id = $request->query('exclude_team_id')) {
+            $query->whereDoesntHave(
+                'accountTeams',
+                fn (Builder $teams) => $teams->where('account_teams.id', $exclude_team_id)
+            );
+        }
 
         $this->applySearch($query, $request->query('search'));
 
