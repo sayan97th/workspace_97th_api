@@ -16,9 +16,13 @@ use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
+use App\Http\Controllers\Profile\LocalePreferenceController;
+use App\Http\Controllers\Profile\NotificationPreferenceController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
+use App\Http\Controllers\Profile\UserSessionController;
+use App\Http\Controllers\Profile\WorkingStatusController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceController;
@@ -47,7 +51,7 @@ Route::prefix('auth')->group(function () {
         Route::get('callback', [GoogleAuthController::class, 'callback']);
     });
 
-    Route::middleware('auth:api')->group(function () {
+    Route::middleware(['auth:api', 'session.active'])->group(function () {
         Route::get('me', [AuthController::class, 'me']);
         Route::post('logout', [AuthController::class, 'logout']);
         Route::post('refresh', [AuthController::class, 'refresh']);
@@ -55,7 +59,7 @@ Route::prefix('auth')->group(function () {
 });
 
 // ─── Authenticated routes ───────────────────────────────────────────────────
-Route::middleware(['auth:api', 'active'])->group(function () {
+Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
 
     // Profile — available to any authenticated user
     Route::prefix('profile')->group(function () {
@@ -65,6 +69,13 @@ Route::middleware(['auth:api', 'active'])->group(function () {
         Route::put('password', [PasswordController::class, 'update']);
         Route::post('photo', [ProfilePhotoController::class, 'store']);
         Route::delete('photo', [ProfilePhotoController::class, 'destroy']);
+
+        Route::patch('working-status', [WorkingStatusController::class, 'update']);
+        Route::patch('notifications', [NotificationPreferenceController::class, 'update']);
+        Route::patch('locale', [LocalePreferenceController::class, 'update']);
+
+        Route::get('sessions', [UserSessionController::class, 'index']);
+        Route::delete('sessions/{session}', [UserSessionController::class, 'destroy']);
     });
 
     // Workspaces — dynamic sidebar + nested navigation tree

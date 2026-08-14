@@ -2,48 +2,35 @@
 
 namespace App\Concerns;
 
+use App\Http\Resources\ProfileResource;
 use App\Models\User;
+use App\Models\UserSession;
+use App\Support\UserAgentParser;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use PHPOpenSourceSaver\JWTAuth\Facades\JWTAuth;
 use PHPOpenSourceSaver\JWTAuth\JWTGuard;
 
 trait IssuesJwtTokens
 {
     /**
-     * @return array<string, mixed>
+     * Builds the auth response and records/rotates the {@see UserSession} row for
+     * Session history. Pass `$previous_jti` on token refresh (the jti of the token
+     * being replaced) so the refresh rotates the existing session row in place
+     * instead of spawning a new "device" every ~55 minutes.
      */
-    protected function formatUser(User $user): array
-    {
-        return [
-            'id' => $user->id,
-            'first_name' => $user->first_name,
-            'last_name' => $user->last_name,
-            'full_name' => $user->full_name,
-            'email' => $user->email,
-            'phone' => $user->phone,
-            'timezone' => $user->timezone,
-            'profile_photo_url' => $user->profile_photo_url,
-            'email_verified_at' => $user->email_verified_at,
-            'is_active' => $user->is_active,
-            'created_at' => $user->created_at,
-            'updated_at' => $user->updated_at,
-            'roles' => $user->roles->map(fn ($role) => [
-                'id' => $role->id,
-                'name' => $role->name,
-                'display_name' => $role->display_name,
-            ])->values(),
-        ];
-    }
-
-    protected function respondWithToken(string $token, User $user): JsonResponse
+    protected function respondWithToken(string $token, User $user, ?string $previous_jti = null): JsonResponse
     {
         $user->load('roles:id,name,display_name');
+
+        $this->recordSession($token, $user, $previous_jti);
 
         return response()->json([
             'access_token' => $token,
             'token_type' => 'bearer',
             'expires_in' => $this->guard()->factory()->getTTL() * 60,
-            'user' => $this->formatUser($user),
+            'user' => new ProfileResource($user),
         ]);
     }
 
@@ -51,5 +38,25 @@ trait IssuesJwtTokens
     {
         /** @var JWTGuard */
         return Auth::guard('api');
+    }
+
+    private function recordSession(string $token, User $user, ?string $previous_jti): void
+    {
+        $payload = JWTAuth::setToken($token)->getPayload();
+        $request = request();
+
+        UserSession::updateOrCreate(
+            ['jti' => $previous_jti ?? $payload->get('jti')],
+            [
+                'user_id' => $user->id,
+                'jti' => $payload->get('jti'),
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'device_label' => UserAgentParser::parse($request->userAgent()),
+                'last_used_at' => now(),
+                'expires_at' => Carbon::createFromTimestamp($payload->get('exp')),
+                'revoked_at' => null,
+            ],
+        );
     }
 }

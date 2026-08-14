@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -35,6 +36,16 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string|null $timezone
  * @property string|null $profile_photo_path
  * @property bool $is_active
+ * @property string|null $working_status
+ * @property string|null $working_status_dates
+ * @property bool $disable_notifications_while_away
+ * @property bool $hide_online_status
+ * @property array<string, bool>|null $notification_preferences
+ * @property bool $desktop_notifications_enabled
+ * @property string $language
+ * @property string $time_format
+ * @property string $date_format
+ * @property string $first_day_of_week
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
@@ -51,8 +62,14 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, Role> $roles
  * @property-read Collection<int, Workspace> $workspaces
  * @property-read Collection<int, AccountTeam> $accountTeams
+ * @property-read Collection<int, UserSession> $sessions
  */
-#[Fillable(['first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'job_title', 'timezone', 'profile_photo_path', 'is_active'])]
+#[Fillable([
+    'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'job_title', 'timezone', 'profile_photo_path', 'is_active',
+    'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
+    'notification_preferences', 'desktop_notifications_enabled',
+    'language', 'time_format', 'date_format', 'first_day_of_week',
+])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 #[Appends(['full_name', 'profile_photo_url'])]
 class User extends Authenticatable implements JWTSubject, PasskeyUser
@@ -84,6 +101,10 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
             'is_active' => 'boolean',
+            'disable_notifications_while_away' => 'boolean',
+            'hide_online_status' => 'boolean',
+            'notification_preferences' => 'array',
+            'desktop_notifications_enabled' => 'boolean',
         ];
     }
 
@@ -154,5 +175,15 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     {
         return $this->belongsToMany(AccountTeam::class, 'account_team_user')
             ->withTimestamps();
+    }
+
+    /**
+     * The devices/browsers this user has signed in from (Session history).
+     *
+     * @return HasMany<UserSession, $this>
+     */
+    public function sessions(): HasMany
+    {
+        return $this->hasMany(UserSession::class);
     }
 }

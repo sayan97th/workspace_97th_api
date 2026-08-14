@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Profile;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Profile\PatchProfileRequest;
 use App\Http\Requests\Profile\UpdateProfileRequest;
-use App\Models\User;
+use App\Http\Resources\ProfileResource;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,7 +16,7 @@ class ProfileController extends Controller
      */
     public function show(Request $request): JsonResponse
     {
-        return response()->json(['data' => $this->formatUser($request->user())]);
+        return response()->json(['data' => new ProfileResource($request->user())]);
     }
 
     /**
@@ -37,7 +37,7 @@ class ProfileController extends Controller
 
         return response()->json([
             'message' => 'Profile updated successfully.',
-            'user' => $this->formatUser($user->fresh()),
+            'user' => new ProfileResource($user->fresh()),
         ]);
     }
 
@@ -51,26 +51,7 @@ class ProfileController extends Controller
 
         return response()->json([
             'message' => 'Profile updated successfully.',
-            'user' => $this->formatUser($user->fresh()),
+            'user' => new ProfileResource($user->fresh()),
         ]);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function formatUser(User $user): array
-    {
-        return [
-            'id' => $user->id,
-            'first_name' => $user->first_name,
-            'last_name' => $user->last_name,
-            'full_name' => $user->full_name,
-            'email' => $user->email,
-            'phone' => $user->phone,
-            'timezone' => $user->timezone,
-            'profile_photo_url' => $user->profile_photo_url,
-            'email_verified_at' => $user->email_verified_at,
-            'created_at' => $user->created_at,
-        ];
     }
 }

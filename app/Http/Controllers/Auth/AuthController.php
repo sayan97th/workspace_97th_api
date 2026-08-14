@@ -8,7 +8,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Requests\Auth\TwoFactorChallengeRequest;
+use App\Http\Resources\ProfileResource;
 use App\Models\User;
+use App\Models\UserSession;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -159,7 +161,7 @@ class AuthController extends Controller
         $user->load('roles:id,name,display_name');
 
         return response()->json([
-            'user' => $this->formatUser($user),
+            'user' => new ProfileResource($user),
             'permissions' => $user->getAllPermissions(),
         ]);
     }
@@ -169,6 +171,13 @@ class AuthController extends Controller
      */
     public function logout(): JsonResponse
     {
+        try {
+            $current_jti = $this->guard()->payload()->get('jti');
+            UserSession::where('jti', $current_jti)->update(['revoked_at' => now()]);
+        } catch (\Throwable) {
+            // No parseable token on the request (e.g. `actingAs()` in tests) — nothing to revoke.
+        }
+
         $this->guard()->logout();
 
         return response()->json([
@@ -181,12 +190,14 @@ class AuthController extends Controller
      */
     public function refresh(): JsonResponse
     {
+        $previous_jti = $this->guard()->payload()->get('jti');
+
         $token = $this->guard()->refresh();
 
         /** @var User $user */
         $user = $this->guard()->user();
 
-        return $this->respondWithToken($token, $user);
+        return $this->respondWithToken($token, $user, $previous_jti);
     }
 
     /**
