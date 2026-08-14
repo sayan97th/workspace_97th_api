@@ -45,6 +45,7 @@ class WorkspaceInvitationController extends Controller
                 'color' => $invitation->workspace->color,
             ],
             'inviter_name' => $invitation->inviter->full_name,
+            'message' => $invitation->message,
             'status' => $invitation->isAccepted() ? 'accepted' : ($invitation->isExpired() ? 'expired' : 'pending'),
             'account_exists' => User::where('email', $invitation->email)->exists(),
         ]);

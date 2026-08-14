@@ -112,6 +112,44 @@ test('an invalid role is rejected', function () {
     $response->assertJsonValidationErrors('role');
 });
 
+test('an invitation preview includes the inviter\'s custom message', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'invited@example.com',
+        'invited_by' => $owner->id,
+        'message' => 'Welcome aboard!',
+    ]);
+
+    $this->getJson("/api/auth/invitations/{$invitation->code}")
+        ->assertOk()
+        ->assertJsonPath('message', 'Welcome aboard!');
+});
+
+test('the workspace invitation email renders the workspace branding, message, and accept link', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create(['name' => 'Acme Studio', 'mono' => 'AS', 'color' => '#e53e2e']);
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'email' => 'invited@example.com',
+        'role' => 'viewer',
+        'invited_by' => $owner->id,
+        'message' => 'Welcome aboard!',
+    ]);
+
+    (new WorkspaceInvitationMail($invitation))
+        ->assertHasSubject("You've been invited to join Acme Studio")
+        ->assertSeeInHtml('Acme Studio')
+        ->assertSeeInHtml('AS')
+        ->assertSeeInHtml('Welcome aboard!')
+        ->assertSeeInHtml("/invitations/{$invitation->code}", false);
+});
+
 test('an unknown email accepting an invitation creates an account and joins with the invited role', function () {
     $owner = User::factory()->create();
     $workspace = Workspace::factory()->create();
