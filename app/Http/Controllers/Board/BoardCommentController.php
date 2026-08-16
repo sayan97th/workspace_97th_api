@@ -8,9 +8,13 @@ use App\Http\Requests\Board\ToggleBoardCommentReactionRequest;
 use App\Http\Requests\Board\UpdateBoardCommentRequest;
 use App\Http\Resources\BoardCommentResource;
 use App\Models\BoardComment;
+use App\Models\Notification;
+use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -22,6 +26,8 @@ use Illuminate\Support\Str;
  */
 class BoardCommentController extends Controller
 {
+    public function __construct(private readonly NotificationService $notification_service) {}
+
     /**
      * GET /api/boards/{item}/comments
      *
@@ -73,6 +79,10 @@ class BoardCommentController extends Controller
             $comment->mentions()->createMany(
                 $mentioned_user_ids->map(fn ($user_id) => ['user_id' => $user_id])->all()
             );
+        }
+
+        if ($actor = $request->user()) {
+            $this->notifyCommentCreated($item, $comment, $mentioned_user_ids, $actor);
         }
 
         foreach ($request->file('attachments', []) as $file) {
@@ -167,7 +177,24 @@ class BoardCommentController extends Controller
         $emoji = $request->validated('emoji');
 
         $reaction = $comment->reactions()->where(['user_id' => $user_id, 'emoji' => $emoji])->first();
-        $reaction ? $reaction->delete() : $comment->reactions()->create(['user_id' => $user_id, 'emoji' => $emoji]);
+
+        if ($reaction) {
+            $reaction->delete();
+        } else {
+            $comment->reactions()->create(['user_id' => $user_id, 'emoji' => $emoji]);
+
+            if (($actor = $request->user()) && $comment->author) {
+                $this->notification_service->notify(
+                    recipient: $comment->author,
+                    actor: $actor,
+                    type: Notification::TYPE_REACTIONS,
+                    board: $item,
+                    action_label: 'Reacted to your update',
+                    action_target: sprintf('on the Board "%s"', $item->label),
+                    link: "/boards/{$item->id}",
+                );
+            }
+        }
 
         return response()->json([
             'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
@@ -190,6 +217,44 @@ class BoardCommentController extends Controller
         return response()->json([
             'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
         ]);
+    }
+
+    /**
+     * Notifies the parent comment's author (on a reply) and every mentioned
+     * user (on a mention), skipping self-notifications, via
+     * {@see NotificationService}.
+     *
+     * @param  Collection<int, int>  $mentioned_user_ids
+     */
+    private function notifyCommentCreated(WorkspaceNavigationItem $item, BoardComment $comment, Collection $mentioned_user_ids, User $actor): void
+    {
+        $link = "/boards/{$item->id}";
+
+        if ($comment->parent_id && $comment->parent?->author) {
+            $this->notification_service->notify(
+                recipient: $comment->parent->author,
+                actor: $actor,
+                type: Notification::TYPE_REPLIED_UPDATE,
+                board: $item,
+                action_label: 'Replied to your update',
+                action_target: sprintf('on the Board "%s"', $item->label),
+                link: $link,
+            );
+        }
+
+        foreach ($mentioned_user_ids as $mentioned_user_id) {
+            if ($mentioned_user = User::find($mentioned_user_id)) {
+                $this->notification_service->notify(
+                    recipient: $mentioned_user,
+                    actor: $actor,
+                    type: Notification::TYPE_MENTIONED,
+                    board: $item,
+                    action_label: 'Mentioned you',
+                    action_target: sprintf('in a comment on the Board "%s"', $item->label),
+                    link: $link,
+                );
+            }
+        }
     }
 
     /**

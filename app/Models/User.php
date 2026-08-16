@@ -190,6 +190,20 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
+     * The in-app notifications delivered to this user.
+     *
+     * Overrides {@see Notifiable}'s polymorphic `notifiable_type`/`notifiable_id`
+     * relation, this app never sends through Laravel's built-in notification
+     * channels, it has its own `notifications` table keyed by a plain `user_id`.
+     *
+     * @return HasMany<Notification, $this>
+     */
+    public function notifications(): HasMany
+    {
+        return $this->hasMany(Notification::class);
+    }
+
+    /**
      * Send the password reset notification.
      *
      * Overrides the framework default (which fires the stock

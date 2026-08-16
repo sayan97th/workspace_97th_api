@@ -9,14 +9,20 @@ use App\Http\Requests\Board\UpdateBoardItemCommentRequest;
 use App\Http\Resources\BoardItemCommentResource;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
+use App\Models\Notification;
+use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class BoardItemCommentController extends Controller
 {
+    public function __construct(private readonly NotificationService $notification_service) {}
+
     /**
      * GET /api/boards/{item}/items/{board_item}/comments
      *
@@ -60,6 +66,10 @@ class BoardItemCommentController extends Controller
             $comment->mentions()->createMany(
                 $mentioned_user_ids->map(fn ($user_id) => ['user_id' => $user_id])->all()
             );
+        }
+
+        if ($actor = $request->user()) {
+            $this->notifyCommentCreated($item, $board_item, $comment, $mentioned_user_ids, $actor);
         }
 
         foreach ($request->file('attachments', []) as $file) {
@@ -158,7 +168,24 @@ class BoardItemCommentController extends Controller
         $emoji = $request->validated('emoji');
 
         $reaction = $comment->reactions()->where(['user_id' => $user_id, 'emoji' => $emoji])->first();
-        $reaction ? $reaction->delete() : $comment->reactions()->create(['user_id' => $user_id, 'emoji' => $emoji]);
+
+        if ($reaction) {
+            $reaction->delete();
+        } else {
+            $comment->reactions()->create(['user_id' => $user_id, 'emoji' => $emoji]);
+
+            if (($actor = $request->user()) && $comment->author) {
+                $this->notification_service->notify(
+                    recipient: $comment->author,
+                    actor: $actor,
+                    type: Notification::TYPE_REACTIONS,
+                    board: $item,
+                    action_label: 'Reacted to your comment',
+                    action_target: sprintf('on "%s"', $board_item->name),
+                    link: "/boards/{$item->id}/pulses/{$board_item->id}",
+                );
+            }
+        }
 
         return response()->json([
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
@@ -182,6 +209,44 @@ class BoardItemCommentController extends Controller
         return response()->json([
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
         ]);
+    }
+
+    /**
+     * Notifies the parent comment's author (on a reply) and every mentioned
+     * user (on a mention), skipping self-notifications, via
+     * {@see NotificationService}.
+     *
+     * @param  Collection<int, int>  $mentioned_user_ids
+     */
+    private function notifyCommentCreated(WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment, Collection $mentioned_user_ids, User $actor): void
+    {
+        $link = "/boards/{$item->id}/pulses/{$board_item->id}";
+
+        if ($comment->parent_id && $comment->parent?->author) {
+            $this->notification_service->notify(
+                recipient: $comment->parent->author,
+                actor: $actor,
+                type: Notification::TYPE_REPLIED_THREAD,
+                board: $item,
+                action_label: 'Replied to your comment',
+                action_target: sprintf('on "%s"', $board_item->name),
+                link: $link,
+            );
+        }
+
+        foreach ($mentioned_user_ids as $mentioned_user_id) {
+            if ($mentioned_user = User::find($mentioned_user_id)) {
+                $this->notification_service->notify(
+                    recipient: $mentioned_user,
+                    actor: $actor,
+                    type: Notification::TYPE_MENTIONED,
+                    board: $item,
+                    action_label: 'Mentioned you',
+                    action_target: sprintf('in a comment on "%s"', $board_item->name),
+                    link: $link,
+                );
+            }
+        }
     }
 
     /**

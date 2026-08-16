@@ -10,9 +10,13 @@ use App\Http\Resources\BoardItemDetailResource;
 use App\Http\Resources\BoardItemResource;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
+use App\Models\BoardItemValue;
+use App\Models\Notification;
+use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardViewResolver;
+use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -21,6 +25,7 @@ class BoardItemController extends Controller
     public function __construct(
         private readonly BoardItemFilterService $filter_service,
         private readonly BoardViewResolver $view_resolver,
+        private readonly NotificationService $notification_service,
     ) {}
 
     /**
@@ -83,7 +88,7 @@ class BoardItemController extends Controller
         ]);
 
         if (! empty($validated['values'])) {
-            $this->syncValues($item, $board_item, $validated['values']);
+            $this->syncValues($item, $board_item, $validated['values'], $request->user());
         }
 
         return response()->json([
@@ -118,7 +123,7 @@ class BoardItemController extends Controller
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
 
-        $this->syncValues($item, $board_item, $request->validated()['values']);
+        $this->syncValues($item, $board_item, $request->validated()['values'], $request->user());
 
         return response()->json([
             'message' => 'Item updated successfully.',
@@ -141,26 +146,62 @@ class BoardItemController extends Controller
     }
 
     /**
-     * Upserts one {@link \App\Models\BoardItemValue} per entry in `$values`,
-     * silently skipping any column id that doesn't belong to this item's own
-     * tab (columns are per-tab, so a column from a different tab of the same
+     * Upserts one {@link BoardItemValue} per entry in `$values`, silently
+     * skipping any column id that doesn't belong to this item's own tab
+     * (columns are per-tab, so a column from a different tab of the same
      * board is rejected too, not just columns from other boards).
+     *
+     * When `$actor` is given, newly-added people on a people-type column
+     * trigger an "Assigned you" notification, see {@see notifyNewlyAssignedPeople()}.
      *
      * @param  array<string, mixed>  $values
      */
-    private function syncValues(WorkspaceNavigationItem $item, BoardItem $board_item, array $values): void
+    private function syncValues(WorkspaceNavigationItem $item, BoardItem $board_item, array $values, ?User $actor = null): void
     {
-        $valid_column_ids = BoardColumn::where('board_view_id', $board_item->group->board_view_id)->pluck('id')->all();
+        $valid_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
+            ->whereIn('id', array_map('intval', array_keys($values)))
+            ->get(['id', 'type'])
+            ->keyBy('id');
 
         foreach ($values as $column_id => $value) {
-            if (! in_array((int) $column_id, $valid_column_ids, true)) {
+            $column = $valid_columns->get((int) $column_id);
+            if (! $column) {
                 continue;
             }
 
+            if ($actor && $column->type === BoardColumn::TYPE_PEOPLE) {
+                $this->notifyNewlyAssignedPeople($item, $board_item, $column, $value, $actor);
+            }
+
             $board_item->values()->updateOrCreate(
-                ['column_id' => (int) $column_id],
+                ['column_id' => $column->id],
                 ['value' => $value]
             );
+        }
+    }
+
+    /**
+     * Notifies every person newly added to a people-type column value
+     * (comparing against the currently-stored value), skipping self-assignment.
+     */
+    private function notifyNewlyAssignedPeople(WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, mixed $new_value, User $actor): void
+    {
+        $existing_value = BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->first();
+        $existing_ids = is_array($existing_value?->value) ? $existing_value->value : [];
+        $new_ids = is_array($new_value) ? $new_value : [];
+
+        foreach (array_diff($new_ids, $existing_ids) as $newly_added_id) {
+            if ($person = User::find($newly_added_id)) {
+                $this->notification_service->notify(
+                    recipient: $person,
+                    actor: $actor,
+                    type: Notification::TYPE_ASSIGNED,
+                    board: $item,
+                    action_label: 'Assigned you',
+                    action_target: sprintf('to "%s" on the Board "%s"', $board_item->name, $item->label),
+                    link: "/boards/{$item->id}/pulses/{$board_item->id}",
+                );
+            }
         }
     }
 

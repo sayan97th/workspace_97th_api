@@ -20,6 +20,8 @@ use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
+use App\Http\Controllers\BroadcastAuthController;
+use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
 use App\Http\Controllers\Profile\PasswordController;
@@ -80,6 +82,17 @@ Route::prefix('auth')->group(function () {
 
 // ─── Authenticated routes ───────────────────────────────────────────────────
 Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
+
+    // Broadcasting auth (JWT-based) — used by the frontend's Echo client to
+    // subscribe to private channels, see routes/channels.php.
+    Route::post('broadcasting/auth', [BroadcastAuthController::class, 'authenticate']);
+
+    // Notifications — real-time (Reverb) + REST-readable notification feed.
+    Route::prefix('notifications')->group(function () {
+        Route::get('/', [NotificationController::class, 'index']);
+        Route::get('unread-count', [NotificationController::class, 'unreadCount']);
+        Route::patch('{notification}/read', [NotificationController::class, 'markAsRead']);
+    });
 
     // Profile — available to any authenticated user
     Route::prefix('profile')->group(function () {
