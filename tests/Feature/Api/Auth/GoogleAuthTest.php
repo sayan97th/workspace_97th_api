@@ -1,7 +1,10 @@
 <?php
 
+use App\Jobs\SendEmailJob;
+use App\Mail\WelcomeMail;
 use App\Models\User;
 use Database\Seeders\RolePermissionSeeder;
+use Illuminate\Support\Facades\Bus;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\User as SocialiteUser;
 
@@ -16,6 +19,8 @@ test('redirect sends the user to google', function () {
 });
 
 test('callback creates a new user with a personal team and the client role', function () {
+    Bus::fake();
+
     Socialite::fake('google', SocialiteUser::fake([
         'id' => 'google-123',
         'name' => 'Jane Doe',
@@ -33,6 +38,9 @@ test('callback creates a new user with a personal team and the client role', fun
     expect($user->google_id)->toBe('google-123');
     expect($user->hasRole('client'))->toBeTrue();
     expect($user->currentTeam)->not->toBeNull();
+
+    Bus::assertDispatched(SendEmailJob::class, fn (SendEmailJob $job) => $job->recipientEmail === 'jane@example.com'
+        && $job->mailable instanceof WelcomeMail);
 });
 
 test('callback backfills google_id for an existing user matched by email', function () {

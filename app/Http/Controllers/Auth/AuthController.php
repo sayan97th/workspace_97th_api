@@ -9,6 +9,9 @@ use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Requests\Auth\TwoFactorChallengeRequest;
 use App\Http\Resources\ProfileResource;
+use App\Jobs\SendEmailJob;
+use App\Mail\TwoFactorCodeMail;
+use App\Mail\WelcomeMail;
 use App\Models\User;
 use App\Models\UserSession;
 use App\Models\WorkspaceInvitation;
@@ -22,6 +25,12 @@ use Laravel\Fortify\Fortify;
 class AuthController extends Controller
 {
     use IssuesJwtTokens;
+
+    /**
+     * How long an emailed two factor code, and the matching pending login
+     * token, stay valid before the user has to sign in again.
+     */
+    private const TWO_FACTOR_EMAIL_CODE_TTL_MINUTES = 10;
 
     public function __construct(private CreateTeam $createTeam)
     {
@@ -48,6 +57,8 @@ class AuthController extends Controller
             $user->assignRole('client');
 
             $this->joinPendingWorkspaceInvitations($user);
+
+            SendEmailJob::dispatch(new WelcomeMail($user), $user->email);
 
             return $user;
         });
@@ -114,8 +125,23 @@ class AuthController extends Controller
             $this->guard()->logout();
 
             $two_factor_token = Str::uuid()->toString();
+            $email_code = (string) random_int(100000, 999999);
 
-            Cache::put("two_factor_pending:{$two_factor_token}", $user->id, now()->addMinutes(10));
+            Cache::put(
+                "two_factor_pending:{$two_factor_token}",
+                $user->id,
+                now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
+            );
+            Cache::put(
+                "two_factor_email_code:{$two_factor_token}",
+                $email_code,
+                now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
+            );
+
+            SendEmailJob::dispatch(
+                new TwoFactorCodeMail($user, $email_code, self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
+                $user->email,
+            );
 
             return response()->json([
                 'requires_two_factor' => true,
@@ -159,9 +185,11 @@ class AuthController extends Controller
             ], 403);
         }
 
+        $code = $request->string('code')->toString();
+
         if ($recovery_code = $this->validRecoveryCode($user, $request->string('recovery_code')->toString())) {
             $user->replaceRecoveryCode($recovery_code);
-        } elseif (! $this->hasValidCode($user, $request->string('code')->toString())) {
+        } elseif (! $this->hasValidCode($user, $code) && ! $this->hasValidEmailCode($request->two_factor_token, $code)) {
             return response()->json([
                 'message' => 'The provided two factor authentication code was invalid.',
                 'errors' => [
@@ -171,6 +199,7 @@ class AuthController extends Controller
         }
 
         Cache::forget($cache_key);
+        Cache::forget("two_factor_email_code:{$request->two_factor_token}");
 
         $token = $this->guard()->login($user);
 
@@ -254,5 +283,21 @@ class AuthController extends Controller
             Fortify::currentEncrypter()->decrypt($user->two_factor_secret),
             $code,
         );
+    }
+
+    /**
+     * Determine if the given code matches the one time code emailed to the
+     * user for this pending login, as an alternative to their authenticator
+     * app.
+     */
+    private function hasValidEmailCode(string $two_factor_token, string $code): bool
+    {
+        if ($code === '') {
+            return false;
+        }
+
+        $cached_code = Cache::get("two_factor_email_code:{$two_factor_token}");
+
+        return is_string($cached_code) && hash_equals($cached_code, $code);
     }
 }

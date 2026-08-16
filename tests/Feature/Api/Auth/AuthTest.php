@@ -1,15 +1,20 @@
 <?php
 
+use App\Jobs\SendEmailJob;
+use App\Mail\WelcomeMail;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceInvitation;
 use Database\Seeders\RolePermissionSeeder;
+use Illuminate\Support\Facades\Bus;
 
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
 });
 
 test('a user can register and receives a token with the client role', function () {
+    Bus::fake();
+
     $response = $this->postJson('/api/auth/register', [
         'first_name' => 'Jane',
         'last_name' => 'Doe',
@@ -25,6 +30,10 @@ test('a user can register and receives a token with the client role', function (
 
     $user = User::where('email', 'jane@example.com')->firstOrFail();
     expect($user->hasRole('client'))->toBeTrue();
+
+    Bus::assertDispatched(SendEmailJob::class, fn (SendEmailJob $job) => $job->recipientEmail === 'jane@example.com'
+        && $job->mailable instanceof WelcomeMail
+        && $job->mailable->user->is($user));
 });
 
 test('registering with a pending workspace invitation auto-joins the workspace', function () {

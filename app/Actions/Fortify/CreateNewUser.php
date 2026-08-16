@@ -5,6 +5,8 @@ namespace App\Actions\Fortify;
 use App\Actions\Teams\CreateTeam;
 use App\Concerns\PasswordValidationRules;
 use App\Concerns\ProfileValidationRules;
+use App\Jobs\SendEmailJob;
+use App\Mail\WelcomeMail;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -40,6 +42,8 @@ class CreateNewUser implements CreatesNewUsers
             ]);
 
             $this->createTeam->handle($user, $user->full_name."'s Team", isPersonal: true);
+
+            SendEmailJob::dispatch(new WelcomeMail($user), $user->email);
 
             return $user;
         });

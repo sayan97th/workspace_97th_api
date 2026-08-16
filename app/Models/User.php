@@ -5,6 +5,8 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Concerns\HasRoles;
 use App\Concerns\HasTeams;
+use App\Jobs\SendEmailJob;
+use App\Mail\PasswordResetMail;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Appends;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -185,5 +187,29 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     public function sessions(): HasMany
     {
         return $this->hasMany(UserSession::class);
+    }
+
+    /**
+     * Send the password reset notification.
+     *
+     * Overrides the framework default (which fires the stock
+     * `Illuminate\Auth\Notifications\ResetPassword` notification inline on
+     * the request thread) so the email instead goes through the app's own
+     * queued, rate limited `emails` pipeline, matching every other
+     * transactional email in the app.
+     */
+    public function sendPasswordResetNotification(#[\SensitiveParameter] $token): void
+    {
+        $frontend_url = rtrim((string) config('app.frontend_url'), '/');
+        $expires_minutes = (int) config('auth.passwords.'.config('auth.defaults.passwords').'.expire', 60);
+
+        $reset_url = "{$frontend_url}/reset-password/{$token}?".http_build_query([
+            'email' => $this->getEmailForPasswordReset(),
+        ]);
+
+        SendEmailJob::dispatch(
+            new PasswordResetMail($this, $token, $reset_url, $expires_minutes),
+            $this->email,
+        );
     }
 }

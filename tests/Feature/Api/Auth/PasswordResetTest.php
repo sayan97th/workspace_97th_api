@@ -1,13 +1,14 @@
 <?php
 
+use App\Jobs\SendEmailJob;
+use App\Mail\PasswordResetMail;
 use App\Models\User;
-use Illuminate\Auth\Notifications\ResetPassword;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Password;
 
-test('forgot password sends a reset link for a known email', function () {
-    Notification::fake();
+test('forgot password queues a reset email for a known email', function () {
+    Bus::fake();
 
     $user = User::factory()->create();
 
@@ -15,47 +16,53 @@ test('forgot password sends a reset link for a known email', function () {
         ->assertOk()
         ->assertJsonPath('message', 'We have emailed your password reset link.');
 
-    Notification::assertSentTo($user, ResetPassword::class);
+    Bus::assertDispatched(SendEmailJob::class, fn (SendEmailJob $job) => $job->recipientEmail === $user->email
+        && $job->mailable instanceof PasswordResetMail
+        && $job->mailable->user->is($user));
 });
 
 test('the password reset email links to the frontend, not the Inertia app', function () {
-    Notification::fake();
+    Bus::fake();
 
     $user = User::factory()->create();
 
     $this->postJson('/api/auth/forgot-password', ['email' => $user->email]);
 
-    Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use ($user) {
-        $action_url = $notification->toMail($user)->actionUrl;
+    Bus::assertDispatched(SendEmailJob::class, function (SendEmailJob $job) use ($user) {
+        /** @var PasswordResetMail $mailable */
+        $mailable = $job->mailable;
 
-        expect($action_url)
-            ->toStartWith(rtrim(config('app.frontend_url'), '/').'/reset-password/'.$notification->token.'?')
-            ->and($action_url)->toContain('email='.urlencode($user->email));
+        expect($mailable->resetUrl)
+            ->toStartWith(rtrim(config('app.frontend_url'), '/').'/reset-password/'.$mailable->token.'?')
+            ->and($mailable->resetUrl)->toContain('email='.urlencode($user->email));
 
         return true;
     });
 });
 
 test('forgot password does not reveal whether an email exists', function () {
-    Notification::fake();
+    Bus::fake();
 
     $this->postJson('/api/auth/forgot-password', ['email' => 'unknown@example.com'])
         ->assertOk()
         ->assertJsonPath('message', 'We have emailed your password reset link.');
 
-    Notification::assertNothingSent();
+    Bus::assertNotDispatched(SendEmailJob::class);
 });
 
 test('a user can reset their password with a valid token', function () {
-    Notification::fake();
+    Bus::fake();
 
     $user = User::factory()->create();
 
     $this->postJson('/api/auth/forgot-password', ['email' => $user->email]);
 
-    Notification::assertSentTo($user, ResetPassword::class, function (ResetPassword $notification) use ($user) {
+    Bus::assertDispatched(SendEmailJob::class, function (SendEmailJob $job) use ($user) {
+        /** @var PasswordResetMail $mailable */
+        $mailable = $job->mailable;
+
         $this->postJson('/api/auth/reset-password', [
-            'token' => $notification->token,
+            'token' => $mailable->token,
             'email' => $user->email,
             'password' => 'new-password123',
             'password_confirmation' => 'new-password123',

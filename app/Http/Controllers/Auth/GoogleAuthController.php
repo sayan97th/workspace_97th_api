@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Auth;
 use App\Actions\Teams\CreateTeam;
 use App\Concerns\IssuesJwtTokens;
 use App\Http\Controllers\Controller;
+use App\Jobs\SendEmailJob;
+use App\Mail\WelcomeMail;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
@@ -67,6 +69,8 @@ class GoogleAuthController extends Controller
                 $this->createTeam->handle($user, $user->full_name."'s Team", isPersonal: true);
 
                 $user->assignRole('client');
+
+                SendEmailJob::dispatch(new WelcomeMail($user), $user->email);
 
                 return $user;
             });

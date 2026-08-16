@@ -3,7 +3,6 @@
 namespace App\Providers;
 
 use Carbon\CarbonImmutable;
-use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -28,7 +27,6 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configureDefaults();
         $this->configureQueueRateLimiting();
-        $this->configurePasswordResetUrl();
     }
 
     /**
@@ -61,20 +59,5 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('emails', fn () => Limit::perMinute(
             (int) config('queue.email_rate_limit'),
         ));
-    }
-
-    /**
-     * Point password reset emails at the JWT-authenticated frontend instead
-     * of Fortify's Inertia-rendered `password.reset` route.
-     */
-    protected function configurePasswordResetUrl(): void
-    {
-        ResetPassword::createUrlUsing(function ($notifiable, string $token): string {
-            $frontend_url = rtrim(config('app.frontend_url'), '/');
-
-            return "{$frontend_url}/reset-password/{$token}?".http_build_query([
-                'email' => $notifiable->getEmailForPasswordReset(),
-            ]);
-        });
     }
 }

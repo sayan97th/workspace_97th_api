@@ -1,6 +1,9 @@
 <?php
 
+use App\Jobs\SendEmailJob;
+use App\Mail\TwoFactorCodeMail;
 use App\Models\User;
+use Illuminate\Support\Facades\Bus;
 use Laravel\Fortify\Contracts\TwoFactorAuthenticationProvider;
 use Laravel\Fortify\Fortify;
 use PragmaRX\Google2FA\Google2FA;
@@ -82,6 +85,70 @@ test('login for a two factor enabled user requires a challenge instead of return
         ->assertJsonPath('requires_two_factor', true)
         ->assertJsonStructure(['two_factor_token'])
         ->assertJsonMissing(['access_token']);
+});
+
+test('login for a two factor enabled user emails a one time code', function () {
+    Bus::fake();
+
+    $user = User::factory()->withTwoFactor()->create(['password' => 'password123']);
+
+    $this->postJson('/api/auth/login', [
+        'email' => $user->email,
+        'password' => 'password123',
+    ])->assertOk();
+
+    Bus::assertDispatched(SendEmailJob::class, fn (SendEmailJob $job) => $job->recipientEmail === $user->email
+        && $job->mailable instanceof TwoFactorCodeMail
+        && $job->mailable->user->is($user));
+});
+
+test('two factor challenge issues a token for a valid emailed code', function () {
+    Bus::fake();
+
+    $secret = app(TwoFactorAuthenticationProvider::class)->generateSecretKey();
+    $user = User::factory()->create([
+        'password' => 'password123',
+        'two_factor_secret' => Fortify::currentEncrypter()->encrypt($secret),
+        'two_factor_recovery_codes' => Fortify::currentEncrypter()->encrypt(json_encode(['recovery-code-1'])),
+        'two_factor_confirmed_at' => now(),
+    ]);
+
+    $login = $this->postJson('/api/auth/login', [
+        'email' => $user->email,
+        'password' => 'password123',
+    ])->assertOk();
+
+    $email_code = null;
+    Bus::assertDispatched(SendEmailJob::class, function (SendEmailJob $job) use (&$email_code) {
+        $email_code = $job->mailable->code;
+
+        return true;
+    });
+
+    $this->postJson('/api/auth/two-factor-challenge', [
+        'two_factor_token' => $login->json('two_factor_token'),
+        'code' => $email_code,
+    ])->assertOk()->assertJsonStructure(['access_token']);
+});
+
+test('two factor challenge rejects an invalid emailed code', function () {
+    $secret = app(TwoFactorAuthenticationProvider::class)->generateSecretKey();
+    $user = User::factory()->create([
+        'password' => 'password123',
+        'two_factor_secret' => Fortify::currentEncrypter()->encrypt($secret),
+        'two_factor_recovery_codes' => Fortify::currentEncrypter()->encrypt(json_encode(['recovery-code-1'])),
+        'two_factor_confirmed_at' => now(),
+    ]);
+
+    $login = $this->postJson('/api/auth/login', [
+        'email' => $user->email,
+        'password' => 'password123',
+    ])->assertOk();
+
+    $this->postJson('/api/auth/two-factor-challenge', [
+        'two_factor_token' => $login->json('two_factor_token'),
+        'code' => '000000',
+    ])->assertStatus(422)->assertJsonValidationErrors('code');
 });
 
 test('two factor challenge issues a token for a valid code', function () {
