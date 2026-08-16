@@ -5,6 +5,7 @@ use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\Auth\BoardInvitationController as AuthBoardInvitationController;
 use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Auth\TwoFactorController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvi
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardGroupController;
+use App\Http\Controllers\Board\BoardInvitationController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardViewController;
@@ -53,6 +55,14 @@ Route::prefix('auth')->group(function () {
     Route::prefix('workspaces/join')->group(function () {
         Route::get('{invite_code}', [AuthWorkspaceInviteLinkController::class, 'show']);
         Route::post('{invite_code}', [AuthWorkspaceInviteLinkController::class, 'accept']);
+    });
+
+    // Public — the "Invite to this board" emailed link, granting view access
+    // to a single board rather than a whole workspace.
+    Route::prefix('board-invitations')->group(function () {
+        Route::get('{invitation}', [AuthBoardInvitationController::class, 'show']);
+        Route::post('{invitation}/accept', [AuthBoardInvitationController::class, 'accept']);
+        Route::post('{invitation}/decline', [AuthBoardInvitationController::class, 'decline']);
     });
 
     Route::prefix('google')->group(function () {
@@ -120,6 +130,16 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
     // frontend. No workspace slug needed: the item's own row says which
     // workspace it belongs to.
     Route::get('boards/{item}', [BoardController::class, 'show']);
+
+    // Board invitations — email-invite a person to view a single board,
+    // independent of full workspace membership. Powers the board header's
+    // "Invite" dialog.
+    Route::prefix('boards/{item}')->group(function () {
+        Route::get('invitations', [BoardInvitationController::class, 'index']);
+        Route::post('invitations', [BoardInvitationController::class, 'store']);
+        Route::delete('invitations/{invitation:id}', [BoardInvitationController::class, 'destroy']);
+        Route::delete('collaborators/{collaborator}', [BoardInvitationController::class, 'removeCollaborator']);
+    });
 
     // Content, listed across every board/doc — powers Manage Workspace's
     // Content tab ("every board/doc I have access to", the same rows the

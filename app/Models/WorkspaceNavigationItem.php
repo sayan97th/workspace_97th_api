@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
@@ -200,6 +201,32 @@ class WorkspaceNavigationItem extends Model
     public function views(): HasMany
     {
         return $this->hasMany(BoardView::class, 'board_id')->orderBy('position');
+    }
+
+    /**
+     * Email invitations granting view access to this specific board (pending,
+     * expired or accepted) — independent of the invitee's workspace
+     * membership. See {@link BoardInvitation}.
+     *
+     * @return HasMany<BoardInvitation, $this>
+     */
+    public function invitations(): HasMany
+    {
+        return $this->hasMany(BoardInvitation::class, 'board_id');
+    }
+
+    /**
+     * People who accepted a board invitation and were granted explicit
+     * view access to this board, on top of whoever already sees it through
+     * their workspace role.
+     *
+     * @return BelongsToMany<User, $this>
+     */
+    public function collaborators(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'board_collaborators', 'board_id', 'user_id')
+            ->withPivot('invited_by')
+            ->withTimestamps();
     }
 
     /**
