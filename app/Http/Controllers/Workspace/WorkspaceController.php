@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Workspace;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\StoreWorkspaceRequest;
+use App\Http\Requests\Workspace\TransferWorkspaceOwnershipRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceRequest;
 use App\Http\Resources\WorkspaceMemberResource;
 use App\Http\Resources\WorkspaceResource;
@@ -211,6 +212,65 @@ class WorkspaceController extends Controller
 
         return response()->json([
             'message' => 'You have left the workspace.',
+        ]);
+    }
+
+    /**
+     * POST /api/workspaces/{workspace}/transfer-ownership
+     *
+     * Hands the "owner" role to another member in one atomic step, together
+     * with what happens to the current owner: stay on with a new role, or
+     * leave the workspace entirely. Restricted to the current owner.
+     */
+    public function transferOwnership(TransferWorkspaceOwnershipRequest $request, Workspace $workspace): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $members = DB::table('workspace_user')
+            ->where('workspace_id', $workspace->id)
+            ->get();
+
+        $membership = $members->firstWhere('user_id', $user->id);
+        if (($membership->role ?? null) !== 'owner') {
+            throw ValidationException::withMessages([
+                'workspace' => 'Only the workspace owner can transfer ownership.',
+            ])->status(403);
+        }
+
+        $validated = $request->validated();
+        $new_owner_id = (int) $validated['new_owner_id'];
+        $self_role = (string) $validated['self_role'];
+
+        if ($new_owner_id === $user->id) {
+            throw ValidationException::withMessages([
+                'new_owner_id' => 'Choose someone else to become the new owner.',
+            ])->status(422);
+        }
+
+        if (! $members->contains('user_id', $new_owner_id)) {
+            throw ValidationException::withMessages([
+                'new_owner_id' => 'That person is not a member of this workspace.',
+            ])->status(422);
+        }
+
+        $leaves = $self_role === 'leave';
+
+        DB::transaction(function () use ($workspace, $user, $new_owner_id, $self_role, $leaves) {
+            $workspace->users()->updateExistingPivot($new_owner_id, ['role' => 'owner']);
+
+            if ($leaves) {
+                $workspace->users()->detach($user->id);
+            } else {
+                $workspace->users()->updateExistingPivot($user->id, ['role' => $self_role]);
+            }
+        });
+
+        return response()->json([
+            'message' => $leaves
+                ? 'Ownership transferred. You have left the workspace.'
+                : 'Ownership transferred.',
+            'left' => $leaves,
         ]);
     }
 

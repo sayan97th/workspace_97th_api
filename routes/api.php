@@ -95,6 +95,7 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
+        Route::post('{workspace}/transfer-ownership', [WorkspaceController::class, 'transferOwnership']);
         Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
         Route::get('{workspace}/invitations', [WorkspaceInvitationController::class, 'index']);
         Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);
