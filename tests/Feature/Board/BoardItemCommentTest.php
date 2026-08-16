@@ -2,6 +2,7 @@
 
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
+use App\Models\BoardItemCommentAttachment;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -47,7 +48,7 @@ test('a comment can be posted with mentions and an attachment', function () {
     $this->assertDatabaseHas('board_item_comments', ['item_id' => $item->id, 'user_id' => $user->id]);
     $this->assertDatabaseHas('board_item_comment_mentions', ['user_id' => $mentioned->id]);
 
-    $attachment = \App\Models\BoardItemCommentAttachment::firstOrFail();
+    $attachment = BoardItemCommentAttachment::firstOrFail();
     Storage::disk('public')->assertExists($attachment->file_path);
 });
 
@@ -132,7 +133,7 @@ test('liking a comment toggles on and off', function () {
     $off->assertOk()->assertJsonPath('comment.liked_by_me', false)->assertJsonPath('comment.like_count', 0);
 });
 
-test('reacting with an emoji toggles on and off and rejects an unlisted emoji', function () {
+test('reacting with an emoji toggles on and off and rejects non-emoji input', function () {
     $item = createCommentTestItem();
     $user = User::factory()->create();
     $comment = $item->comments()->create(['user_id' => $user->id, 'body' => 'Original update']);
@@ -149,11 +150,55 @@ test('reacting with an emoji toggles on and off and rejects an unlisted emoji', 
     );
     $off->assertOk()->assertJsonCount(0, 'comment.reactions');
 
-    $invalid = $this->actingAs($user, 'api')->postJson(
+    // Any real emoji is accepted (the picker offers the full library, not a fixed
+    // shortlist) — only non-emoji strings are rejected.
+    $pizza = $this->actingAs($user, 'api')->postJson(
         "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/reactions",
         ['emoji' => '🍕']
     );
+    $pizza->assertOk()->assertJsonCount(1, 'comment.reactions');
+
+    $invalid = $this->actingAs($user, 'api')->postJson(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/reactions",
+        ['emoji' => 'not an emoji']
+    );
     $invalid->assertUnprocessable();
+});
+
+test('a comment can carry several different emoji reactions from the same user at once', function () {
+    $item = createCommentTestItem();
+    $user = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $user->id, 'body' => 'Original update']);
+
+    $this->actingAs($user, 'api')->postJson(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/reactions",
+        ['emoji' => '👍']
+    )->assertOk();
+
+    $response = $this->actingAs($user, 'api')->postJson(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/reactions",
+        ['emoji' => '❤️']
+    );
+
+    $response->assertOk()->assertJsonCount(2, 'comment.reactions');
+    $emoji = collect($response->json('comment.reactions'))->pluck('emoji')->all();
+    expect($emoji)->toContain('👍')->toContain('❤️');
+});
+
+test('a reaction pill lists who reacted, showing the current user as "You"', function () {
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $reactor = User::factory()->create(['first_name' => 'Alice', 'last_name' => 'Reactor']);
+    $comment = $item->comments()->create(['user_id' => $author->id, 'body' => 'Original update']);
+
+    $this->actingAs($reactor, 'api')->postJson(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/reactions",
+        ['emoji' => '🔥']
+    )->assertOk();
+
+    $response = $this->actingAs($author, 'api')->getJson("/api/boards/{$item->board_id}/items/{$item->id}/comments");
+
+    $response->assertOk()->assertJsonPath('data.0.reactions.0.reactor_names', ['Alice Reactor']);
 });
 
 test('marking a comment as seen toggles the view count', function () {

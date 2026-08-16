@@ -46,6 +46,11 @@ class BoardCommentResource extends JsonResource
                     'emoji' => $emoji,
                     'count' => $group->count(),
                     'reacted_by_me' => $group->contains('user_id', $current_user_id),
+                    'reactor_names' => $group
+                        ->map(fn ($reaction) => $reaction->user_id === $current_user_id
+                            ? __('You')
+                            : ($reaction->user->full_name ?? __('Deleted user')))
+                        ->values(),
                 ])
                 ->values(),
             'mentioned_user_ids' => $this->mentions->pluck('user_id')->values(),

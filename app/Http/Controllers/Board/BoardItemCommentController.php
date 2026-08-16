@@ -192,7 +192,7 @@ class BoardItemCommentController extends Controller
      */
     private function eagerLoads(): array
     {
-        $own = ['author', 'likes', 'reactions', 'views', 'mentions', 'attachments'];
+        $own = ['author', 'likes', 'reactions.user', 'views', 'mentions', 'attachments'];
 
         return [
             ...$own,
