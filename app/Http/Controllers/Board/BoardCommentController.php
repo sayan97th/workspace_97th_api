@@ -27,14 +27,25 @@ class BoardCommentController extends Controller
      *
      * Top-level comments (updates) for the board, newest first, each with
      * its replies (oldest first) and like/reaction/view/attachment state.
+     *
+     * Doubles as the "I opened the discussion drawer" signal: it upserts the
+     * requesting user's {@see BoardDiscussionView}, which is what flips the
+     * header's "Board updates" badge from red back to gray.
      */
-    public function index(WorkspaceNavigationItem $item): JsonResponse
+    public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $comments = $item->comments()
             ->whereNull('parent_id')
             ->with($this->eagerLoads())
             ->orderByDesc('created_at')
             ->get();
+
+        if ($user_id = $request->user()?->id) {
+            $item->discussionViews()->updateOrCreate(
+                ['user_id' => $user_id],
+                ['last_viewed_at' => now()]
+            );
+        }
 
         return response()->json([
             'data' => BoardCommentResource::collection($comments),

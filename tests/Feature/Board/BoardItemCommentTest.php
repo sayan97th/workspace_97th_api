@@ -185,6 +185,39 @@ test('a comment can carry several different emoji reactions from the same user a
     expect($emoji)->toContain('👍')->toContain('❤️');
 });
 
+/**
+ * Regression test for a bug where reacting with a second, third, etc.
+ * emoji made an earlier reaction from the same user vanish. It only showed
+ * up with emoji outside the Basic Multilingual Plane (almost all of
+ * them — e.g. 👍 U+1F44D, 🎉 U+1F389) because MySQL's `utf8mb4_unicode_ci`
+ * collation has no weight table entries above the BMP and so treated every
+ * such emoji as equal to one another; the toggle endpoint's
+ * `where('emoji', $emoji)` lookup then matched (and deleted) whichever
+ * other astral-plane emoji the user had already reacted with instead of
+ * creating the new one. Two BMP emoji (like the ❤️ used above) never
+ * triggered it, which is how the earlier version of this test missed it.
+ * See the `emoji` column's `utf8mb4_bin` collation
+ * ({@see \App\Models\BoardItemCommentReaction}) for the fix — this test
+ * only exercises the application-level symptom, not the collation itself,
+ * so it always passes on the sqlite connection tests run under regardless
+ * of the collation fix.
+ */
+test('reacting with several astral-plane emoji keeps every earlier reaction intact', function () {
+    $item = createCommentTestItem();
+    $user = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $user->id, 'body' => 'Original update']);
+
+    $endpoint = "/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/reactions";
+
+    $this->actingAs($user, 'api')->postJson($endpoint, ['emoji' => '👍'])->assertOk();
+    $this->actingAs($user, 'api')->postJson($endpoint, ['emoji' => '🎉'])->assertOk();
+    $response = $this->actingAs($user, 'api')->postJson($endpoint, ['emoji' => '😂']);
+
+    $response->assertOk()->assertJsonCount(3, 'comment.reactions');
+    $emoji = collect($response->json('comment.reactions'))->pluck('emoji')->all();
+    expect($emoji)->toContain('👍')->toContain('🎉')->toContain('😂');
+});
+
 test('a reaction pill lists who reacted, showing the current user as "You"', function () {
     $item = createCommentTestItem();
     $author = User::factory()->create();

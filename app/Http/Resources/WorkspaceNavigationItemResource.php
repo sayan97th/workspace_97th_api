@@ -31,6 +31,9 @@ class WorkspaceNavigationItemResource extends JsonResource
             'board_type' => $this->board_type,
             'item_column_label' => $this->item_column_label,
             'is_favorite' => $this->is_favorite,
+            // Total updates (top-level + replies) on the board's discussion feed, powering the "Board updates"
+            // badge; 0 unless the caller ran loadCount('comments') first (only BoardController::show() does).
+            'comments_count' => $this->whenCounted('comments', default: 0),
             'position' => $this->position,
             'created_at' => $this->created_at,
             'creator' => $this->whenLoaded('creator', fn () => $this->creator ? [

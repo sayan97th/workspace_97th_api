@@ -176,6 +176,31 @@ test('a comment can carry several different emoji reactions from the same user a
     expect($emoji)->toContain('👍')->toContain('❤️');
 });
 
+/**
+ * Regression test for a bug where reacting with a second, third, etc.
+ * emoji made an earlier reaction from the same user vanish — see the
+ * matching test in `BoardItemCommentTest` for the full root-cause
+ * explanation (MySQL's `utf8mb4_unicode_ci` collating every emoji outside
+ * the Basic Multilingual Plane as equal). Fixed by the `emoji` column's
+ * `utf8mb4_bin` collation, guarded separately in
+ * `CommentReactionCollationTest`.
+ */
+test('reacting with several astral-plane emoji keeps every earlier reaction intact', function () {
+    $board = createCommentTestBoard();
+    $user = User::factory()->create();
+    $comment = $board->comments()->create(['user_id' => $user->id, 'body' => 'Original update']);
+
+    $endpoint = "/api/boards/{$board->id}/comments/{$comment->id}/reactions";
+
+    $this->actingAs($user, 'api')->postJson($endpoint, ['emoji' => '👍'])->assertOk();
+    $this->actingAs($user, 'api')->postJson($endpoint, ['emoji' => '🎉'])->assertOk();
+    $response = $this->actingAs($user, 'api')->postJson($endpoint, ['emoji' => '😂']);
+
+    $response->assertOk()->assertJsonCount(3, 'comment.reactions');
+    $emoji = collect($response->json('comment.reactions'))->pluck('emoji')->all();
+    expect($emoji)->toContain('👍')->toContain('🎉')->toContain('😂');
+});
+
 test('marking a comment as seen toggles the view count', function () {
     $board = createCommentTestBoard();
     $user = User::factory()->create();

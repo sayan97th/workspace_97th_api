@@ -19,7 +19,7 @@ class BoardController extends Controller
      */
     public function show(WorkspaceNavigationItem $item): JsonResponse
     {
-        $item->load(['creator', 'workspace.owners']);
+        $item->load(['creator', 'workspace.owners'])->loadCount('comments');
 
         return response()->json(new BoardResource($item));
     }

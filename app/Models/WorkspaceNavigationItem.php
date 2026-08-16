@@ -49,6 +49,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItem> $items
  * @property-read Collection<int, BoardView> $views
  * @property-read Collection<int, BoardComment> $comments
+ * @property-read Collection<int, BoardDiscussionView> $discussionViews
  */
 #[Fillable([
     'workspace_id',
@@ -213,6 +214,17 @@ class WorkspaceNavigationItem extends Model
     public function comments(): HasMany
     {
         return $this->hasMany(BoardComment::class, 'board_id');
+    }
+
+    /**
+     * One row per user who has ever opened this board's discussion drawer,
+     * tracking when they last saw it. See {@link BoardDiscussionView}.
+     *
+     * @return HasMany<BoardDiscussionView, $this>
+     */
+    public function discussionViews(): HasMany
+    {
+        return $this->hasMany(BoardDiscussionView::class, 'board_id');
     }
 
     /**
