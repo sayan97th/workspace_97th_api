@@ -27,6 +27,7 @@ class WorkspaceMemberResource extends JsonResource
             'profile_photo_url' => $this->profile_photo_url,
             'role' => $this->pivot->role,
             'is_recent' => (bool) $this->pivot->is_recent,
+            'invited_by' => $this->pivot->invited_by,
             'joined_at' => $this->pivot->created_at,
         ];
     }

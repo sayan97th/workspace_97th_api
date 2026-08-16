@@ -9,6 +9,7 @@ use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
+use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardItemCommentController;
@@ -27,6 +28,7 @@ use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Http\Controllers\Workspace\WorkspaceInvitationController;
+use App\Http\Controllers\Workspace\WorkspaceInviteLinkController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Http\Controllers\Workspace\WorkspacePermissionController;
 use Illuminate\Support\Facades\Route;
@@ -44,6 +46,13 @@ Route::prefix('auth')->group(function () {
         Route::get('{invitation}', [AuthWorkspaceInvitationController::class, 'show']);
         Route::post('{invitation}/accept', [AuthWorkspaceInvitationController::class, 'accept']);
         Route::post('{invitation}/decline', [AuthWorkspaceInvitationController::class, 'decline']);
+    });
+
+    // Public, the "Invite with link" share link. Whoever holds the link may
+    // not have an account or session yet either.
+    Route::prefix('workspaces/join')->group(function () {
+        Route::get('{invite_code}', [AuthWorkspaceInviteLinkController::class, 'show']);
+        Route::post('{invite_code}', [AuthWorkspaceInviteLinkController::class, 'accept']);
     });
 
     Route::prefix('google')->group(function () {
@@ -90,6 +99,9 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
         Route::get('{workspace}/invitations', [WorkspaceInvitationController::class, 'index']);
         Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);
         Route::delete('{workspace}/invitations/{invitation:id}', [WorkspaceInvitationController::class, 'destroy']);
+        Route::get('{workspace}/invite-link', [WorkspaceInviteLinkController::class, 'show']);
+        Route::patch('{workspace}/invite-link', [WorkspaceInviteLinkController::class, 'update']);
+        Route::post('{workspace}/invite-link/regenerate', [WorkspaceInviteLinkController::class, 'regenerate']);
         Route::get('{workspace}/content/recent', [ContentController::class, 'recent']);
 
         Route::prefix('{workspace}/navigation')->group(function () {

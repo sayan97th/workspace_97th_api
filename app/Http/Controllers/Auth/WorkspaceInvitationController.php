@@ -94,7 +94,7 @@ class WorkspaceInvitationController extends Controller
 
         DB::transaction(function () use ($invitation, $user) {
             $invitation->workspace->users()->syncWithoutDetaching([
-                $user->id => ['role' => $invitation->role, 'is_recent' => true],
+                $user->id => ['role' => $invitation->role, 'is_recent' => true, 'invited_by' => $invitation->invited_by],
             ]);
 
             $invitation->update(['accepted_at' => now()]);

@@ -143,7 +143,7 @@ test('the workspace invitation email renders the workspace branding, message, an
     ]);
 
     (new WorkspaceInvitationMail($invitation))
-        ->assertHasSubject("You've been invited to join Acme Studio")
+        ->assertHasSubject("{$owner->full_name} invited you to join Acme Studio")
         ->assertSeeInHtml('Acme Studio')
         ->assertSeeInHtml('AS')
         ->assertSeeInHtml('Welcome aboard!')

@@ -88,6 +88,7 @@ class WorkspaceController extends Controller
             'product' => $validated['product'] ?? 'Workspace 97th',
             'privacy' => $validated['privacy'] ?? 'open',
             'description' => $validated['description'] ?? null,
+            'invite_generated_by' => $user->id,
         ]);
 
         $workspace->users()->attach($user->id, ['role' => 'owner', 'is_recent' => true]);

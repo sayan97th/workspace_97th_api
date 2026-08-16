@@ -16,6 +16,10 @@ use Illuminate\Support\Str;
  * @property int $id
  * @property string $name
  * @property string $slug
+ * @property string|null $invite_code
+ * @property string $invite_role
+ * @property bool $invite_enabled
+ * @property int|null $invite_generated_by
  * @property string $mono
  * @property string $color
  * @property string $product
@@ -31,7 +35,7 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, User> $users
  * @property-read Collection<int, User> $owners
  */
-#[Fillable(['name', 'slug', 'mono', 'color', 'product', 'privacy', 'is_home', 'description', 'position'])]
+#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'description', 'position'])]
 class Workspace extends Model
 {
     use HasFactory, SoftDeletes;
@@ -46,6 +50,10 @@ class Workspace extends Model
         static::creating(function (Workspace $workspace) {
             if (empty($workspace->slug)) {
                 $workspace->slug = static::generateUniqueSlug($workspace->name);
+            }
+
+            if (empty($workspace->invite_code)) {
+                $workspace->invite_code = Str::random(48);
             }
         });
 
@@ -126,7 +134,7 @@ class Workspace extends Model
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'workspace_user')
-            ->withPivot(['role', 'is_recent'])
+            ->withPivot(['role', 'is_recent', 'invited_by'])
             ->withTimestamps();
     }
 
@@ -160,6 +168,7 @@ class Workspace extends Model
     {
         return [
             'is_home' => 'boolean',
+            'invite_enabled' => 'boolean',
             'position' => 'integer',
         ];
     }

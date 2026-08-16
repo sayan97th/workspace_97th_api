@@ -1,6 +1,8 @@
 <?php
 
 use App\Models\User;
+use App\Models\Workspace;
+use App\Models\WorkspaceInvitation;
 use Database\Seeders\RolePermissionSeeder;
 
 beforeEach(function () {
@@ -23,6 +25,64 @@ test('a user can register and receives a token with the client role', function (
 
     $user = User::where('email', 'jane@example.com')->firstOrFail();
     expect($user->hasRole('client'))->toBeTrue();
+});
+
+test('registering with a pending workspace invitation auto-joins the workspace', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $invitation = WorkspaceInvitation::factory()->for($workspace)->create([
+        'email' => 'jane@example.com',
+        'role' => 'member',
+        'invited_by' => $owner->id,
+    ]);
+
+    $response = $this->postJson('/api/auth/register', [
+        'first_name' => 'Jane',
+        'last_name' => 'Doe',
+        'email' => 'jane@example.com',
+        'password' => 'password123',
+        'password_confirmation' => 'password123',
+    ]);
+
+    $response->assertOk();
+
+    $user = User::where('email', 'jane@example.com')->firstOrFail();
+
+    $this->assertDatabaseHas('workspace_user', [
+        'workspace_id' => $workspace->id,
+        'user_id' => $user->id,
+        'role' => 'member',
+    ]);
+
+    expect($invitation->fresh()->accepted_at)->not->toBeNull();
+});
+
+test('registering does not join a workspace from an expired invitation', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    WorkspaceInvitation::factory()->for($workspace)->expired()->create([
+        'email' => 'jane@example.com',
+        'invited_by' => $owner->id,
+    ]);
+
+    $this->postJson('/api/auth/register', [
+        'first_name' => 'Jane',
+        'last_name' => 'Doe',
+        'email' => 'jane@example.com',
+        'password' => 'password123',
+        'password_confirmation' => 'password123',
+    ])->assertOk();
+
+    $user = User::where('email', 'jane@example.com')->firstOrFail();
+
+    $this->assertDatabaseMissing('workspace_user', [
+        'workspace_id' => $workspace->id,
+        'user_id' => $user->id,
+    ]);
 });
 
 test('a user can log in with valid credentials', function () {
