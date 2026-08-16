@@ -35,7 +35,7 @@ class WelcomeMail extends Mailable
         $frontend_url = rtrim((string) config('app.frontend_url'), '/');
 
         return new Content(
-            view: 'emails.welcome',
+            view: 'emails.auth.welcome',
             with: [
                 'first_name' => trim(explode(' ', $this->user->full_name)[0] ?? $this->user->full_name),
                 'login_url' => $frontend_url,

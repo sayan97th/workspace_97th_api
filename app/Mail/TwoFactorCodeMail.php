@@ -37,7 +37,7 @@ class TwoFactorCodeMail extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'emails.two-factor-code',
+            view: 'emails.auth.two-factor-code',
             with: [
                 'first_name' => trim(explode(' ', $this->user->full_name)[0] ?? $this->user->full_name),
                 'code' => $this->code,

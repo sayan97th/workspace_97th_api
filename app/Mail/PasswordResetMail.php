@@ -39,7 +39,7 @@ class PasswordResetMail extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'emails.password-reset',
+            view: 'emails.auth.password-reset',
             with: [
                 'first_name' => trim(explode(' ', $this->user->full_name)[0] ?? $this->user->full_name),
                 'reset_url' => $this->resetUrl,
