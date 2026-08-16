@@ -48,6 +48,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardGroup> $groups
  * @property-read Collection<int, BoardItem> $items
  * @property-read Collection<int, BoardView> $views
+ * @property-read Collection<int, BoardComment> $comments
  */
 #[Fillable([
     'workspace_id',
@@ -201,6 +202,17 @@ class WorkspaceNavigationItem extends Model
     public function views(): HasMany
     {
         return $this->hasMany(BoardView::class, 'board_id')->orderBy('position');
+    }
+
+    /**
+     * Top-level comments ("updates") on this board's discussion feed, across
+     * every view/tab — the board-wide analogue of {@link BoardItem::comments()}.
+     *
+     * @return HasMany<BoardComment, $this>
+     */
+    public function comments(): HasMany
+    {
+        return $this->hasMany(BoardComment::class, 'board_id');
     }
 
     /**

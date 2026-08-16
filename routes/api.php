@@ -12,6 +12,7 @@ use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
 use App\Http\Controllers\Board\BoardColumnController;
+use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardInvitationController;
 use App\Http\Controllers\Board\BoardItemCommentController;
@@ -210,6 +211,18 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
                 Route::post('/', [BoardViewFileController::class, 'store']);
                 Route::delete('{file}', [BoardViewFileController::class, 'destroy']);
             });
+        });
+
+        // Board-wide discussion feed ("Board updates") — the whole board's
+        // own comment thread, independent of any single item or view/tab.
+        Route::prefix('comments')->group(function () {
+            Route::get('/', [BoardCommentController::class, 'index']);
+            Route::post('/', [BoardCommentController::class, 'store']);
+            Route::patch('{comment}', [BoardCommentController::class, 'update']);
+            Route::delete('{comment}', [BoardCommentController::class, 'destroy']);
+            Route::post('{comment}/like', [BoardCommentController::class, 'toggleLike']);
+            Route::post('{comment}/reactions', [BoardCommentController::class, 'toggleReaction']);
+            Route::post('{comment}/seen', [BoardCommentController::class, 'toggleSeen']);
         });
     });
 
