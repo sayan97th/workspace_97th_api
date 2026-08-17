@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Throwable;
 
-// php artisan test:smtp-email
+// php artisan test:smtp-email --email=
 class TestSmtpEmail extends Command
 {
     protected $signature = 'test:smtp-email {--email= : Email address to send the test message to}';
