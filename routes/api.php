@@ -206,6 +206,15 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
         Route::prefix('items')->group(function () {
             Route::get('/', [BoardItemController::class, 'index']);
             Route::post('/', [BoardItemController::class, 'store']);
+
+            // Selection action bar (bulk row actions) — declared before the
+            // `{board_item}` wildcard routes below so these literal segments
+            // aren't swallowed by it.
+            Route::post('duplicate', [BoardItemController::class, 'bulkDuplicate']);
+            Route::patch('move', [BoardItemController::class, 'bulkMove']);
+            Route::patch('archive', [BoardItemController::class, 'bulkArchive']);
+            Route::delete('/', [BoardItemController::class, 'bulkDestroy']);
+
             Route::get('{board_item}', [BoardItemController::class, 'show']);
             Route::patch('{board_item}', [BoardItemController::class, 'update']);
             Route::patch('{board_item}/values', [BoardItemController::class, 'updateValues']);

@@ -119,6 +119,96 @@ test('items are scoped per tab — an item is only returned for the tab its grou
         ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.name', 'Other tab task');
 });
 
+test('bulk duplicate copies name, description and values into the same group', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_TEXT]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'description' => 'Notes', 'position' => 0]);
+    $item->values()->create(['column_id' => $column->id, 'value' => 'hello']);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", [
+        'item_ids' => [$item->id],
+    ]);
+
+    $response->assertCreated()->assertJsonCount(1, 'items');
+    $duplicate_id = $response->json('items.0.id');
+    expect($duplicate_id)->not->toBe($item->id);
+    $response->assertJsonPath('items.0.name', 'Task (copy)')
+        ->assertJsonPath('items.0.group_id', $group->id)
+        ->assertJsonPath("items.0.values.{$column->id}", 'hello');
+    $this->assertDatabaseHas('board_items', ['id' => $duplicate_id, 'description' => 'Notes']);
+});
+
+test('bulk move updates the group of every given item', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $target_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $first = $board->items()->create(['group_id' => $group->id, 'name' => 'First', 'position' => 0]);
+    $second = $board->items()->create(['group_id' => $group->id, 'name' => 'Second', 'position' => 1]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/move", [
+        'item_ids' => [$first->id, $second->id],
+        'group_id' => $target_group->id,
+    ]);
+
+    $response->assertOk()->assertJsonCount(2, 'items');
+    $this->assertDatabaseHas('board_items', ['id' => $first->id, 'group_id' => $target_group->id]);
+    $this->assertDatabaseHas('board_items', ['id' => $second->id, 'group_id' => $target_group->id]);
+});
+
+test('bulk move rejects a target group from another board', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    [$other_board] = createItemTestBoard();
+    $foreign_group = BoardGroup::factory()->create(['board_id' => $other_board->id]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/move", [
+        'item_ids' => [$item->id],
+        'group_id' => $foreign_group->id,
+    ])->assertInvalid(['group_id']);
+});
+
+test('bulk archive hides items from the index without soft-deleting them', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/archive", [
+        'item_ids' => [$item->id],
+    ])->assertOk();
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/items")
+        ->assertOk()->assertJsonCount(0, 'data');
+    $this->assertDatabaseHas('board_items', ['id' => $item->id, 'is_archived' => true, 'deleted_at' => null]);
+});
+
+test('bulk delete soft-deletes every given item', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $first = $board->items()->create(['group_id' => $group->id, 'name' => 'First', 'position' => 0]);
+    $second = $board->items()->create(['group_id' => $group->id, 'name' => 'Second', 'position' => 1]);
+
+    $this->actingAs($user, 'api')->deleteJson("/api/boards/{$board->id}/items", [
+        'item_ids' => [$first->id, $second->id],
+    ])->assertOk();
+
+    $this->assertSoftDeleted('board_items', ['id' => $first->id]);
+    $this->assertSoftDeleted('board_items', ['id' => $second->id]);
+});
+
+test('bulk actions reject item ids from another board', function () {
+    [$board] = createItemTestBoard();
+    $user = User::factory()->create();
+    [$other_board, $other_group] = createItemTestBoard();
+    $foreign_item = $other_board->items()->create(['group_id' => $other_group->id, 'name' => 'Foreign', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", [
+        'item_ids' => [$foreign_item->id],
+    ])->assertInvalid(['item_ids.0']);
+});
+
 test('inline cell edits ignore a column that belongs to a different tab of the same board', function () {
     [$board, $group] = createItemTestBoard();
     $user = User::factory()->create();

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
+use App\Http\Controllers\Board\BoardItemCommentController;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -24,6 +25,7 @@ use Illuminate\Support\Carbon;
  * @property string $name
  * @property string|null $description
  * @property int $position
+ * @property bool $is_archived
  * @property int|null $created_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -35,7 +37,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItemComment> $comments
  * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
  */
-#[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'created_by_id'])]
+#[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'is_archived', 'created_by_id'])]
 class BoardItem extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
@@ -87,7 +89,7 @@ class BoardItem extends Model
 
     /**
      * This item's comments/updates, including replies (see
-     * {@see \App\Http\Controllers\Board\BoardItemCommentController}).
+     * {@see BoardItemCommentController}).
      *
      * @return HasMany<BoardItemComment, $this>
      */
@@ -116,6 +118,7 @@ class BoardItem extends Model
     {
         return [
             'position' => 'integer',
+            'is_archived' => 'boolean',
         ];
     }
 }

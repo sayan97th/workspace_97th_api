@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\BulkBoardItemsRequest;
+use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
 use App\Http\Requests\Board\StoreBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
@@ -48,6 +50,7 @@ class BoardItemController extends Controller
         }
 
         $query = $item->items()
+            ->where('is_archived', false)
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
             ->with('values')->withCount(['comments', 'commentAttachments'])->orderBy('group_id')->orderBy('position');
 
@@ -142,6 +145,99 @@ class BoardItemController extends Controller
 
         return response()->json([
             'message' => 'Item deleted successfully.',
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/items/duplicate
+     *
+     * Selection action bar's "Duplicate" — copies each given item's name,
+     * description and column values into its own original group, appended
+     * after that group's existing rows.
+     */
+    public function bulkDuplicate(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $originals = $item->items()->with('values')->whereIn('id', $request->validated()['item_ids'])->get();
+
+        $duplicates = $originals->map(function (BoardItem $original) use ($item) {
+            $duplicate = $item->items()->create([
+                'group_id' => $original->group_id,
+                'name' => "{$original->name} (copy)",
+                'description' => $original->description,
+                'position' => $this->nextPosition($item, $original->group_id),
+                'created_by_id' => $original->created_by_id,
+            ]);
+
+            foreach ($original->values as $value) {
+                $duplicate->values()->create([
+                    'column_id' => $value->column_id,
+                    'value' => $value->value,
+                ]);
+            }
+
+            return $duplicate->fresh('values');
+        });
+
+        return response()->json([
+            'message' => 'Items duplicated successfully.',
+            'items' => BoardItemResource::collection($duplicates),
+        ], 201);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/move
+     *
+     * Selection action bar's "Move to" — moves every given item into a
+     * different group (table), appended at the end of the target group.
+     */
+    public function bulkMove(BulkMoveBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $validated = $request->validated();
+        $group_id = (int) $validated['group_id'];
+
+        $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
+
+        foreach ($items as $board_item) {
+            $board_item->update([
+                'group_id' => $group_id,
+                'position' => $this->nextPosition($item, $group_id),
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Items moved successfully.',
+            'items' => BoardItemResource::collection($items->fresh('values')),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/archive
+     *
+     * Selection action bar's "Archive" — hides every given item from the
+     * board without deleting it, unlike `bulkDestroy()` this leaves
+     * `deleted_at` unset.
+     */
+    public function bulkArchive(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $item->items()->whereIn('id', $request->validated()['item_ids'])->update(['is_archived' => true]);
+
+        return response()->json([
+            'message' => 'Items archived successfully.',
+        ]);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/items
+     *
+     * Selection action bar's "Delete" — bulk counterpart of `destroy()`,
+     * soft-deletes every given item.
+     */
+    public function bulkDestroy(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $item->items()->whereIn('id', $request->validated()['item_ids'])->delete();
+
+        return response()->json([
+            'message' => 'Items deleted successfully.',
         ]);
     }
 
