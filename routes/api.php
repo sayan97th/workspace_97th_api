@@ -21,6 +21,7 @@ use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
 use App\Http\Controllers\BroadcastAuthController;
+use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
@@ -92,6 +93,19 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
         Route::get('/', [NotificationController::class, 'index']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
         Route::patch('{notification}/read', [NotificationController::class, 'markAsRead']);
+    });
+
+    // Update Feed — real-time (Reverb) + REST-readable stream of comment
+    // "updates" (item- and board-level) the current user has visibility on.
+    Route::prefix('feed')->group(function () {
+        Route::get('updates', [FeedUpdateController::class, 'index']);
+        Route::get('boards', [FeedUpdateController::class, 'boards']);
+        Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
+        Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
+        Route::post('updates/{id}/like', [FeedUpdateController::class, 'toggleLike']);
+        Route::post('updates/{id}/reply', [FeedUpdateController::class, 'reply']);
+        Route::post('updates/{id}/seen', [FeedUpdateController::class, 'markSeen']);
+        Route::post('updates/{id}/schedule', [FeedUpdateController::class, 'schedule']);
     });
 
     // Profile — available to any authenticated user

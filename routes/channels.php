@@ -17,3 +17,8 @@ use Illuminate\Support\Facades\Broadcast;
 Broadcast::channel('notifications.{user_id}', function ($user, $user_id) {
     return (int) $user->id === (int) $user_id;
 });
+
+// Private per-user channel used to deliver real-time Update Feed entries.
+Broadcast::channel('feed.{user_id}', function ($user, $user_id) {
+    return (int) $user->id === (int) $user_id;
+});

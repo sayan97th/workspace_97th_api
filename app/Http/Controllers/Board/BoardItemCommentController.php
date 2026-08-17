@@ -12,6 +12,7 @@ use App\Models\BoardItemComment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,7 +22,10 @@ use Illuminate\Support\Str;
 
 class BoardItemCommentController extends Controller
 {
-    public function __construct(private readonly NotificationService $notification_service) {}
+    public function __construct(
+        private readonly NotificationService $notification_service,
+        private readonly FeedService $feed_service,
+    ) {}
 
     /**
      * GET /api/boards/{item}/items/{board_item}/comments
@@ -35,6 +39,7 @@ class BoardItemCommentController extends Controller
 
         $comments = $board_item->comments()
             ->whereNull('parent_id')
+            ->visibleNow()
             ->with($this->eagerLoads())
             ->orderByDesc('created_at')
             ->get();
@@ -71,6 +76,12 @@ class BoardItemCommentController extends Controller
         if ($actor = $request->user()) {
             $this->notifyCommentCreated($item, $board_item, $comment, $mentioned_user_ids, $actor);
         }
+
+        $this->feed_service->broadcastUpdate(
+            $comment->fresh(['author', 'mentions', 'bookmarks', 'views', 'item.board.parent']),
+            $item,
+            $comment->parent?->author,
+        );
 
         foreach ($request->file('attachments', []) as $file) {
             $extension = $file->getClientOriginalExtension();
