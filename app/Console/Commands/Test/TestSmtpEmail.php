@@ -1,19 +1,20 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Console\Commands\Test;
 
 use App\Mail\SmtpTestMail;
-use Illuminate\Console\Attributes\Description;
-use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Throwable;
 
-#[Signature('app:test-smtp-email {--email= : Email address to send the test message to}')]
-#[Description('Send a test email to verify the SMTP credentials configured in .env are working')]
+// php artisan test:smtp-email
 class TestSmtpEmail extends Command
 {
+    protected $signature = 'test:smtp-email {--email= : Email address to send the test message to}';
+
+    protected $description = 'Send a test email to verify the SMTP credentials configured in .env are working';
+
     /**
      * Execute the console command.
      */
