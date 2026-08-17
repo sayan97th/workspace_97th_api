@@ -20,17 +20,20 @@ class NotificationService
      * `notifications.{user_id}` private channel, unless `$actor` is
      * notifying themselves or `$recipient` has this `$type`'s in-app channel
      * turned off in their `notification_preferences`.
+     *
+     * `$actor` is nullable to support system-generated notifications (e.g.
+     * the websocket test broadcast) that aren't triggered by another user.
      */
     public function notify(
         User $recipient,
-        User $actor,
+        ?User $actor,
         string $type,
         ?WorkspaceNavigationItem $board,
         string $action_label,
         string $action_target,
         ?string $link,
     ): ?Notification {
-        if ($recipient->id === $actor->id) {
+        if ($actor !== null && $recipient->id === $actor->id) {
             return null;
         }
 
@@ -41,7 +44,7 @@ class NotificationService
 
         $notification = Notification::create([
             'user_id' => $recipient->id,
-            'actor_id' => $actor->id,
+            'actor_id' => $actor?->id,
             'type' => $type,
             'board_id' => $board?->id,
             'action_label' => $action_label,

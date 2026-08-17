@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Notification\NotificationService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -12,7 +13,7 @@ use Illuminate\Support\Carbon;
 /**
  * An in-app notification delivered to `user_id` (the recipient), triggered by
  * `actor_id`'s action (a mention, a reply, a reaction, an assignment). Created
- * and broadcast exclusively through {@see \App\Services\Notification\NotificationService},
+ * and broadcast exclusively through {@see NotificationService},
  * never directly.
  *
  * @property int $id
@@ -45,6 +46,12 @@ class Notification extends Model
     public const TYPE_REPLIED_UPDATE = 'replied_update';
 
     public const TYPE_REACTIONS = 'reactions';
+
+    /**
+     * System-generated notification with no `actor_id`, used to verify the
+     * websocket connection is delivering real-time events end to end.
+     */
+    public const TYPE_TEST = 'test';
 
     /**
      * @return array<string, string>
