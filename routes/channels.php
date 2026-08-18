@@ -22,3 +22,9 @@ Broadcast::channel('notifications.{user_id}', function ($user, $user_id) {
 Broadcast::channel('feed.{user_id}', function ($user, $user_id) {
     return (int) $user->id === (int) $user_id;
 });
+
+// Private per-user channel used by the admin "Websocket test" screen to
+// receive the pong broadcast by WebsocketTestController::ping().
+Broadcast::channel('websocket-test.{user_id}', function ($user, $user_id) {
+    return (int) $user->id === (int) $user_id;
+});

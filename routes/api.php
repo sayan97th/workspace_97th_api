@@ -4,6 +4,7 @@ use App\Http\Controllers\AccountTeam\AccountTeamController;
 use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
+use App\Http\Controllers\Admin\WebsocketTest\WebsocketTestController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\BoardInvitationController as AuthBoardInvitationController;
 use App\Http\Controllers\Auth\GoogleAuthController;
@@ -288,6 +289,12 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
             Route::get('/', [RoleController::class, 'index']);
             Route::post('users/{user}/assign', [RoleController::class, 'assignRole']);
             Route::post('users/{user}/revoke', [RoleController::class, 'revokeRole']);
+        });
+
+        // Websocket test — diagnostic screen for verifying Reverb connectivity.
+        Route::prefix('websocket-test')->group(function () {
+            Route::get('status', [WebsocketTestController::class, 'status']);
+            Route::post('ping', [WebsocketTestController::class, 'ping']);
         });
     });
 
