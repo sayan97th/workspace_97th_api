@@ -56,6 +56,7 @@ class BoardItemController extends Controller
             ->withCount([
                 'comments',
                 'commentAttachments',
+                'attachments',
                 'checklistItems as checklist_total_count',
                 'checklistItems as checklist_done_count' => fn ($q) => $q->where('is_done', true),
             ])

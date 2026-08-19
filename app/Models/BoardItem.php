@@ -113,6 +113,18 @@ class BoardItem extends Model
     }
 
     /**
+     * Files attached directly to this item (the Kanban drawer's
+     * "Attachments" affordance) — independent of {@see comments}, see
+     * {@see BoardItemAttachment}.
+     *
+     * @return HasMany<BoardItemAttachment, $this>
+     */
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(BoardItemAttachment::class, 'item_id');
+    }
+
+    /**
      * This item's subtask checklist lines, in display order — powers the
      * Kanban card's "✓ done/total" badge and the drawer's Subtasks section.
      *

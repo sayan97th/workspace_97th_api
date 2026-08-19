@@ -16,6 +16,7 @@ use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardInvitationController;
+use App\Http\Controllers\Board\BoardItemAttachmentController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
@@ -236,6 +237,12 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
                 Route::post('/', [BoardItemChecklistItemController::class, 'store']);
                 Route::patch('{checklist_item}', [BoardItemChecklistItemController::class, 'update']);
                 Route::delete('{checklist_item}', [BoardItemChecklistItemController::class, 'destroy']);
+            });
+
+            Route::prefix('{board_item}/attachments')->group(function () {
+                Route::get('/', [BoardItemAttachmentController::class, 'index']);
+                Route::post('/', [BoardItemAttachmentController::class, 'store']);
+                Route::delete('{attachment}', [BoardItemAttachmentController::class, 'destroy']);
             });
         });
 

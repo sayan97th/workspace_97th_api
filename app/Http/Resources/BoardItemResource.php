@@ -32,7 +32,10 @@ class BoardItemResource extends JsonResource
             // count); other actions that return this resource (store/update/
             // updateValues) fall back to 0 rather than a real count.
             'comment_count' => $this->whenCounted('comments', default: 0),
-            'attachment_count' => $this->whenCounted('commentAttachments', default: 0),
+            // Sums attachments uploaded directly to the item (the Kanban
+            // drawer's "Attachments" affordance) and files sent along with a
+            // comment — both count toward the card's single attachment badge.
+            'attachment_count' => $this->whenCounted('attachments', default: 0) + $this->whenCounted('commentAttachments', default: 0),
             // `checklistItems` is counted twice under different aliases (total,
             // and just the done ones) to build the Kanban card's "✓ done/total"
             // badge, which doesn't fit `whenCounted()`'s single-relation-count
