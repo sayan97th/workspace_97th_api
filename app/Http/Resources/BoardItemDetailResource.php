@@ -36,6 +36,7 @@ class BoardItemDetailResource extends JsonResource
                 'full_name' => $this->creator->full_name,
                 'profile_photo_url' => $this->creator->profile_photo_url,
             ] : null,
+            'checklist_items' => BoardItemChecklistItemResource::collection($this->whenLoaded('checklistItems')),
         ]);
     }
 }

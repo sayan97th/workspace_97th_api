@@ -33,6 +33,16 @@ class BoardItemResource extends JsonResource
             // updateValues) fall back to 0 rather than a real count.
             'comment_count' => $this->whenCounted('comments', default: 0),
             'attachment_count' => $this->whenCounted('commentAttachments', default: 0),
+            // `checklistItems` is counted twice under different aliases (total,
+            // and just the done ones) to build the Kanban card's "✓ done/total"
+            // badge, which doesn't fit `whenCounted()`'s single-relation-count
+            // helper — read the aliased attributes directly instead, falling
+            // back to a real count when the relation itself was eager-loaded
+            // (e.g. the item detail drawer's `show()`), or 0 otherwise.
+            'checklist_total_count' => $this->checklist_total_count
+                ?? ($this->relationLoaded('checklistItems') ? $this->checklistItems->count() : 0),
+            'checklist_done_count' => $this->checklist_done_count
+                ?? ($this->relationLoaded('checklistItems') ? $this->checklistItems->where('is_done', true)->count() : 0),
             // Cast to a plain object: if every column id in this map happens to be an
             // integer key, Laravel's JsonResource::removeMissingValues() treats the
             // array as a list and silently reindexes it from 0 via array_values(),

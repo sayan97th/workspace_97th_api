@@ -36,6 +36,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItemValue> $values
  * @property-read Collection<int, BoardItemComment> $comments
  * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
+ * @property-read Collection<int, BoardItemChecklistItem> $checklistItems
  */
 #[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'is_archived', 'created_by_id'])]
 class BoardItem extends Model
@@ -109,6 +110,17 @@ class BoardItem extends Model
     public function commentAttachments(): HasManyThrough
     {
         return $this->hasManyThrough(BoardItemCommentAttachment::class, BoardItemComment::class, 'item_id', 'comment_id');
+    }
+
+    /**
+     * This item's subtask checklist lines, in display order — powers the
+     * Kanban card's "✓ done/total" badge and the drawer's Subtasks section.
+     *
+     * @return HasMany<BoardItemChecklistItem, $this>
+     */
+    public function checklistItems(): HasMany
+    {
+        return $this->hasMany(BoardItemChecklistItem::class, 'item_id')->orderBy('position');
     }
 
     /**

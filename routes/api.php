@@ -16,6 +16,7 @@ use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardInvitationController;
+use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardViewController;
@@ -229,6 +230,12 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
                 Route::post('{comment}/like', [BoardItemCommentController::class, 'toggleLike']);
                 Route::post('{comment}/reactions', [BoardItemCommentController::class, 'toggleReaction']);
                 Route::post('{comment}/seen', [BoardItemCommentController::class, 'toggleSeen']);
+            });
+
+            Route::prefix('{board_item}/checklist-items')->group(function () {
+                Route::post('/', [BoardItemChecklistItemController::class, 'store']);
+                Route::patch('{checklist_item}', [BoardItemChecklistItemController::class, 'update']);
+                Route::delete('{checklist_item}', [BoardItemChecklistItemController::class, 'destroy']);
             });
         });
 

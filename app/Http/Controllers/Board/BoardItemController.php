@@ -52,7 +52,14 @@ class BoardItemController extends Controller
         $query = $item->items()
             ->where('is_archived', false)
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
-            ->with('values')->withCount(['comments', 'commentAttachments'])->orderBy('group_id')->orderBy('position');
+            ->with('values')
+            ->withCount([
+                'comments',
+                'commentAttachments',
+                'checklistItems as checklist_total_count',
+                'checklistItems as checklist_done_count' => fn ($q) => $q->where('is_done', true),
+            ])
+            ->orderBy('group_id')->orderBy('position');
 
         $query = $this->filter_service->applySearch($query, $request->query('search'));
 
@@ -70,7 +77,7 @@ class BoardItemController extends Controller
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
 
-        $board_item->load(['values', 'group', 'creator']);
+        $board_item->load(['values', 'group', 'creator', 'checklistItems']);
 
         return response()->json(new BoardItemDetailResource($board_item));
     }
