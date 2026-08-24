@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -36,6 +37,7 @@ use Illuminate\Support\Carbon;
  * @property bool $is_favorite
  * @property int $position
  * @property int|null $created_by_id
+ * @property int|null $owner_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
@@ -44,6 +46,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, WorkspaceNavigationItem> $children
  * @property-read Collection<int, WorkspaceNavigationItem> $childrenRecursive
  * @property-read User|null $creator
+ * @property-read User|null $owner
  * @property-read Collection<int, BoardColumn> $columns
  * @property-read Collection<int, BoardGroup> $groups
  * @property-read Collection<int, BoardItem> $items
@@ -67,6 +70,7 @@ use Illuminate\Support\Carbon;
     'is_favorite',
     'position',
     'created_by_id',
+    'owner_id',
 ])]
 class WorkspaceNavigationItem extends Model
 {
@@ -162,6 +166,18 @@ class WorkspaceNavigationItem extends Model
     }
 
     /**
+     * The user administratively responsible for this board, set/reassigned from
+     * Administration > Board ownership — distinct from {@see creator()}, which never
+     * changes once the board is made.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function owner(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'owner_id');
+    }
+
+    /**
      * Every column across every tab of this board. Per-tab content now flows
      * through {@link BoardView::columns()} — use that when you need just one
      * tab's columns.
@@ -251,6 +267,22 @@ class WorkspaceNavigationItem extends Model
         return $this->belongsToMany(User::class, 'board_collaborators', 'board_id', 'user_id')
             ->withPivot('invited_by')
             ->withTimestamps();
+    }
+
+    /**
+     * Scope: leaves that count as an actual "board" (not a doc/dashboard/workflow, and not
+     * the special workspace-manage view), matching {@see ContentController}'s own asset-type
+     * bucketing. Used by Administration > Board ownership, which only deals in real boards.
+     *
+     * @param  Builder<WorkspaceNavigationItem>  $query
+     * @return Builder<WorkspaceNavigationItem>
+     */
+    public function scopeBoards(Builder $query): Builder
+    {
+        $non_board_view_keys = collect(self::ASSET_TYPE_VIEW_KEYS)->flatten()->push('workspace_manage');
+
+        return $query->where('type', self::TYPE_LEAF)
+            ->where(fn (Builder $q) => $q->whereNotIn('view_key', $non_board_view_keys)->orWhereNull('view_key'));
     }
 
     /**

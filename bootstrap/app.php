@@ -2,7 +2,10 @@
 
 use App\Http\Middleware\CheckPermission;
 use App\Http\Middleware\CheckRole;
+use App\Http\Middleware\EnsureIpIsAllowed;
+use App\Http\Middleware\EnsurePanicModeAllows;
 use App\Http\Middleware\EnsureSessionIsActive;
+use App\Http\Middleware\EnsureTwoFactorSetupWhenEnforced;
 use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\HandleAppearance;
 use App\Http\Middleware\HandleInertiaRequests;
@@ -36,6 +39,9 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => CheckPermission::class,
             'active' => EnsureUserIsActive::class,
             'session.active' => EnsureSessionIsActive::class,
+            'panic.mode' => EnsurePanicModeAllows::class,
+            'ip.allowed' => EnsureIpIsAllowed::class,
+            'two_factor.enforced' => EnsureTwoFactorSetupWhenEnforced::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

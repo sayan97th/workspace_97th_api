@@ -7,6 +7,7 @@ use App\Http\Requests\Workspace\StoreWorkspaceInvitationRequest;
 use App\Http\Resources\WorkspaceInvitationResource;
 use App\Jobs\SendEmailJob;
 use App\Mail\WorkspaceInvitationMail;
+use App\Models\AccountSetting;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceInvitation;
@@ -15,6 +16,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class WorkspaceInvitationController extends Controller
@@ -139,6 +141,13 @@ class WorkspaceInvitationController extends Controller
             ->pluck('email')
             ->map(fn (string $email) => strtolower($email));
 
+        // Administration > Authentication > "Guests invite domain approval": a plain member
+        // (not an account admin, who set this policy and can be trusted to override it)
+        // can't invite an email outside the approved domain list.
+        $settings = AccountSetting::current();
+        $requires_domain_approval = $settings->guest_approval_enabled && ! $user->hasRole(['super_admin', 'admin']);
+        $approved_domains = collect($settings->approved_domains ?? [])->map(fn (string $domain) => strtolower(trim($domain)));
+
         $invitations = collect();
         $skipped = collect();
 
@@ -147,6 +156,15 @@ class WorkspaceInvitationController extends Controller
                 $skipped->push(['email' => $email, 'reason' => 'already_member']);
 
                 continue;
+            }
+
+            if ($requires_domain_approval) {
+                $domain = strtolower(Str::after($email, '@'));
+                if (! $approved_domains->contains($domain)) {
+                    $skipped->push(['email' => $email, 'reason' => 'domain_not_approved']);
+
+                    continue;
+                }
             }
 
             $invitation = WorkspaceInvitation::where('workspace_id', $workspace->id)

@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -35,6 +36,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string $password
  * @property string|null $phone
  * @property string|null $job_title
+ * @property int|null $department_id
  * @property string|null $timezone
  * @property string|null $profile_photo_path
  * @property bool $is_active
@@ -65,9 +67,10 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, Workspace> $workspaces
  * @property-read Collection<int, AccountTeam> $accountTeams
  * @property-read Collection<int, UserSession> $sessions
+ * @property-read Department|null $department
  */
 #[Fillable([
-    'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'job_title', 'timezone', 'profile_photo_path', 'is_active',
+    'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
     'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
     'notification_preferences', 'desktop_notifications_enabled',
     'language', 'time_format', 'date_format', 'first_day_of_week',
@@ -177,6 +180,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     {
         return $this->belongsToMany(AccountTeam::class, 'account_team_user')
             ->withTimestamps();
+    }
+
+    /**
+     * The {@see Department} this user is assigned to, if any.
+     *
+     * @return BelongsTo<Department, $this>
+     */
+    public function department(): BelongsTo
+    {
+        return $this->belongsTo(Department::class);
     }
 
     /**

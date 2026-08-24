@@ -1,11 +1,11 @@
 <?php
 
-namespace App\Http\Requests\Admin\User;
+namespace App\Http\Requests\Admin\BoardOwnership;
 
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 
-class UpdateUserRequest extends FormRequest
+class BulkReassignBoardOwnerRequest extends FormRequest
 {
     /**
      * Get the validation rules that apply to the request.
@@ -15,8 +15,8 @@ class UpdateUserRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'phone' => ['sometimes', 'nullable', 'string', 'max:30'],
-            'department_id' => ['sometimes', 'nullable', 'integer', 'exists:departments,id'],
+            'current_owner_id' => ['required', 'integer', 'exists:users,id'],
+            'new_owner_id' => ['required', 'integer', 'exists:users,id', 'different:current_owner_id'],
         ];
     }
 }

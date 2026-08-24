@@ -3,9 +3,15 @@
 namespace App\Http\Controllers\Admin\User;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\User\InviteUserRequest;
 use App\Http\Requests\Admin\User\UpdateUserRequest;
+use App\Http\Resources\StaffInvitationResource;
 use App\Http\Resources\UserWithRolesResource;
+use App\Jobs\SendEmailJob;
+use App\Mail\StaffInvitationMail;
+use App\Models\StaffInvitation;
 use App\Models\User;
+use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -27,6 +33,7 @@ class UserController extends Controller
         $sort_direction = $request->query('sort_direction', 'desc');
         $email_status = $request->query('email_status');
         $account_status = $request->query('account_status');
+        $department = $request->query('department');
 
         if ($type !== null && ! \in_array($type, ['staff', 'client'], true)) {
             return response()->json([
@@ -50,7 +57,7 @@ class UserController extends Controller
             $role = null;
         }
 
-        $query = User::with('roles:id,name,display_name')
+        $query = User::with(['roles:id,name,display_name', 'department:id,name'])
             ->orderBy($sort_field, $sort_direction);
 
         if ($type === 'staff') {
@@ -84,6 +91,17 @@ class UserController extends Controller
             $query->where('is_active', false);
         }
 
+        if ($department === 'unassigned') {
+            // Not just `whereNull('department_id')`: a department that's been soft-deleted
+            // still leaves its old members' `department_id` column set, but the `department`
+            // relation (and therefore `UserWithRolesResource`) already treats them as
+            // unassigned since the relation query excludes trashed rows — this filter needs
+            // to agree with what the UI actually shows.
+            $query->whereDoesntHave('department');
+        } elseif ($department !== null && ctype_digit($department)) {
+            $query->where('department_id', (int) $department);
+        }
+
         $per_page = min((int) $request->query('per_page', 15), 500);
         $users = $query->paginate($per_page);
 
@@ -100,7 +118,7 @@ class UserController extends Controller
      */
     public function show(User $user): JsonResponse
     {
-        $user->load('roles:id,name,display_name');
+        $user->load(['roles:id,name,display_name', 'department:id,name']);
 
         return response()->json(new UserWithRolesResource($user));
     }
@@ -114,7 +132,7 @@ class UserController extends Controller
 
         return response()->json([
             'message' => 'User updated successfully.',
-            'user' => new UserWithRolesResource($user->fresh('roles:id,name,display_name')),
+            'user' => new UserWithRolesResource($user->fresh(['roles:id,name,display_name', 'department:id,name'])),
         ]);
     }
 
@@ -140,9 +158,11 @@ class UserController extends Controller
 
         $user->update(['is_active' => false]);
 
+        AuditLogger::log('user.deactivated', "Deactivated {$user->full_name}'s account.", $actor, ['target_user_id' => $user->id]);
+
         return response()->json([
             'message' => 'User account has been disabled.',
-            'user' => new UserWithRolesResource($user->fresh('roles:id,name,display_name')),
+            'user' => new UserWithRolesResource($user->fresh(['roles:id,name,display_name', 'department:id,name'])),
         ]);
     }
 
@@ -164,10 +184,72 @@ class UserController extends Controller
 
         $user->update(['is_active' => true]);
 
+        AuditLogger::log('user.reactivated', "Reactivated {$user->full_name}'s account.", $actor, ['target_user_id' => $user->id]);
+
         return response()->json([
             'message' => 'User account has been re-enabled.',
-            'user' => new UserWithRolesResource($user->fresh('roles:id,name,display_name')),
+            'user' => new UserWithRolesResource($user->fresh(['roles:id,name,display_name', 'department:id,name'])),
         ]);
+    }
+
+    /**
+     * POST /api/admin/users/invite
+     *
+     * Invites a brand-new platform user by email, with a role (and optionally a department)
+     * pre-assigned before they ever register. Resends (updates in place) rather than
+     * duplicates any invitation still pending for that address, mirroring
+     * `Workspace\WorkspaceInvitationController::store()`'s idiom.
+     */
+    public function invite(InviteUserRequest $request): JsonResponse
+    {
+        /** @var User $actor */
+        $actor = $request->user();
+        $validated = $request->validated();
+        $role = (string) $validated['role'];
+
+        if (! $this->actorCanInviteAs($actor, $role)) {
+            return response()->json([
+                'message' => "You do not have permission to invite someone as {$role}.",
+            ], 403);
+        }
+
+        $existing = StaffInvitation::whereRaw('LOWER(email) = ?', [strtolower($validated['email'])])
+            ->whereNull('accepted_at')
+            ->first();
+
+        $attributes = [
+            'email' => $validated['email'],
+            'role' => $role,
+            'department_id' => $validated['department_id'] ?? null,
+            'message' => $validated['message'] ?? null,
+            'invited_by' => $actor->id,
+            'expires_at' => now()->addDays(7),
+        ];
+
+        $invitation = $existing ? tap($existing)->update($attributes) : StaffInvitation::create($attributes);
+
+        SendEmailJob::dispatchWithThrottle(new StaffInvitationMail($invitation->fresh('inviter')), $invitation->email);
+
+        AuditLogger::log('user.invited', "Invited {$invitation->email} as {$role}.", $actor, ['email' => $invitation->email, 'role' => $role]);
+
+        return response()->json([
+            'message' => 'Invitation sent successfully.',
+            'invitation' => new StaffInvitationResource($invitation),
+        ], 201);
+    }
+
+    /**
+     * Only a super_admin may invite someone directly into a super_admin/admin role; a plain
+     * admin may only invite staff/client accounts, matching {@see actorCanManage()}'s same
+     * "admin can't touch admin-tier accounts" boundary.
+     */
+    private function actorCanInviteAs(User $actor, string $role): bool
+    {
+        if ($actor->hasRole('super_admin')) {
+            return true;
+        }
+
+        return ! in_array($role, ['super_admin', 'admin'], true);
     }
 
     /**

@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Admin\Role;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\Role\AssignRoleRequest;
 use App\Http\Requests\Admin\Role\RevokeRoleRequest;
+use App\Http\Resources\UserWithRolesResource;
 use App\Models\Role;
 use App\Models\User;
+use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 
 class RoleController extends Controller
@@ -27,11 +29,18 @@ class RoleController extends Controller
     public function assignRole(AssignRoleRequest $request, User $user): JsonResponse
     {
         $user->assignRole($request->validated('role'));
-        $user->load('roles:id,name,display_name');
+        $user->load(['roles:id,name,display_name', 'department:id,name']);
+
+        AuditLogger::log(
+            'role.assigned',
+            "Assigned role \"{$request->validated('role')}\" to {$user->full_name}.",
+            $request->user(),
+            ['target_user_id' => $user->id, 'role' => $request->validated('role')]
+        );
 
         return response()->json([
             'message' => 'Role assigned successfully.',
-            'user' => $user,
+            'user' => new UserWithRolesResource($user),
         ]);
     }
 
@@ -41,11 +50,18 @@ class RoleController extends Controller
     public function revokeRole(RevokeRoleRequest $request, User $user): JsonResponse
     {
         $user->removeRole($request->validated('role'));
-        $user->load('roles:id,name,display_name');
+        $user->load(['roles:id,name,display_name', 'department:id,name']);
+
+        AuditLogger::log(
+            'role.revoked',
+            "Revoked role \"{$request->validated('role')}\" from {$user->full_name}.",
+            $request->user(),
+            ['target_user_id' => $user->id, 'role' => $request->validated('role')]
+        );
 
         return response()->json([
             'message' => 'Role revoked successfully.',
-            'user' => $user,
+            'user' => new UserWithRolesResource($user),
         ]);
     }
 }

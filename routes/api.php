@@ -2,7 +2,15 @@
 
 use App\Http\Controllers\AccountTeam\AccountTeamController;
 use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
+use App\Http\Controllers\Admin\AccountSetting\AccountSettingController;
+use App\Http\Controllers\Admin\AccountSetting\AdvancedSettingsController;
+use App\Http\Controllers\Admin\AccountSetting\AuthenticationSettingsController;
+use App\Http\Controllers\Admin\AccountSetting\BrandingController;
+use App\Http\Controllers\Admin\AuditLogController;
+use App\Http\Controllers\Admin\BoardOwnershipController;
+use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\Role\RoleController;
+use App\Http\Controllers\Admin\SessionController as AdminSessionController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
 use App\Http\Controllers\Admin\WebsocketTest\WebsocketTestController;
 use App\Http\Controllers\Auth\AuthController;
@@ -10,6 +18,7 @@ use App\Http\Controllers\Auth\BoardInvitationController as AuthBoardInvitationCo
 use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Auth\TwoFactorController;
+use App\Http\Controllers\Auth\StaffInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
 use App\Http\Controllers\Board\BoardColumnController;
@@ -23,6 +32,7 @@ use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
+use App\Http\Controllers\BrandingController as PublicBrandingController;
 use App\Http\Controllers\BroadcastAuthController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\Notification\NotificationController;
@@ -72,6 +82,13 @@ Route::prefix('auth')->group(function () {
         Route::post('{invitation}/decline', [AuthBoardInvitationController::class, 'decline']);
     });
 
+    // Public — the Administration "Invite" emailed link for a brand-new platform user, with
+    // a role (and optionally a department) pre-assigned before they register.
+    Route::prefix('staff-invitations')->group(function () {
+        Route::get('{invitation}', [StaffInvitationController::class, 'show']);
+        Route::post('{invitation}/accept', [StaffInvitationController::class, 'accept']);
+    });
+
     Route::prefix('google')->group(function () {
         Route::get('redirect', [GoogleAuthController::class, 'redirect']);
         Route::get('callback', [GoogleAuthController::class, 'callback']);
@@ -85,11 +102,15 @@ Route::prefix('auth')->group(function () {
 });
 
 // ─── Authenticated routes ───────────────────────────────────────────────────
-Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
+Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
 
     // Broadcasting auth (JWT-based) — used by the frontend's Echo client to
     // subscribe to private channels, see routes/channels.php.
     Route::post('broadcasting/auth', [BroadcastAuthController::class, 'authenticate']);
+
+    // Account branding (logo, email header) — readable by any authenticated user, not just
+    // staff, since the top bar shows it for everyone. Managed at `/admin/account-settings/*`.
+    Route::get('branding', [PublicBrandingController::class, 'show']);
 
     // Notifications — real-time (Reverb) + REST-readable notification feed.
     Route::prefix('notifications')->group(function () {
@@ -296,6 +317,7 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
             Route::patch('users/{user}', [AdminUserController::class, 'update']);
             Route::patch('users/{user}/ban', [AdminUserController::class, 'ban']);
             Route::patch('users/{user}/unban', [AdminUserController::class, 'unban']);
+            Route::post('users/invite', [AdminUserController::class, 'invite']);
         });
 
         // Role management — super_admin only
@@ -309,6 +331,57 @@ Route::middleware(['auth:api', 'active', 'session.active'])->group(function () {
         Route::prefix('websocket-test')->group(function () {
             Route::get('status', [WebsocketTestController::class, 'status']);
             Route::post('ping', [WebsocketTestController::class, 'ping']);
+        });
+
+        // Account-wide settings (Administration: Profile, Account, Branding metadata,
+        // Authentication policy, Advanced) — a single settings row, see AccountSetting::current().
+        Route::prefix('account-settings')->group(function () {
+            Route::get('/', [AccountSettingController::class, 'show']);
+
+            Route::middleware('role:super_admin,admin')->group(function () {
+                Route::patch('profile', [AccountSettingController::class, 'updateProfile']);
+                Route::patch('preferences', [AccountSettingController::class, 'updatePreferences']);
+                Route::post('logo', [BrandingController::class, 'storeLogo']);
+                Route::delete('logo', [BrandingController::class, 'destroyLogo']);
+                Route::post('email-header', [BrandingController::class, 'storeEmailHeader']);
+                Route::delete('email-header', [BrandingController::class, 'destroyEmailHeader']);
+                Route::patch('authentication', [AuthenticationSettingsController::class, 'update']);
+                Route::post('scim-token/rotate', [AuthenticationSettingsController::class, 'rotateScimToken']);
+                Route::patch('advanced', [AdvancedSettingsController::class, 'update']);
+                Route::post('panic-mode', [AdvancedSettingsController::class, 'activatePanicMode']);
+                Route::delete('panic-mode', [AdvancedSettingsController::class, 'deactivatePanicMode']);
+            });
+        });
+
+        // Departments — account-wide organizational units, one per user, used for
+        // headcount/seat-limit tracking on the Administration Users/Departments sections.
+        Route::prefix('departments')->group(function () {
+            Route::get('/', [DepartmentController::class, 'index']);
+
+            Route::middleware('role:super_admin,admin')->group(function () {
+                Route::post('/', [DepartmentController::class, 'store']);
+                Route::patch('{department}', [DepartmentController::class, 'update']);
+                Route::delete('{department}', [DepartmentController::class, 'destroy']);
+            });
+        });
+
+        // Board ownership — reassigning a departed/renamed staff member's boards, and
+        // assigning an owner to boards that have never had one. Admin+ only: high blast
+        // radius (bulk reassign moves every board a person owns in one call).
+        Route::prefix('board-ownership')->middleware('role:super_admin,admin')->group(function () {
+            Route::get('orphans', [BoardOwnershipController::class, 'orphans']);
+            Route::post('reassign', [BoardOwnershipController::class, 'bulkReassign']);
+            Route::patch('orphans/{item}', [BoardOwnershipController::class, 'assignOrphan']);
+        });
+
+        // Audit log — read-only trail of every consequential Administration action.
+        Route::get('audit-log', [AuditLogController::class, 'index']);
+
+        // Account-wide session management (view/revoke any user's active session).
+        Route::prefix('sessions')->middleware('role:super_admin,admin')->group(function () {
+            Route::get('/', [AdminSessionController::class, 'index']);
+            Route::delete('{session}', [AdminSessionController::class, 'destroy']);
+            Route::delete('/', [AdminSessionController::class, 'destroyAll']);
         });
     });
 

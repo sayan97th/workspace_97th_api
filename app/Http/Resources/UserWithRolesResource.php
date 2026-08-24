@@ -33,6 +33,10 @@ class UserWithRolesResource extends JsonResource
                 'name' => $role->name,
                 'display_name' => $role->display_name,
             ])->values(),
+            'department' => $this->whenLoaded('department', fn () => $this->department ? [
+                'id' => $this->department->id,
+                'name' => $this->department->name,
+            ] : null),
         ];
     }
 }
