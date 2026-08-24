@@ -107,6 +107,40 @@ class ChartDataService
     }
 
     /**
+     * The "nothing to chart yet" payload — either no source tab exists at all
+     * (`$resolved_config`/`$group_by_columns`/`$value_columns` omitted), or a
+     * source tab was resolved but has zero items (all three supplied by
+     * `build()` so the config panel can still render with real options).
+     *
+     * @param  array<string, mixed>  $config  the view's own (unresolved) chart_config, for its `chart_type`/`date_bucket` picks to survive even with nothing to chart
+     * @param  array<int, array<string, string>>  $group_by_columns
+     * @param  array<int, array<string, string>>  $value_columns
+     * @param  array<string, mixed>|null  $resolved_config
+     * @return array<string, mixed>
+     */
+    private function emptyResult(WorkspaceNavigationItem $board, array $config, array $group_by_columns = [], array $value_columns = [], ?array $resolved_config = null): array
+    {
+        return [
+            'config' => $resolved_config ?? [
+                'chart_type' => $this->resolveChartType($config['chart_type'] ?? null),
+                'source_view_id' => $config['source_view_id'] ?? null,
+                'group_by_column_id' => self::GROUP_SENTINEL,
+                'split_by_column_id' => null,
+                'aggregate_fn' => 'count',
+                'value_column_id' => null,
+                'date_bucket' => $this->resolveDateBucket($config['date_bucket'] ?? null),
+            ],
+            'categories' => [],
+            'series' => [],
+            'total' => 0,
+            'has_data' => false,
+            'source_views' => $this->sourceViewOptions($board),
+            'group_by_columns' => $group_by_columns,
+            'value_columns' => $value_columns,
+        ];
+    }
+
+    /**
      * The board's own tabs a chart can pull data from — every tab except
      * other chart tabs (which have no items of their own to chart).
      *
