@@ -26,6 +26,8 @@ class UpdateBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_TAGS,
                 BoardColumn::TYPE_NUMBER,
                 BoardColumn::TYPE_CHECKBOX,
+                BoardColumn::TYPE_TIMELINE,
+                BoardColumn::TYPE_DEPENDENCY,
             ])],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
             'config' => ['sometimes', 'nullable', 'array'],

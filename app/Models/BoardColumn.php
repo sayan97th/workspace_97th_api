@@ -66,6 +66,12 @@ class BoardColumn extends Model
 
     public const TYPE_CHECKBOX = 'checkbox';
 
+    /** Stores a `{start, end}` date-range value (both `YYYY-MM-DD`) — what the Gantt view's bars are actually driven by, mirroring monday.com's own Timeline column. */
+    public const TYPE_TIMELINE = 'timeline';
+
+    /** Stores an array of predecessor item ids (Finish-to-Start only, mirroring the most common of monday.com's four dependency modes) — drives the Gantt view's arrows and auto-reschedule. */
+    public const TYPE_DEPENDENCY = 'dependency';
+
     /**
      * The board (navigation leaf) this column belongs to.
      *

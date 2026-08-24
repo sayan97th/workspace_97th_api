@@ -45,6 +45,8 @@ class StoreBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_TAGS,
                 BoardColumn::TYPE_NUMBER,
                 BoardColumn::TYPE_CHECKBOX,
+                BoardColumn::TYPE_TIMELINE,
+                BoardColumn::TYPE_DEPENDENCY,
             ])],
             'position' => ['sometimes', 'integer', 'min:0'],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
