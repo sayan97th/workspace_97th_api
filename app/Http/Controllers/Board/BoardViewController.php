@@ -11,6 +11,7 @@ use App\Http\Resources\BoardViewResource;
 use App\Models\BoardView;
 use App\Models\BoardViewUserOrder;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\ChartDataService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -218,6 +219,20 @@ class BoardViewController extends Controller
             'message' => 'View duplicated successfully.',
             'view' => new BoardViewResource($copy->fresh(['creator'])),
         ], 201);
+    }
+
+    /**
+     * GET /api/boards/{item}/views/{board_view}/chart-data
+     *
+     * Computed chart series for a `chart`-type view — see
+     * {@see ChartDataService} for how a chart tab's own (empty) content is
+     * bypassed in favor of aggregating another tab's items.
+     */
+    public function chartData(Request $request, WorkspaceNavigationItem $item, BoardView $board_view): JsonResponse
+    {
+        $this->ensureViewBelongsToBoard($item, $board_view);
+
+        return response()->json((new ChartDataService)->build($item, $board_view));
     }
 
     /**

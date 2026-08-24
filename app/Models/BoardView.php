@@ -24,6 +24,7 @@ use Illuminate\Support\Carbon;
  * @property string $label
  * @property string $view_type
  * @property string|null $doc_content
+ * @property array<string, mixed>|null $chart_config
  * @property string|null $icon
  * @property int $position
  * @property bool $is_primary
@@ -51,6 +52,7 @@ use Illuminate\Support\Carbon;
     'label',
     'view_type',
     'doc_content',
+    'chart_config',
     'icon',
     'position',
     'is_primary',
@@ -150,6 +152,7 @@ class BoardView extends Model
             'hidden_column_ids' => 'array',
             'pinned_column_ids' => 'array',
             'conditional_color_rules' => 'array',
+            'chart_config' => 'array',
         ];
     }
 }

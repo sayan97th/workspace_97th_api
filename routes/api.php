@@ -274,6 +274,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{board_view}', [BoardViewController::class, 'update']);
             Route::delete('{board_view}', [BoardViewController::class, 'destroy']);
             Route::post('{board_view}/duplicate', [BoardViewController::class, 'duplicate']);
+            Route::get('{board_view}/chart-data', [BoardViewController::class, 'chartData']);
             Route::post('{board_view}/pin', [BoardViewController::class, 'togglePin']);
             Route::post('{board_view}/lock', [BoardViewController::class, 'toggleLock']);
             Route::post('{board_view}/images', [BoardViewImageController::class, 'store']);

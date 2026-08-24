@@ -35,6 +35,8 @@ class BoardViewResource extends JsonResource
             'view_type' => $this->view_type,
             // Markdown source for a `doc`-type view — null/unused for every other kind.
             'doc_content' => $this->doc_content,
+            // Chart type/data source/grouping for a `chart`-type view — null/unused for every other kind.
+            'chart_config' => $this->chart_config,
             'icon' => $this->icon,
             'position' => $this->position,
             'is_primary' => $this->is_primary,
