@@ -23,6 +23,7 @@ class BoardColumnResource extends JsonResource
             'key' => $this->key,
             'label' => $this->label,
             'type' => $this->type,
+            'scope' => $this->scope,
             'position' => $this->position,
             'width' => $this->width,
             'config' => $this->config,

@@ -23,14 +23,22 @@ class BoardColumnController extends Controller
      * GET /api/boards/{item}/columns
      *
      * Scoped to one tab — `view_id` if given, otherwise the board's primary
-     * tab. Returns an empty list when that tab doesn't exist yet.
+     * tab. Returns an empty list when that tab doesn't exist yet. Returns
+     * both item- and subitem-scoped columns together by default (the
+     * frontend splits them by `scope` once, since most callers need both);
+     * pass `scope` to fetch only one set.
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $view = $this->view_resolver->resolveForRead($item, $this->viewIdParam($request));
+        $columns = $view?->columns ?? collect();
+
+        if ($request->filled('scope')) {
+            $columns = $columns->where('scope', $request->query('scope'))->values();
+        }
 
         return response()->json([
-            'data' => BoardColumnResource::collection($view?->columns ?? collect()),
+            'data' => BoardColumnResource::collection($columns),
         ]);
     }
 
@@ -41,13 +49,15 @@ class BoardColumnController extends Controller
     {
         $validated = $request->validated();
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
+        $scope = $validated['scope'] ?? BoardColumn::SCOPE_ITEM;
 
         $column = $view->columns()->create([
             'board_id' => $item->id,
             'key' => $validated['key'],
             'label' => $validated['label'],
             'type' => $validated['type'],
-            'position' => $validated['position'] ?? $this->nextPosition($view),
+            'scope' => $scope,
+            'position' => $validated['position'] ?? $this->nextPosition($view, $scope),
             'width' => $validated['width'] ?? 180,
             'config' => $validated['config'] ?? $this->defaultConfigFor($validated['type']),
             'hideable' => $validated['hideable'] ?? true,
@@ -114,11 +124,13 @@ class BoardColumnController extends Controller
     }
 
     /**
-     * The next free position among the tab's columns (append to the end).
+     * The next free position among the tab's columns of the given scope
+     * (append to the end) — item and subitem columns each have their own
+     * independent position sequence.
      */
-    private function nextPosition(BoardView $view): int
+    private function nextPosition(BoardView $view, string $scope): int
     {
-        return (int) $view->columns()->max('position') + 1;
+        return (int) $view->columns()->where('scope', $scope)->max('position') + 1;
     }
 
     /**

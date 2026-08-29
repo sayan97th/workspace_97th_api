@@ -287,7 +287,14 @@ class BoardItemController extends Controller
      */
     private function syncValues(WorkspaceNavigationItem $item, BoardItem $board_item, array $values, ?User $actor = null): void
     {
+        // A subitem may only be assigned values for subitem-scoped columns,
+        // and a root item only for item-scoped ones — the two column sets are
+        // independent, mirroring how monday.com's subitems carry their own
+        // separate columns rather than reusing the parent item's.
+        $scope = $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
+
         $valid_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
+            ->where('scope', $scope)
             ->whereIn('id', array_map('intval', array_keys($values)))
             ->get(['id', 'type'])
             ->keyBy('id');

@@ -29,9 +29,14 @@ class StoreBoardItemRequest extends FormRequest
                 'required_without:parent_id', 'integer',
                 Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),
             ],
+            // Only two levels deep are allowed (item -> subitem, mirroring
+            // monday.com) — the target must itself be a root item, so a
+            // subitem can never become a parent of its own.
             'parent_id' => [
                 'sometimes', 'nullable', 'integer',
-                Rule::exists('board_items', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),
+                Rule::exists('board_items', 'id')->where(fn ($query) => $query
+                    ->where('board_id', $board_id)
+                    ->whereNull('parent_id')),
             ],
             'position' => ['sometimes', 'integer', 'min:0'],
             'values' => ['sometimes', 'array'],

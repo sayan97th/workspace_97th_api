@@ -26,15 +26,19 @@ class StoreBoardColumnRequest extends FormRequest
         // so the uniqueness check lines up with where the column actually lands.
         $view_id = $this->input('view_id')
             ?? WorkspaceNavigationItem::find($board_id)?->views()->where('is_primary', true)->value('id');
+        $scope = $this->input('scope', BoardColumn::SCOPE_ITEM);
 
         return [
             'view_id' => [
                 'sometimes', 'nullable', 'integer',
                 Rule::exists('board_views', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),
             ],
+            'scope' => ['sometimes', 'string', Rule::in([BoardColumn::SCOPE_ITEM, BoardColumn::SCOPE_SUBITEM])],
             'key' => [
                 'required', 'string', 'max:100', 'regex:/^[a-z0-9_]+$/',
-                Rule::unique('board_columns', 'key')->where(fn ($query) => $query->where('board_view_id', $view_id)),
+                Rule::unique('board_columns', 'key')->where(fn ($query) => $query
+                    ->where('board_view_id', $view_id)
+                    ->where('scope', $scope)),
             ],
             'label' => ['required', 'string', 'max:255'],
             'type' => ['required', 'string', Rule::in([

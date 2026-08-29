@@ -16,7 +16,11 @@ use Illuminate\Support\Carbon;
  * A single column definition on one tab (`board_view_id`) of a board, e.g.
  * "Status" or "Assigned to". The column `type` drives how {@link BoardItemValue}
  * values are shaped and how the frontend renders/edits cells. Columns are
- * independent per tab — two tabs on the same board may define the same `key`.
+ * independent per tab — two tabs on the same board may define the same `key` —
+ * and independent per {@link scope}: a root item's columns and a subitem's
+ * columns are two separate sets (mirroring monday.com, where subitems live on
+ * an implicit separate sub-board with their own columns), so the same `key`
+ * may also be reused once per scope within a tab.
  *
  * @property int $id
  * @property int $board_id
@@ -24,6 +28,7 @@ use Illuminate\Support\Carbon;
  * @property string $key
  * @property string $label
  * @property string $type
+ * @property string $scope
  * @property int $position
  * @property int $width
  * @property array<string, mixed>|null $config
@@ -41,6 +46,7 @@ use Illuminate\Support\Carbon;
     'key',
     'label',
     'type',
+    'scope',
     'position',
     'width',
     'config',
@@ -51,6 +57,12 @@ class BoardColumn extends Model
 {
     /** @use HasFactory<BoardColumnFactory> */
     use BelongsToBoardView, HasFactory;
+
+    /** A column shown on the board's own (root) items. */
+    public const SCOPE_ITEM = 'item';
+
+    /** A column shown on subitems — a separate set from the parent item's own columns. */
+    public const SCOPE_SUBITEM = 'subitem';
 
     public const TYPE_TEXT = 'text';
 
