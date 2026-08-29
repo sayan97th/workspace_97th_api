@@ -24,9 +24,27 @@ class BoardItemResource extends JsonResource
             'id' => $this->id,
             'board_id' => $this->board_id,
             'group_id' => $this->group_id,
+            'parent_id' => $this->parent_id,
             'name' => $this->name,
             'description' => $this->description,
             'position' => $this->position,
+            // Direct subitem count, for the collapsed-row "N Subitems" badge —
+            // falls back to a loaded `children` count when the `withCount`
+            // alias isn't present (mirrors `checklist_total_count` below).
+            'subitem_count' => $this->subitem_count
+                ?? ($this->relationLoaded('children') ? $this->children->count() : 0),
+            // The item's full subitem subtree, nested recursively — only
+            // `index()` (and a duplicated item's own response) eager-load
+            // `childrenRecursive`; every other action (store/update/
+            // updateValues) resolves this to a real empty array. Deliberately
+            // not `self::collection($this->whenLoaded(...))`: with no relation
+            // loaded, that resolves to a `MissingValue`-backed collection that
+            // the framework strips from the JSON entirely rather than emitting
+            // `[]`, which would leave `children` undefined client-side even
+            // though the frontend type declares it as a required array.
+            'children' => $this->relationLoaded('childrenRecursive')
+                ? self::collection($this->childrenRecursive)
+                : [],
             // Only `index()` eager-loads the `comments`/`commentAttachments` counts
             // (the board table's row chat icon and the Kanban card's attachment
             // count); other actions that return this resource (store/update/

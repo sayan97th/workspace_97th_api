@@ -22,6 +22,7 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $board_id
  * @property int $group_id
+ * @property int|null $parent_id
  * @property string $name
  * @property string|null $description
  * @property int $position
@@ -33,12 +34,15 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem $board
  * @property-read BoardGroup $group
  * @property-read User|null $creator
+ * @property-read BoardItem|null $parent
+ * @property-read Collection<int, BoardItem> $children
+ * @property-read Collection<int, BoardItem> $childrenRecursive
  * @property-read Collection<int, BoardItemValue> $values
  * @property-read Collection<int, BoardItemComment> $comments
  * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
  * @property-read Collection<int, BoardItemChecklistItem> $checklistItems
  */
-#[Fillable(['board_id', 'group_id', 'name', 'description', 'position', 'is_archived', 'created_by_id'])]
+#[Fillable(['board_id', 'group_id', 'parent_id', 'name', 'description', 'position', 'is_archived', 'created_by_id'])]
 class BoardItem extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
@@ -76,6 +80,48 @@ class BoardItem extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_id');
+    }
+
+    /**
+     * The item this is a subitem of, or null for a top-level (root) item.
+     *
+     * @return BelongsTo<BoardItem, $this>
+     */
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_id');
+    }
+
+    /**
+     * This item's direct subitems, in display order.
+     *
+     * @return HasMany<BoardItem, $this>
+     */
+    public function children(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_id')->orderBy('position');
+    }
+
+    /**
+     * This item's entire subtree (children, grandchildren, ...), eager-loading
+     * itself so a single `with('childrenRecursive')` on a root loads every
+     * level in one query pass — mirrors {@see WorkspaceNavigationItem::childrenRecursive()}.
+     * Also loads `values` and the same rollup counts {@see BoardItemController::index()}
+     * loads for root items, since a subitem renders through the exact same
+     * cell/badge machinery as a root row.
+     *
+     * @return HasMany<BoardItem, $this>
+     */
+    public function childrenRecursive(): HasMany
+    {
+        return $this->children()->with(['childrenRecursive', 'values'])->withCount([
+            'comments',
+            'commentAttachments',
+            'attachments',
+            'checklistItems as checklist_total_count',
+            'checklistItems as checklist_done_count' => fn ($q) => $q->where('is_done', true),
+            'children as subitem_count',
+        ]);
     }
 
     /**

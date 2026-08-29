@@ -33,13 +33,15 @@ class BoardItemController extends Controller
     /**
      * GET /api/boards/{item}/items
      *
-     * Returns every item in the tab (`view_id` if given, otherwise the
-     * board's primary tab) with its values, optionally narrowed by a
+     * Returns every top-level item in the tab (`view_id` if given, otherwise
+     * the board's primary tab) with its values and its entire subitem
+     * subtree eager-loaded via `childrenRecursive`, optionally narrowed by a
      * `search` term. An item's tab is derived through its group
      * (`board_groups.board_view_id`), since every item requires a group.
      * Grouping/sorting/hiding/coloring is derived client-side by
-     * `useBoardToolbar` from this full set — see the plan's "filter
-     * execution model" note.
+     * `useBoardToolbar` from this full set — since it only ever sees roots,
+     * subitems are invisible to filter/sort/search/group-by by design; they
+     * only ever render nested beneath their (visible, expanded) parent.
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -51,14 +53,16 @@ class BoardItemController extends Controller
 
         $query = $item->items()
             ->where('is_archived', false)
+            ->whereNull('parent_id')
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
-            ->with('values')
+            ->with(['values', 'childrenRecursive'])
             ->withCount([
                 'comments',
                 'commentAttachments',
                 'attachments',
                 'checklistItems as checklist_total_count',
                 'checklistItems as checklist_done_count' => fn ($q) => $q->where('is_done', true),
+                'children as subitem_count',
             ])
             ->orderBy('group_id')->orderBy('position');
 
@@ -85,16 +89,32 @@ class BoardItemController extends Controller
 
     /**
      * POST /api/boards/{item}/items
+     *
+     * `parent_id` is optional: when given, this creates a subitem of that
+     * item instead of a top-level row — the subitem's `group_id` is always
+     * inherited from its parent (any client-supplied `group_id` is ignored)
+     * so a subitem's denormalized group never diverges from its parent's.
      */
     public function store(StoreBoardItemRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $validated = $request->validated();
+        $parent_id = $validated['parent_id'] ?? null;
+
+        if ($parent_id !== null) {
+            $parent = BoardItem::where('id', $parent_id)->firstOrFail();
+            $group_id = $parent->group_id;
+            $position = $validated['position'] ?? $this->nextPosition($item, $group_id, $parent_id);
+        } else {
+            $group_id = $validated['group_id'];
+            $position = $validated['position'] ?? $this->nextPosition($item, $group_id);
+        }
 
         $board_item = $item->items()->create([
-            'group_id' => $validated['group_id'],
+            'group_id' => $group_id,
+            'parent_id' => $parent_id,
             'name' => $validated['name'],
             'description' => $validated['description'] ?? null,
-            'position' => $validated['position'] ?? $this->nextPosition($item, $validated['group_id']),
+            'position' => $position,
             'created_by_id' => $request->user()?->id,
         ]);
 
@@ -111,13 +131,22 @@ class BoardItemController extends Controller
     /**
      * PATCH /api/boards/{item}/items/{board_item}
      *
-     * Renames the item and/or moves it to a different group.
+     * Renames the item and/or moves it to a different group. Since a
+     * subitem's `group_id` is denormalized from its parent, moving an item
+     * that has children cascades the new `group_id` onto every descendant
+     * too — otherwise a descendant would keep pointing at a group its
+     * parent no longer belongs to.
      */
     public function update(UpdateBoardItemRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
 
-        $board_item->fill($request->validated())->save();
+        $validated = $request->validated();
+        $board_item->fill($validated)->save();
+
+        if (array_key_exists('group_id', $validated)) {
+            $this->cascadeGroupToDescendants($board_item, $validated['group_id']);
+        }
 
         return response()->json([
             'message' => 'Item updated successfully.',
@@ -149,7 +178,7 @@ class BoardItemController extends Controller
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
 
-        $board_item->delete();
+        $this->deleteSubtree($board_item);
 
         return response()->json([
             'message' => 'Item deleted successfully.',
@@ -161,30 +190,17 @@ class BoardItemController extends Controller
      *
      * Selection action bar's "Duplicate" — copies each given item's name,
      * description and column values into its own original group, appended
-     * after that group's existing rows.
+     * after that group's existing rows. Also deep-copies the item's entire
+     * subitem subtree (each descendant keeps its own name/description/values),
+     * matching Monday's own "duplicating an item duplicates its subitems" behavior.
      */
     public function bulkDuplicate(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        $originals = $item->items()->with('values')->whereIn('id', $request->validated()['item_ids'])->get();
+        $originals = $item->items()->with(['values', 'childrenRecursive'])->whereIn('id', $request->validated()['item_ids'])->get();
 
-        $duplicates = $originals->map(function (BoardItem $original) use ($item) {
-            $duplicate = $item->items()->create([
-                'group_id' => $original->group_id,
-                'name' => "{$original->name} (copy)",
-                'description' => $original->description,
-                'position' => $this->nextPosition($item, $original->group_id),
-                'created_by_id' => $original->created_by_id,
-            ]);
-
-            foreach ($original->values as $value) {
-                $duplicate->values()->create([
-                    'column_id' => $value->column_id,
-                    'value' => $value->value,
-                ]);
-            }
-
-            return $duplicate->fresh('values');
-        });
+        $duplicates = $originals->map(
+            fn (BoardItem $original) => $this->copySubtree($item, $original, $original->group_id, null, $this->nextPosition($item, $original->group_id))
+        );
 
         return response()->json([
             'message' => 'Items duplicated successfully.',
@@ -197,6 +213,7 @@ class BoardItemController extends Controller
      *
      * Selection action bar's "Move to" — moves every given item into a
      * different group (table), appended at the end of the target group.
+     * Cascades the new `group_id` onto every descendant, same as `update()`.
      */
     public function bulkMove(BulkMoveBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -210,6 +227,7 @@ class BoardItemController extends Controller
                 'group_id' => $group_id,
                 'position' => $this->nextPosition($item, $group_id),
             ]);
+            $this->cascadeGroupToDescendants($board_item, $group_id);
         }
 
         return response()->json([
@@ -238,11 +256,18 @@ class BoardItemController extends Controller
      * DELETE /api/boards/{item}/items
      *
      * Selection action bar's "Delete" — bulk counterpart of `destroy()`,
-     * soft-deletes every given item.
+     * soft-deletes every given item and its descendants. Loads each item and
+     * deletes it through `deleteSubtree()` rather than a single mass
+     * `whereIn(...)->delete()` query, since a mass query-builder delete
+     * bypasses Eloquent entirely and would leave any subitems orphaned.
      */
     public function bulkDestroy(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        $item->items()->whereIn('id', $request->validated()['item_ids'])->delete();
+        $items = $item->items()->whereIn('id', $request->validated()['item_ids'])->get();
+
+        foreach ($items as $board_item) {
+            $this->deleteSubtree($board_item);
+        }
 
         return response()->json([
             'message' => 'Items deleted successfully.',
@@ -319,10 +344,95 @@ class BoardItemController extends Controller
 
     /**
      * The next free position among a group's items (append to the end).
+     * Root items (`$parent_id === null`) and a given item's subitems each
+     * have their own independent position sequence.
      */
-    private function nextPosition(WorkspaceNavigationItem $item, int $group_id): int
+    private function nextPosition(WorkspaceNavigationItem $item, int $group_id, ?int $parent_id = null): int
     {
-        return (int) $item->items()->where('group_id', $group_id)->max('position') + 1;
+        return (int) $item->items()->where('group_id', $group_id)->where('parent_id', $parent_id)->max('position') + 1;
+    }
+
+    /**
+     * Soft-delete an item and every descendant (soft-deletes don't trigger
+     * the DB's `cascadeOnDelete`, so this has to walk the subtree itself).
+     */
+    private function deleteSubtree(BoardItem $board_item): void
+    {
+        $board_item->loadMissing('childrenRecursive');
+
+        foreach ($this->flattenTree($board_item->childrenRecursive) as $descendant) {
+            $descendant->delete();
+        }
+
+        $board_item->delete();
+    }
+
+    /**
+     * Recursively deep-copy an item and its subtree. `$parent_id` is the new
+     * parent for the copy (`null` for a root); the "(copy)" suffix is only
+     * appended when the copy stays a sibling of the original (i.e. this is
+     * the top of the duplicate operation, not a recursive descendant copy).
+     */
+    private function copySubtree(WorkspaceNavigationItem $item, BoardItem $original, int $group_id, ?int $parent_id, int $position): BoardItem
+    {
+        $copy = $item->items()->create([
+            'group_id' => $group_id,
+            'parent_id' => $parent_id,
+            'name' => $parent_id === $original->parent_id ? "{$original->name} (copy)" : $original->name,
+            'description' => $original->description,
+            'position' => $position,
+            'created_by_id' => $original->created_by_id,
+        ]);
+
+        foreach ($original->values as $value) {
+            $copy->values()->create([
+                'column_id' => $value->column_id,
+                'value' => $value->value,
+            ]);
+        }
+
+        foreach ($original->childrenRecursive as $child) {
+            $this->copySubtree($item, $child, $group_id, $copy->id, $child->position);
+        }
+
+        // Reload `childrenRecursive` (not just `values`) so the copy's own
+        // freshly-created subtree is actually present in the API response —
+        // `BoardItemResource`'s `children` key resolves to an empty list
+        // whenever this relation isn't loaded, mirroring
+        // `WorkspaceNavigationItemController::duplicate()`'s same reload.
+        return $copy->fresh(['values', 'childrenRecursive']);
+    }
+
+    /**
+     * Propagates a new `group_id` onto every descendant of `$board_item`,
+     * keeping each subitem's denormalized `group_id` in sync with its
+     * ancestor chain after the ancestor moves to a different group.
+     */
+    private function cascadeGroupToDescendants(BoardItem $board_item, int $group_id): void
+    {
+        $board_item->loadMissing('childrenRecursive');
+
+        foreach ($this->flattenTree($board_item->childrenRecursive) as $descendant) {
+            $descendant->update(['group_id' => $group_id]);
+        }
+    }
+
+    /**
+     * Flatten a nested collection of items into a single list.
+     *
+     * @param  iterable<BoardItem>  $items
+     * @return array<int, BoardItem>
+     */
+    private function flattenTree(iterable $items): array
+    {
+        $flat = [];
+
+        foreach ($items as $item) {
+            $flat[] = $item;
+            $flat = array_merge($flat, $this->flattenTree($item->childrenRecursive));
+        }
+
+        return $flat;
     }
 
     /**

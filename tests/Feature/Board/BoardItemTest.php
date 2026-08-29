@@ -209,6 +209,115 @@ test('bulk actions reject item ids from another board', function () {
     ])->assertInvalid(['item_ids.0']);
 });
 
+test('a subitem inherits its parent group and is excluded from the top-level index', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $other_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $parent = $board->items()->create(['group_id' => $other_group->id, 'name' => 'Parent', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", [
+        'name' => 'Subitem',
+        'parent_id' => $parent->id,
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('item.parent_id', $parent->id)
+        ->assertJsonPath('item.group_id', $other_group->id);
+
+    $index = $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/items")->assertOk();
+    $index->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $parent->id)
+        ->assertJsonPath('data.0.subitem_count', 1)
+        ->assertJsonCount(1, 'data.0.children')
+        ->assertJsonPath('data.0.children.0.name', 'Subitem');
+});
+
+test('subitems nest to unlimited depth in the index response', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $root = $board->items()->create(['group_id' => $group->id, 'name' => 'Root', 'position' => 0]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $root->id, 'name' => 'Child', 'position' => 0]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $child->id, 'name' => 'Grandchild', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/items")
+        ->assertOk()
+        ->assertJsonPath('data.0.children.0.name', 'Child')
+        ->assertJsonPath('data.0.children.0.children.0.name', 'Grandchild');
+});
+
+test('creating a subitem requires the parent to belong to the same board', function () {
+    [$board] = createItemTestBoard();
+    $user = User::factory()->create();
+    [$other_board, $other_group] = createItemTestBoard();
+    $foreign_parent = $other_board->items()->create(['group_id' => $other_group->id, 'name' => 'Foreign', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", [
+        'name' => 'Subitem',
+        'parent_id' => $foreign_parent->id,
+    ])->assertInvalid(['parent_id']);
+});
+
+test('deleting a parent item cascades to its subitems', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->deleteJson("/api/boards/{$board->id}/items/{$parent->id}")
+        ->assertOk();
+
+    $this->assertSoftDeleted('board_items', ['id' => $parent->id]);
+    $this->assertSoftDeleted('board_items', ['id' => $child->id]);
+});
+
+test('bulk delete cascades to subitems of the given items', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->deleteJson("/api/boards/{$board->id}/items", [
+        'item_ids' => [$parent->id],
+    ])->assertOk();
+
+    $this->assertSoftDeleted('board_items', ['id' => $parent->id]);
+    $this->assertSoftDeleted('board_items', ['id' => $child->id]);
+});
+
+test('moving a parent item cascades its new group onto every subitem', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $target_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/move", [
+        'item_ids' => [$parent->id],
+        'group_id' => $target_group->id,
+    ])->assertOk();
+
+    $this->assertDatabaseHas('board_items', ['id' => $parent->id, 'group_id' => $target_group->id]);
+    $this->assertDatabaseHas('board_items', ['id' => $child->id, 'group_id' => $target_group->id]);
+});
+
+test('bulk duplicate deep-copies a parent item and its subitems', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", [
+        'item_ids' => [$parent->id],
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('items.0.name', 'Parent (copy)')
+        ->assertJsonCount(1, 'items.0.children')
+        ->assertJsonPath('items.0.children.0.name', 'Child');
+});
+
 test('inline cell edits ignore a column that belongs to a different tab of the same board', function () {
     [$board, $group] = createItemTestBoard();
     $user = User::factory()->create();
