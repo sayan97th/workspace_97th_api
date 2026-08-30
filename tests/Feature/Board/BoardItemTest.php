@@ -338,3 +338,108 @@ test('inline cell edits ignore a column that belongs to a different tab of the s
     $response->assertOk()->assertJsonPath("item.values.{$column->id}", 'updated text');
     $this->assertDatabaseMissing('board_item_values', ['item_id' => $item->id, 'column_id' => $column_from_other_tab->id]);
 });
+
+test('reorder resequences root items within the same table', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $first = $board->items()->create(['group_id' => $group->id, 'name' => 'First', 'position' => 0]);
+    $second = $board->items()->create(['group_id' => $group->id, 'name' => 'Second', 'position' => 1]);
+    $third = $board->items()->create(['group_id' => $group->id, 'name' => 'Third', 'position' => 2]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/reorder", [
+        'scope' => 'root',
+        'moved_item_id' => $third->id,
+        'target_group_id' => $group->id,
+        'target_ordered_ids' => [$third->id, $first->id, $second->id],
+    ])->assertOk()->assertJsonCount(3, 'items');
+
+    $this->assertDatabaseHas('board_items', ['id' => $third->id, 'position' => 0]);
+    $this->assertDatabaseHas('board_items', ['id' => $first->id, 'position' => 1]);
+    $this->assertDatabaseHas('board_items', ['id' => $second->id, 'position' => 2]);
+});
+
+test('reorder moves a root item into a different table at an arbitrary position and resequences both tables', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $target_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $dragged = $board->items()->create(['group_id' => $group->id, 'name' => 'Dragged', 'position' => 0]);
+    $remaining = $board->items()->create(['group_id' => $group->id, 'name' => 'Remaining', 'position' => 1]);
+    $existing = $board->items()->create(['group_id' => $target_group->id, 'name' => 'Existing', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/reorder", [
+        'scope' => 'root',
+        'moved_item_id' => $dragged->id,
+        'target_group_id' => $target_group->id,
+        'target_ordered_ids' => [$dragged->id, $existing->id],
+        'source_group_id' => $group->id,
+        'source_ordered_ids' => [$remaining->id],
+    ])->assertOk();
+
+    $this->assertDatabaseHas('board_items', ['id' => $dragged->id, 'group_id' => $target_group->id, 'position' => 0]);
+    $this->assertDatabaseHas('board_items', ['id' => $existing->id, 'group_id' => $target_group->id, 'position' => 1]);
+    $this->assertDatabaseHas('board_items', ['id' => $remaining->id, 'group_id' => $group->id, 'position' => 0]);
+});
+
+test('reorder moving a parent item across tables cascades the new group onto its subitems', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $target_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/reorder", [
+        'scope' => 'root',
+        'moved_item_id' => $parent->id,
+        'target_group_id' => $target_group->id,
+        'target_ordered_ids' => [$parent->id],
+    ])->assertOk();
+
+    $this->assertDatabaseHas('board_items', ['id' => $parent->id, 'group_id' => $target_group->id]);
+    $this->assertDatabaseHas('board_items', ['id' => $child->id, 'group_id' => $target_group->id]);
+});
+
+test('reorder resequences subitems within their shared parent', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $first_child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'First', 'position' => 0]);
+    $second_child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Second', 'position' => 1]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/reorder", [
+        'scope' => 'subitem',
+        'target_parent_id' => $parent->id,
+        'target_ordered_ids' => [$second_child->id, $first_child->id],
+    ])->assertOk();
+
+    $this->assertDatabaseHas('board_items', ['id' => $second_child->id, 'position' => 0]);
+    $this->assertDatabaseHas('board_items', ['id' => $first_child->id, 'position' => 1]);
+});
+
+test('reorder rejects an id that does not actually belong to the target table', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+    [$other_board, $other_group] = createItemTestBoard();
+    $foreign_item = $other_board->items()->create(['group_id' => $other_group->id, 'name' => 'Foreign', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/reorder", [
+        'scope' => 'root',
+        'moved_item_id' => $item->id,
+        'target_group_id' => $group->id,
+        'target_ordered_ids' => [$item->id, $foreign_item->id],
+    ])->assertInvalid(['target_ordered_ids.1']);
+});
+
+test('reorder rejects a subitem id claimed under the wrong parent', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $other_parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Other parent', 'position' => 1]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/reorder", [
+        'scope' => 'subitem',
+        'target_parent_id' => $other_parent->id,
+        'target_ordered_ids' => [$child->id],
+    ])->assertInvalid(['target_ordered_ids.0']);
+});

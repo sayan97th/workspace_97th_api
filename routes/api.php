@@ -236,6 +236,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // aren't swallowed by it.
             Route::post('duplicate', [BoardItemController::class, 'bulkDuplicate']);
             Route::patch('move', [BoardItemController::class, 'bulkMove']);
+            Route::patch('reorder', [BoardItemController::class, 'reorder']);
             Route::patch('archive', [BoardItemController::class, 'bulkArchive']);
             Route::delete('/', [BoardItemController::class, 'bulkDestroy']);
 

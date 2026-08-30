@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Board;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\BulkBoardItemsRequest;
 use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
+use App\Http\Requests\Board\ReorderBoardItemsRequest;
 use App\Http\Requests\Board\StoreBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
@@ -21,6 +22,7 @@ use App\Services\Board\BoardViewResolver;
 use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class BoardItemController extends Controller
 {
@@ -233,6 +235,66 @@ class BoardItemController extends Controller
         return response()->json([
             'message' => 'Items moved successfully.',
             'items' => BoardItemResource::collection($items->fresh('values')),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/reorder
+     *
+     * Drag-and-drop reordering. `scope=root` resequences a table's root
+     * items (`target_ordered_ids`) and, when the dragged item was dropped
+     * into a *different* table, also moves it there (cascading the new
+     * `group_id` onto its descendants, same as `update()`/`bulkMove()`) and
+     * resequences the vacated table's remaining items (`source_ordered_ids`).
+     * `scope=subitem` resequences one item's subitems (`target_ordered_ids`)
+     * — subitems never change parent through this endpoint. Every id in
+     * both ordered-id lists is validated (by {@see ReorderBoardItemsRequest})
+     * to already belong to the list it claims, so this never promotes a
+     * subitem to root or vice versa. All position writes happen in one
+     * transaction so a partial reorder can never persist.
+     */
+    public function reorder(ReorderBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $validated = $request->validated();
+        $touched_ids = [];
+
+        DB::transaction(function () use ($item, $validated, &$touched_ids) {
+            if ($validated['scope'] === 'root') {
+                $moved_item = $item->items()->findOrFail($validated['moved_item_id']);
+                $this->ensureItemBelongsToBoard($item, $moved_item);
+
+                if ($moved_item->group_id !== (int) $validated['target_group_id']) {
+                    $moved_item->update(['group_id' => (int) $validated['target_group_id']]);
+                    $this->cascadeGroupToDescendants($moved_item, (int) $validated['target_group_id']);
+                }
+
+                foreach ($validated['target_ordered_ids'] as $position => $id) {
+                    BoardItem::where('id', $id)->where('board_id', $item->id)->update(['position' => $position]);
+                }
+                $touched_ids = $validated['target_ordered_ids'];
+
+                if (! empty($validated['source_ordered_ids'])) {
+                    foreach ($validated['source_ordered_ids'] as $position => $id) {
+                        BoardItem::where('id', $id)->where('board_id', $item->id)->update(['position' => $position]);
+                    }
+                    $touched_ids = [...$touched_ids, ...$validated['source_ordered_ids']];
+                }
+            } else {
+                foreach ($validated['target_ordered_ids'] as $position => $id) {
+                    BoardItem::where('id', $id)
+                        ->where('board_id', $item->id)
+                        ->where('parent_id', $validated['target_parent_id'])
+                        ->update(['position' => $position]);
+                }
+                $touched_ids = $validated['target_ordered_ids'];
+            }
+        });
+
+        $items = BoardItem::whereIn('id', $touched_ids)->with('values')->get();
+
+        return response()->json([
+            'message' => 'Items reordered successfully.',
+            'items' => BoardItemResource::collection($items),
         ]);
     }
 
