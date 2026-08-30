@@ -20,7 +20,10 @@ class StoreBoardViewRequest extends FormRequest
             'label' => ['required', 'string', 'max:255'],
             // Which content the tab renders — immutable once created (see App\Enums\BoardViewType), defaults to 'table'.
             'view_type' => ['sometimes', 'string', Rule::in(BoardViewType::values())],
-            'icon' => ['sometimes', 'nullable', 'string', 'max:64'],
+            // A single emoji (possibly several Unicode code points, e.g. a skin-tone
+            // modifier or a multi-person ZWJ sequence) — 32 comfortably bounds any
+            // real emoji grapheme without needing a fragile emoji-matching regex.
+            'emoji' => ['sometimes', 'nullable', 'string', 'max:32'],
             'is_primary' => ['sometimes', 'boolean'],
             'position' => ['sometimes', 'integer', 'min:0'],
             'filter_state' => ['sometimes', 'nullable', 'array'],

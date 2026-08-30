@@ -216,7 +216,7 @@ class BoardViewController extends Controller
             $view_copy = $item->views()->create([
                 'label' => "{$board_view->label} (copy)",
                 'view_type' => $board_view->view_type,
-                'icon' => $board_view->icon,
+                'emoji' => $board_view->emoji,
                 'position' => $this->nextPosition($item),
                 'is_primary' => false,
                 'pinned' => false,

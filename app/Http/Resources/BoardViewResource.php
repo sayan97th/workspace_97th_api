@@ -37,7 +37,7 @@ class BoardViewResource extends JsonResource
             'doc_content' => $this->doc_content,
             // Chart type/data source/grouping for a `chart`-type view — null/unused for every other kind.
             'chart_config' => $this->chart_config,
-            'icon' => $this->icon,
+            'emoji' => $this->emoji,
             'position' => $this->position,
             'is_primary' => $this->is_primary,
             'pinned' => $this->pinned,

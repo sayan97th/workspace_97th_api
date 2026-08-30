@@ -25,7 +25,7 @@ use Illuminate\Support\Carbon;
  * @property string $view_type
  * @property string|null $doc_content
  * @property array<string, mixed>|null $chart_config
- * @property string|null $icon
+ * @property string|null $emoji
  * @property int $position
  * @property bool $is_primary
  * @property bool $pinned
@@ -53,7 +53,7 @@ use Illuminate\Support\Carbon;
     'view_type',
     'doc_content',
     'chart_config',
-    'icon',
+    'emoji',
     'position',
     'is_primary',
     'pinned',

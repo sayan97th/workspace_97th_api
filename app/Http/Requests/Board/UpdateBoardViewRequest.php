@@ -21,7 +21,10 @@ class UpdateBoardViewRequest extends FormRequest
     {
         return [
             'label' => ['sometimes', 'string', 'max:255'],
-            'icon' => ['sometimes', 'nullable', 'string', 'max:64'],
+            // A single emoji (possibly several Unicode code points, e.g. a skin-tone
+            // modifier or a multi-person ZWJ sequence) — 32 comfortably bounds any
+            // real emoji grapheme without needing a fragile emoji-matching regex.
+            'emoji' => ['sometimes', 'nullable', 'string', 'max:32'],
             'position' => ['sometimes', 'integer', 'min:0'],
             'filter_state' => ['sometimes', 'nullable', 'array'],
             'sort_state' => ['sometimes', 'nullable', 'array'],

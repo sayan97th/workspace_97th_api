@@ -7,7 +7,7 @@ use Illuminate\Database\Seeder;
 
 /**
  * Seeds the Client Hub board's tabs (`board_views`) so the real "rename tab" /
- * "add icon" / "switch tab to see different content" flow has something to
+ * "add emoji" / "switch tab to see different content" flow has something to
  * show out of the box. Client Hub is a fully generic, database-backed board
  * (no special frontend component or `view_key` — it renders through the same
  * `TableBoardView` engine every other board uses), so its tabs are managed
@@ -38,7 +38,6 @@ class ClientHubViewsSeeder extends Seeder
 
         $board->views()->create([
             'label' => 'Main table',
-            'icon' => 'table',
             'position' => 0,
             'is_primary' => true,
             'row_height' => 'single',
@@ -46,7 +45,7 @@ class ClientHubViewsSeeder extends Seeder
 
         $board->views()->create([
             'label' => 'By status',
-            'icon' => 'chart',
+            'emoji' => '📊',
             'position' => 1,
             'is_primary' => false,
             'row_height' => 'single',
@@ -55,7 +54,7 @@ class ClientHubViewsSeeder extends Seeder
 
         $board->views()->create([
             'label' => 'Renewals',
-            'icon' => 'clock',
+            'emoji' => '⏰',
             'position' => 2,
             'is_primary' => false,
             'row_height' => 'single',
@@ -73,7 +72,7 @@ class ClientHubViewsSeeder extends Seeder
 
         $board->views()->create([
             'label' => 'Blake',
-            'icon' => 'person',
+            'emoji' => '👤',
             'position' => 3,
             'is_primary' => false,
             'row_height' => 'single',
@@ -88,7 +87,7 @@ class ClientHubViewsSeeder extends Seeder
 
         $board->views()->create([
             'label' => 'Sam',
-            'icon' => 'person',
+            'emoji' => '👤',
             'position' => 4,
             'is_primary' => false,
             'row_height' => 'single',
