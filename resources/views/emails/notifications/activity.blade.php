@@ -3,30 +3,39 @@
     $email_preview = "{$actor_name} {$action_label} {$action_target}";
 @endphp
 <x-emails.layout :title="$email_title" :preview="$email_preview">
-    <div class="email-padding" style="padding:32px 32px 28px;">
-        @if ($board_label)
-            <p class="email-muted" style="margin:0 0 8px; font-size:12px; font-weight:600; letter-spacing:0.02em; text-transform:uppercase; color:#9ca3af;">
-                {{ $board_label }}
-            </p>
-        @endif
+    <div class="email-padding" style="padding:34px 32px 28px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+            <tr>
+                <td style="width:52px; vertical-align:top; padding-top:2px;">
+                    <x-emails.avatar :name="$actor_name" :initials="$actor_initials" :photo_url="$actor_photo_url" />
+                </td>
+                <td style="vertical-align:top; padding-left:14px;">
+                    @if ($board_label)
+                        <p style="margin:0 0 6px; font-size:11.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:#7e8889;">
+                            {{ $board_label }}
+                        </p>
+                    @endif
+                    <h1 style="margin:0; font-size:19px; line-height:1.4; font-weight:700; color:#0a1717;">
+                        {{ $email_title }}
+                    </h1>
+                </td>
+            </tr>
+        </table>
 
-        <h1 class="email-heading" style="margin:0 0 12px; font-size:21px; line-height:1.35; color:#111827;">
-            {{ $email_title }}
-        </h1>
-        <p class="email-text" style="margin:0 0 28px; font-size:14px; line-height:1.65; color:#4b5563;">
-            <strong class="email-heading" style="color:#111827;">{{ $actor_name }}</strong>
+        <p style="margin:0 0 28px; font-size:14.5px; line-height:1.7; color:#2b3c40;">
+            <strong style="color:#0a1717;">{{ $actor_name }}</strong>
             {{ lcfirst($action_label) }} {{ $action_target }}.
         </p>
 
-        <div style="margin:0 0 28px;">
+        <div style="margin:0 0 30px;">
             <x-emails.button :href="$cta_url">View in workspace</x-emails.button>
         </div>
 
-        <p class="email-muted" style="margin:0 0 20px; font-size:12.5px; line-height:1.6; color:#9ca3af;">
+        <p style="margin:0 0 20px; font-size:12.5px; line-height:1.6; color:#a7aead;">
             You're receiving this because of your notification preferences. You can change what you get emailed about at any time from your profile settings.
         </p>
 
-        <p class="email-muted email-divider" style="margin:0; padding-top:20px; border-top:1px solid #f3f4f6; font-size:12px; line-height:1.6; color:#9ca3af;">
+        <p style="margin:0; padding-top:20px; border-top:1px solid #f0f0ef; font-size:12px; line-height:1.6; color:#a7aead;">
             If the button above doesn't work, copy and paste this link into your browser:<br>
             <a href="{{ $cta_url }}" style="color:#e53e2e; word-break:break-all;">{{ $cta_url }}</a>
         </p>
