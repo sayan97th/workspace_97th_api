@@ -3,26 +3,31 @@
 namespace App\Services\Notification;
 
 use App\Events\NewNotification;
+use App\Jobs\SendEmailJob;
+use App\Mail\Notifications\NotificationEmail;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 
 /**
- * Single entry point for creating and delivering in-app notifications. Every
- * trigger (a mention, a reply, a reaction, an assignment) funnels through
- * {@see self::notify()}, so a new trigger point is always a one-line addition
- * rather than duplicated "create row + broadcast" logic.
+ * Single entry point for creating and delivering notifications, both in-app
+ * and by email. Every trigger (a mention, a reply, a reaction, an assignment)
+ * funnels through {@see self::notify()}, so a new trigger point is always a
+ * one-line addition rather than duplicated "create row + broadcast + email"
+ * logic.
  */
 class NotificationService
 {
     /**
-     * Creates a notification for `$recipient` and broadcasts it over the
-     * `notifications.{user_id}` private channel, unless `$actor` is
-     * notifying themselves or `$recipient` has this `$type`'s in-app channel
-     * turned off in their `notification_preferences`.
+     * Creates a notification for `$recipient`, broadcasts it over the
+     * `notifications.{user_id}` private channel, and queues an email for it,
+     * each gated by `$recipient`'s own `notification_preferences` for this
+     * `$type` (the `_app` and `_email` channel keys). No-ops entirely when
+     * `$actor` is notifying themselves.
      *
      * `$actor` is nullable to support system-generated notifications (e.g.
-     * the websocket test broadcast) that aren't triggered by another user.
+     * the websocket test broadcast); those never send email, since there's
+     * no one to attribute the email to and they're diagnostic, not activity.
      */
     public function notify(
         User $recipient,
@@ -52,7 +57,13 @@ class NotificationService
             'link' => $link,
         ]);
 
-        broadcast(new NewNotification($notification->load(['actor', 'board'])));
+        $notification->load(['actor', 'board']);
+
+        broadcast(new NewNotification($notification));
+
+        if ($actor !== null && ($preferences["{$type}_email"] ?? true) !== false) {
+            SendEmailJob::dispatch(new NotificationEmail($notification), $recipient->email);
+        }
 
         return $notification;
     }
