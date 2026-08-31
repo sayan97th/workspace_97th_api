@@ -71,6 +71,20 @@ return [
             'timeout' => null,
         ],
 
+        /*
+         * Mailpit SMTP, used for local email capture (https://mailpit.axllent.org).
+         * Set MAIL_MAILER=mailpit in your local .env file.
+         */
+        'mailpit' => [
+            'transport' => 'smtp',
+            'host' => env('MAILPIT_SMTP_HOST', '127.0.0.1'),
+            'port' => env('MAILPIT_SMTP_PORT', 1025),
+            'encryption' => env('MAILPIT_SMTP_ENCRYPTION'),
+            'username' => env('MAILPIT_SMTP_USERNAME'),
+            'password' => env('MAILPIT_SMTP_PASSWORD'),
+            'timeout' => null,
+        ],
+
         'ses' => [
             'transport' => 'ses',
         ],

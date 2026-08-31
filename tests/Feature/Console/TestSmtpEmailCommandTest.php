@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\Mail;
 test('sends a test email to the address passed via --email', function () {
     Mail::fake();
 
-    $this->artisan('app:test-smtp-email', ['--email' => 'jane.doe@example.com'])
+    $this->artisan('test:smtp-email', ['--email' => 'jane.doe@example.com'])
         ->assertExitCode(0);
 
     Mail::assertSent(SmtpTestMail::class, function (SmtpTestMail $mailable) {
@@ -17,7 +17,7 @@ test('sends a test email to the address passed via --email', function () {
 test('prompts for the email address when --email is not provided', function () {
     Mail::fake();
 
-    $this->artisan('app:test-smtp-email')
+    $this->artisan('test:smtp-email')
         ->expectsQuestion('Which email address should receive the test message?', 'jane.doe@example.com')
         ->assertExitCode(0);
 
@@ -29,8 +29,30 @@ test('prompts for the email address when --email is not provided', function () {
 test('fails when the email address is invalid', function () {
     Mail::fake();
 
-    $this->artisan('app:test-smtp-email', ['--email' => 'not-an-email'])
+    $this->artisan('test:smtp-email', ['--email' => 'not-an-email'])
         ->assertExitCode(1);
 
     Mail::assertNothingSent();
+});
+
+test('sends via the mailer passed with --mailer', function () {
+    Mail::fake();
+
+    $this->artisan('test:smtp-email', ['--email' => 'jane.doe@example.com', '--mailer' => 'mailpit'])
+        ->assertExitCode(0);
+
+    Mail::assertSent(SmtpTestMail::class, function (SmtpTestMail $mailable) {
+        return $mailable->hasTo('jane.doe@example.com') && $mailable->mailerName === 'mailpit';
+    });
+});
+
+test('falls back to the default mailer when --mailer is unsupported', function () {
+    Mail::fake();
+
+    $this->artisan('test:smtp-email', ['--email' => 'jane.doe@example.com', '--mailer' => 'unknown'])
+        ->assertExitCode(0);
+
+    Mail::assertSent(SmtpTestMail::class, function (SmtpTestMail $mailable) {
+        return $mailable->mailerName === config('mail.default');
+    });
 });
