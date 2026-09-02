@@ -3,6 +3,7 @@
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemCommentAttachment;
+use App\Models\BoardItemCommentReaction;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -197,7 +198,7 @@ test('a comment can carry several different emoji reactions from the same user a
  * creating the new one. Two BMP emoji (like the ❤️ used above) never
  * triggered it, which is how the earlier version of this test missed it.
  * See the `emoji` column's `utf8mb4_bin` collation
- * ({@see \App\Models\BoardItemCommentReaction}) for the fix — this test
+ * ({@see BoardItemCommentReaction}) for the fix — this test
  * only exercises the application-level symptom, not the collation itself,
  * so it always passes on the sqlite connection tests run under regardless
  * of the collation fix.

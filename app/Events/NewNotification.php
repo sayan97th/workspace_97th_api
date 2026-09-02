@@ -4,6 +4,7 @@ namespace App\Events;
 
 use App\Http\Resources\NotificationResource;
 use App\Models\Notification;
+use App\Services\Notification\NotificationService;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
@@ -11,7 +12,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Fired whenever {@see \App\Services\Notification\NotificationService::notify()}
+ * Fired whenever {@see NotificationService::notify()}
  * creates a notification. Delivered over the recipient's private
  * `notifications.{user_id}` channel (see routes/channels.php), and queued
  * (not `ShouldBroadcastNow`), so delivery depends on a running queue worker.

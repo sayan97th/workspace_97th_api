@@ -9,7 +9,9 @@ use Illuminate\Validation\Rule;
 
 /**
  * Shared validation for the selection action bar's item-ids-only bulk
- * actions: duplicate, archive and delete.
+ * actions: duplicate, archive and delete. `with_subitems` is only read by
+ * `duplicate` (defaults true there, preserving its original always-deep-copy
+ * behavior for the selection bar's own "Duplicate"); archive/destroy ignore it.
  */
 class BulkBoardItemsRequest extends FormRequest
 {
@@ -29,6 +31,7 @@ class BulkBoardItemsRequest extends FormRequest
                 'integer',
                 Rule::exists('board_items', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),
             ],
+            'with_subitems' => ['sometimes', 'boolean'],
         ];
     }
 }

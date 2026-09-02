@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Http\Controllers\Board\BoardCommentController;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -10,7 +11,7 @@ use Illuminate\Support\Carbon;
 
 /**
  * One user's "last viewed" mark on a board's whole discussion feed, upserted
- * every time {@see \App\Http\Controllers\Board\BoardCommentController::index()}
+ * every time {@see BoardCommentController::index()}
  * is called (i.e. every time that user opens `BoardDiscussionDrawer`). Powers
  * the "Board updates" badge's red/gray state on the frontend: red while the
  * board has comments newer than this row's `last_viewed_at` (or no row at

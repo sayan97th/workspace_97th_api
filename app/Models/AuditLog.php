@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\AuditLogger;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -9,7 +10,7 @@ use Illuminate\Support\Carbon;
 
 /**
  * One immutable row of the account's audit trail — who did what, from where. Written
- * exclusively through {@see \App\Support\AuditLogger}, never updated after creation.
+ * exclusively through {@see AuditLogger}, never updated after creation.
  *
  * @property int $id
  * @property int|null $user_id

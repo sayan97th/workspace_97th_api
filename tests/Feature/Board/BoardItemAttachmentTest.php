@@ -2,6 +2,7 @@
 
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
+use App\Models\BoardItemAttachment;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -38,7 +39,7 @@ test('a file can be attached directly to an item without creating a comment', fu
     $this->assertDatabaseHas('board_item_attachments', ['item_id' => $item->id, 'file_name' => 'notes.pdf']);
     $this->assertDatabaseCount('board_item_comments', 0);
 
-    $attachment = \App\Models\BoardItemAttachment::firstOrFail();
+    $attachment = BoardItemAttachment::firstOrFail();
     Storage::disk('public')->assertExists($attachment->file_path);
 });
 

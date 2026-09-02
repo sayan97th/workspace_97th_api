@@ -7,6 +7,7 @@ use App\Http\Requests\Board\BulkBoardItemsRequest;
 use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
 use App\Http\Requests\Board\ReorderBoardItemsRequest;
 use App\Http\Requests\Board\StoreBoardItemRequest;
+use App\Http\Requests\Board\UpdateBoardItemParentRequest;
 use App\Http\Requests\Board\UpdateBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
 use App\Http\Resources\BoardItemDetailResource;
@@ -157,6 +158,46 @@ class BoardItemController extends Controller
     }
 
     /**
+     * PATCH /api/boards/{item}/items/{board_item}/parent
+     *
+     * Row menu's "Convert to subitem" / "Convert to item" — the one boundary
+     * `reorder()` deliberately can't cross. `parent_id` set converts a root
+     * item into a subitem of that item, landing at the end of its subitem
+     * list; `parent_id` null promotes a subitem back to a root item, landing
+     * at the end of the given `group_id`. Cascades the resulting `group_id`
+     * onto the moved item's own descendants, same as `update()`.
+     */
+    public function updateParent(UpdateBoardItemParentRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+
+        $validated = $request->validated();
+        $parent_id = $validated['parent_id'] ?? null;
+
+        if ($parent_id !== null) {
+            $parent = $item->items()->findOrFail($parent_id);
+            $group_id = $parent->group_id;
+            $position = $this->nextPosition($item, $group_id, $parent_id);
+        } else {
+            $group_id = $validated['group_id'];
+            $position = $this->nextPosition($item, $group_id);
+        }
+
+        $board_item->update([
+            'parent_id' => $parent_id,
+            'group_id' => $group_id,
+            'position' => $position,
+        ]);
+
+        $this->cascadeGroupToDescendants($board_item, $group_id);
+
+        return response()->json([
+            'message' => 'Item moved successfully.',
+            'item' => new BoardItemResource($board_item->fresh('values')),
+        ]);
+    }
+
+    /**
      * PATCH /api/boards/{item}/items/{board_item}/values
      *
      * Inline cell edits — accepts a `{column_id: value}` map.
@@ -190,18 +231,21 @@ class BoardItemController extends Controller
     /**
      * POST /api/boards/{item}/items/duplicate
      *
-     * Selection action bar's "Duplicate" — copies each given item's name,
-     * description and column values into its own original group, appended
-     * after that group's existing rows. Also deep-copies the item's entire
-     * subitem subtree (each descendant keeps its own name/description/values),
-     * matching Monday's own "duplicating an item duplicates its subitems" behavior.
+     * Selection action bar's "Duplicate" (and the row menu's own single-item
+     * "Duplicate") — copies each given item's name, description and column
+     * values into its own original group, appended after that group's
+     * existing rows. Also deep-copies the item's entire subitem subtree by
+     * default (each descendant keeps its own name/description/values),
+     * matching Monday's own "duplicating an item duplicates its subitems"
+     * behavior — pass `with_subitems: false` to copy just the item itself.
      */
     public function bulkDuplicate(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $originals = $item->items()->with(['values', 'childrenRecursive'])->whereIn('id', $request->validated()['item_ids'])->get();
+        $with_subitems = $request->boolean('with_subitems', true);
 
         $duplicates = $originals->map(
-            fn (BoardItem $original) => $this->copySubtree($item, $original, $original->group_id, null, $this->nextPosition($item, $original->group_id))
+            fn (BoardItem $original) => $this->copySubtree($item, $original, $original->group_id, null, $this->nextPosition($item, $original->group_id), $with_subitems)
         );
 
         return response()->json([
@@ -442,7 +486,7 @@ class BoardItemController extends Controller
      * appended when the copy stays a sibling of the original (i.e. this is
      * the top of the duplicate operation, not a recursive descendant copy).
      */
-    private function copySubtree(WorkspaceNavigationItem $item, BoardItem $original, int $group_id, ?int $parent_id, int $position): BoardItem
+    private function copySubtree(WorkspaceNavigationItem $item, BoardItem $original, int $group_id, ?int $parent_id, int $position, bool $with_children = true): BoardItem
     {
         $copy = $item->items()->create([
             'group_id' => $group_id,
@@ -460,8 +504,10 @@ class BoardItemController extends Controller
             ]);
         }
 
-        foreach ($original->childrenRecursive as $child) {
-            $this->copySubtree($item, $child, $group_id, $copy->id, $child->position);
+        if ($with_children) {
+            foreach ($original->childrenRecursive as $child) {
+                $this->copySubtree($item, $child, $group_id, $copy->id, $child->position);
+            }
         }
 
         // Reload `childrenRecursive` (not just `values`) so the copy's own

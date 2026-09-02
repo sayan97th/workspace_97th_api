@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\DuplicateBoardColumnRequest;
 use App\Http\Requests\Board\MoveBoardColumnRequest;
 use App\Http\Requests\Board\StoreBoardColumnRequest;
 use App\Http\Requests\Board\UpdateBoardColumnRequest;
@@ -116,6 +117,46 @@ class BoardColumnController extends Controller
     }
 
     /**
+     * POST /api/boards/{item}/columns/{column}/duplicate
+     *
+     * Column menu's "Duplicate column" — clones the column definition
+     * (freshly-generated unique `key`, label suffixed " copy") immediately
+     * after the original, and optionally clones every item's stored value
+     * for it too.
+     */
+    public function duplicate(DuplicateBoardColumnRequest $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
+    {
+        $this->ensureColumnBelongsToBoard($item, $column);
+
+        $target_position = $column->position + 1;
+
+        BoardColumn::where('board_view_id', $column->board_view_id)
+            ->where('scope', $column->scope)
+            ->where('position', '>=', $target_position)
+            ->increment('position');
+
+        $copy = $column->replicate(['key']);
+        $copy->key = $this->uniqueKeyFor($column);
+        $copy->label = "{$column->label} copy";
+        $copy->position = $target_position;
+        $copy->save();
+
+        if ($request->boolean('with_values')) {
+            foreach ($column->values as $value) {
+                $copy->values()->create([
+                    'item_id' => $value->item_id,
+                    'value' => $value->value,
+                ]);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Column duplicated successfully.',
+            'column' => new BoardColumnResource($copy),
+        ], 201);
+    }
+
+    /**
      * Guard: abort with 404 when the column is not part of the board.
      */
     private function ensureColumnBelongsToBoard(WorkspaceNavigationItem $item, BoardColumn $column): void
@@ -143,23 +184,58 @@ class BoardColumnController extends Controller
 
     /**
      * Sensible starting `config` for a freshly created column when the caller
-     * didn't supply one. Status columns get Monday-style default labels so a
-     * new column is immediately usable; every other type starts blank.
+     * didn't supply one. Status/Label columns get Monday-style default
+     * labels so a new column is immediately usable; every other type
+     * (including Progress, a plain 0-100 number under the hood) starts
+     * blank.
      *
      * @return array<string, mixed>|null
      */
     private function defaultConfigFor(string $type): ?array
     {
-        if ($type !== BoardColumn::TYPE_STATUS) {
-            return null;
+        if ($type === BoardColumn::TYPE_STATUS) {
+            return [
+                'options' => [
+                    ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => true],
+                ],
+            ];
         }
 
-        return [
-            'options' => [
-                ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d', 'is_active' => true],
-                ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875', 'is_active' => true],
-                ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => true],
-            ],
-        ];
+        if ($type === BoardColumn::TYPE_LABEL) {
+            return [
+                'options' => [
+                    ['id' => (string) Str::uuid(), 'label' => 'Low', 'color' => '#5b6180', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Medium', 'color' => '#8a6d1f', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'High', 'color' => '#5b3fbd', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Critical', 'color' => '#b02f43', 'is_active' => true],
+                ],
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * A fresh, unique `key` for a duplicated column — the original's key
+     * suffixed with "_copy" (then "_copy_2", "_copy_3", ...) until it's
+     * unique within the same tab+scope, matching the uniqueness rule `key`
+     * is validated against on creation.
+     */
+    private function uniqueKeyFor(BoardColumn $original): string
+    {
+        $base = Str::limit($original->key, 90, '');
+        $n = 1;
+
+        do {
+            $candidate = $n === 1 ? "{$base}_copy" : "{$base}_copy_{$n}";
+            $n++;
+        } while (BoardColumn::where('board_view_id', $original->board_view_id)
+            ->where('scope', $original->scope)
+            ->where('key', $candidate)
+            ->exists());
+
+        return $candidate;
     }
 }

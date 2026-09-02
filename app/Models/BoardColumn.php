@@ -84,6 +84,19 @@ class BoardColumn extends Model
     /** Stores an array of predecessor item ids (Finish-to-Start only, mirroring the most common of monday.com's four dependency modes) — drives the Gantt view's arrows and auto-reschedule. */
     public const TYPE_DEPENDENCY = 'dependency';
 
+    /** A single-select colored pill styled as an outline badge (vs. Status's filled pill) — e.g. Priority. */
+    public const TYPE_LABEL = 'label';
+
+    /** A manually-set 0-100 percent value — distinct from the board's built-in Progress column, which is always computed from subitem/checkbox completion. */
+    public const TYPE_PROGRESS = 'progress';
+
+    /** A multi-line text value, rendered as a textarea instead of a single-line input. */
+    public const TYPE_LONG_TEXT = 'long_text';
+
+    public const TYPE_PHONE = 'phone';
+
+    public const TYPE_EMAIL = 'email';
+
     /**
      * The board (navigation leaf) this column belongs to.
      *

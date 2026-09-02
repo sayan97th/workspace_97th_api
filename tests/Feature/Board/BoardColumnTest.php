@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\BoardColumn;
+use App\Models\BoardGroup;
 use App\Models\BoardView;
 use App\Models\User;
 use App\Models\Workspace;
@@ -15,6 +16,17 @@ function createColumnTestBoard(): WorkspaceNavigationItem
         'type' => WorkspaceNavigationItem::TYPE_LEAF,
         'parent_id' => null,
     ]);
+}
+
+/**
+ * @return array{0: WorkspaceNavigationItem, 1: BoardGroup}
+ */
+function createColumnTestBoardWithGroup(): array
+{
+    $board = createColumnTestBoard();
+    $group = BoardGroup::factory()->create(['board_id' => $board->id]);
+
+    return [$board, $group];
 }
 
 test('a column can be created with a type-specific config', function () {
@@ -165,6 +177,68 @@ test('a column\'s key must still be unique within the same tab', function () {
     $this->actingAs($user, 'api')
         ->postJson("/api/boards/{$board->id}/columns", ['view_id' => $tab->id, 'key' => 'status', 'label' => 'Status', 'type' => BoardColumn::TYPE_TEXT])
         ->assertUnprocessable();
+});
+
+test('a label column created without a config gets the priority palette seeded', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/columns", ['key' => 'priority', 'label' => 'Priority', 'type' => BoardColumn::TYPE_LABEL])
+        ->assertCreated()
+        ->assertJsonCount(4, 'column.config.options')
+        ->assertJsonPath('column.config.options.0.label', 'Low');
+});
+
+test('a progress column created without a config has no options (a plain 0-100 number under the hood)', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/columns", ['key' => 'progress', 'label' => 'Progress', 'type' => BoardColumn::TYPE_PROGRESS])
+        ->assertCreated()
+        ->assertJsonPath('column.config', null);
+});
+
+test('a column can be duplicated without its values, landing right after the original', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $before = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'before', 'position' => 0]);
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'status', 'type' => BoardColumn::TYPE_TEXT, 'position' => 1]);
+    $after = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'after', 'position' => 2]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns/{$column->id}/duplicate");
+
+    $response->assertCreated()
+        ->assertJsonPath('column.label', "{$column->label} copy")
+        ->assertJsonPath('column.position', 2);
+    $this->assertDatabaseHas('board_columns', ['id' => $after->fresh()->id, 'position' => 3]);
+    $this->assertDatabaseHas('board_columns', ['id' => $before->fresh()->id, 'position' => 0]);
+});
+
+test('duplicating a column with values copies every item\'s stored value for it', function () {
+    [$board, $group] = createColumnTestBoardWithGroup();
+    $user = User::factory()->create();
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'type' => BoardColumn::TYPE_TEXT]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+    $item->values()->create(['column_id' => $column->id, 'value' => 'hello']);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns/{$column->id}/duplicate", ['with_values' => true]);
+
+    $response->assertCreated();
+    $copy_id = $response->json('column.id');
+    $this->assertDatabaseHas('board_item_values', ['item_id' => $item->id, 'column_id' => $copy_id, 'value' => json_encode('hello')]);
+});
+
+test('duplicating a column\'s key never collides with an existing key in the same tab+scope', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'notes'])->fresh();
+    BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $column->board_view_id, 'scope' => $column->scope, 'key' => 'notes_copy']);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns/{$column->id}/duplicate");
+
+    $response->assertCreated()->assertJsonPath('column.key', 'notes_copy_2');
 });
 
 test('GET columns is scoped to the given tab, defaulting to the primary tab', function () {

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Resources\AdminUserSessionResource;
 use App\Models\UserSession;
 use App\Support\AuditLogger;
@@ -12,7 +13,7 @@ use Illuminate\Support\Facades\Auth;
 
 /**
  * Account-wide session management, the admin-scoped sibling of
- * {@see \App\Http\Controllers\Profile\UserSessionController} (which only ever touches the
+ * {@see UserSessionController} (which only ever touches the
  * authenticated user's own sessions). Revoking a session here takes effect immediately: the
  * existing `session.active` middleware already rejects any request whose JWT `jti` maps to a
  * revoked row, no new enforcement needed.

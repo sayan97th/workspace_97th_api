@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Board;
 
+use App\Http\Controllers\Board\BoardItemController;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Contracts\Validation\ValidationRule;
@@ -19,7 +20,7 @@ use Illuminate\Validation\Validator;
  * its *old* group at request time, that's precisely what's changing). That
  * scoping is also what keeps this endpoint from being usable to promote a
  * subitem to root (or vice versa): only `group_id` is ever written by
- * {@see \App\Http\Controllers\Board\BoardItemController::reorder()}, never
+ * {@see BoardItemController::reorder()}, never
  * `parent_id`.
  */
 class ReorderBoardItemsRequest extends FormRequest

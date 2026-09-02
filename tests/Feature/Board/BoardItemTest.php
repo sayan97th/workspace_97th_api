@@ -84,6 +84,113 @@ test('an item detail response includes group and creator for the pulse drawer', 
         ->assertJsonPath('creator.id', $user->id);
 });
 
+test('the item resource exposes is_archived', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0, 'is_archived' => true]);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/items/{$item->id}")
+        ->assertOk()
+        ->assertJsonPath('is_archived', true);
+});
+
+test('a root item can be converted into a subitem of another item', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $future_parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $other_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $item = $board->items()->create(['group_id' => $other_group->id, 'name' => 'Now a subitem', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", [
+        'parent_id' => $future_parent->id,
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('item.parent_id', $future_parent->id)
+        ->assertJsonPath('item.group_id', $group->id); // inherits the new parent's group
+});
+
+test('a subitem can be promoted back to a root item', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $sub = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Sub', 'position' => 0]);
+    $target_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$sub->id}/parent", [
+        'parent_id' => null,
+        'group_id' => $target_group->id,
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('item.parent_id', null)
+        ->assertJsonPath('item.group_id', $target_group->id);
+});
+
+test('promoting a subitem to root without a group_id is rejected', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $sub = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Sub', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/items/{$sub->id}/parent", ['parent_id' => null])
+        ->assertUnprocessable();
+});
+
+test('an item cannot become its own parent', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", ['parent_id' => $item->id])
+        ->assertUnprocessable();
+});
+
+test('an item with its own subitems cannot be converted into a subitem (2-level cap)', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $future_parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Has subitems', 'position' => 1]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $item->id, 'name' => 'Sub', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", ['parent_id' => $future_parent->id])
+        ->assertUnprocessable();
+});
+
+test('duplicating an item without subitems copies only the item itself', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $item->id, 'name' => 'Sub', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", [
+        'item_ids' => [$item->id],
+        'with_subitems' => false,
+    ]);
+
+    $response->assertCreated()->assertJsonCount(0, 'items.0.children');
+    $copy_id = $response->json('items.0.id');
+    $this->assertDatabaseCount('board_items', 3); // original item + original sub + the copy (no copied sub)
+    $this->assertDatabaseMissing('board_items', ['parent_id' => $copy_id]);
+});
+
+test('duplicating an item defaults to copying its subitems too', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $item->id, 'name' => 'Sub', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", [
+        'item_ids' => [$item->id],
+    ]);
+
+    $response->assertCreated()->assertJsonCount(1, 'items.0.children');
+});
+
 test('deleting an item soft-deletes it, excluding it from the index', function () {
     [$board, $group] = createItemTestBoard();
     $user = User::factory()->create();

@@ -17,8 +17,8 @@ use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\BoardInvitationController as AuthBoardInvitationController;
 use App\Http\Controllers\Auth\GoogleAuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
-use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\StaffInvitationController;
+use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
 use App\Http\Controllers\Board\BoardColumnController;
@@ -216,6 +216,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('/', [BoardColumnController::class, 'store']);
             Route::patch('{column}', [BoardColumnController::class, 'update']);
             Route::patch('{column}/move', [BoardColumnController::class, 'move']);
+            Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
             Route::delete('{column}', [BoardColumnController::class, 'destroy']);
         });
 
@@ -224,6 +225,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('/', [BoardGroupController::class, 'store']);
             Route::patch('{group}', [BoardGroupController::class, 'update']);
             Route::patch('{group}/move', [BoardGroupController::class, 'move']);
+            Route::post('{group}/duplicate', [BoardGroupController::class, 'duplicate']);
             Route::delete('{group}', [BoardGroupController::class, 'destroy']);
         });
 
@@ -243,6 +245,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('{board_item}', [BoardItemController::class, 'show']);
             Route::patch('{board_item}', [BoardItemController::class, 'update']);
             Route::patch('{board_item}/values', [BoardItemController::class, 'updateValues']);
+            Route::patch('{board_item}/parent', [BoardItemController::class, 'updateParent']);
             Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
 
             Route::prefix('{board_item}/comments')->group(function () {
