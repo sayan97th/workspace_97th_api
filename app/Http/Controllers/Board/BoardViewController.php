@@ -95,7 +95,7 @@ class BoardViewController extends Controller
             ['key' => 'person', 'label' => 'Person', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 150, 'config' => null],
             ['key' => 'status', 'label' => 'Status', 'type' => BoardColumn::TYPE_STATUS, 'width' => 160, 'config' => $status_config],
             ['key' => 'date', 'label' => 'Date', 'type' => BoardColumn::TYPE_DATE, 'width' => 150, 'config' => null],
-            ['key' => 'dropdown', 'label' => 'Dropdown', 'type' => BoardColumn::TYPE_TAGS, 'width' => 200, 'config' => $dropdown_config],
+            ['key' => 'dropdown', 'label' => 'Dropdown', 'type' => BoardColumn::TYPE_DROPDOWN, 'width' => 200, 'config' => $dropdown_config],
             ['key' => 'numbers', 'label' => 'Numbers', 'type' => BoardColumn::TYPE_NUMBER, 'width' => 130, 'config' => null],
             ['key' => 'people', 'label' => 'People', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 150, 'config' => null],
         ];

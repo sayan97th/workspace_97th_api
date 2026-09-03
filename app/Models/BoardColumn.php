@@ -74,6 +74,9 @@ class BoardColumn extends Model
 
     public const TYPE_TAGS = 'tags';
 
+    /** A multi-select chip picker with no search box — like `TYPE_TAGS`, but each option is picked from the column's own fixed list rather than freely typed, and its cell picker has no search/"create new tag" affordance. */
+    public const TYPE_DROPDOWN = 'dropdown';
+
     public const TYPE_NUMBER = 'number';
 
     public const TYPE_CHECKBOX = 'checkbox';

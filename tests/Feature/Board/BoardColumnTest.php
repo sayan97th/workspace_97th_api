@@ -139,6 +139,41 @@ test('a status column\'s labels can be renamed, recolored, given a description, 
     $delete_response->assertOk()->assertJsonCount(1, 'column.config.options');
 });
 
+test('a dropdown column can be created and has no options by default', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/columns", [
+            'key' => 'dropdown',
+            'label' => 'Dropdown',
+            'type' => BoardColumn::TYPE_DROPDOWN,
+        ])
+        ->assertCreated()
+        ->assertJsonPath('column.type', BoardColumn::TYPE_DROPDOWN)
+        ->assertJsonPath('column.config', null);
+});
+
+test('a new option can be appended to a dropdown column inline, from its cell picker', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $column = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'type' => BoardColumn::TYPE_DROPDOWN,
+        'config' => ['options' => []],
+    ]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/{$column->id}", [
+        'config' => ['options' => [
+            ['id' => 'opt_1', 'label' => 'Design', 'color' => '#00c875'],
+        ]],
+    ]);
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'column.config.options')
+        ->assertJsonPath('column.config.options.0.label', 'Design');
+});
+
 test('a column can be moved to a new position', function () {
     $user = User::factory()->create();
     $board = createColumnTestBoard();

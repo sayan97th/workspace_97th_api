@@ -33,6 +33,7 @@ class ChartDataService
     private const CHARTABLE_GROUP_TYPES = [
         BoardColumn::TYPE_STATUS,
         BoardColumn::TYPE_TAGS,
+        BoardColumn::TYPE_DROPDOWN,
         BoardColumn::TYPE_PEOPLE,
         BoardColumn::TYPE_DATE,
         BoardColumn::TYPE_CHECKBOX,
@@ -382,7 +383,7 @@ class ChartDataService
 
         return match ($column->type) {
             BoardColumn::TYPE_STATUS => $raw_value !== null && $raw_value !== '' ? [(string) $raw_value] : [self::NONE_KEY],
-            BoardColumn::TYPE_TAGS => is_array($raw_value) && count($raw_value) > 0 ? array_map('strval', $raw_value) : [self::NONE_KEY],
+            BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN => is_array($raw_value) && count($raw_value) > 0 ? array_map('strval', $raw_value) : [self::NONE_KEY],
             BoardColumn::TYPE_PEOPLE => is_array($raw_value) && count($raw_value) > 0 ? array_map('strval', $raw_value) : [self::NONE_KEY],
             BoardColumn::TYPE_CHECKBOX => [$raw_value === true ? 'true' : 'false'],
             BoardColumn::TYPE_DATE => $raw_value ? [$this->dateBucketKey((string) $raw_value, $date_bucket)] : [self::NONE_KEY],
@@ -444,7 +445,7 @@ class ChartDataService
         }
 
         return match ($column->type) {
-            BoardColumn::TYPE_STATUS, BoardColumn::TYPE_TAGS => $this->optionLabelColor($column, $key),
+            BoardColumn::TYPE_STATUS, BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN => $this->optionLabelColor($column, $key),
             // People/dates carry no inherent color of their own — left null so the frontend
             // assigns one from its validated categorical palette instead of every person/date
             // rendering as the same identical hue.
@@ -519,7 +520,7 @@ class ChartDataService
             return $keys;
         }
 
-        if (in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_TAGS], true)) {
+        if (in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN], true)) {
             $option_order = collect($column->config['options'] ?? [])->pluck('id')->flip();
             usort($keys, function ($a, $b) use ($option_order) {
                 if ($a === self::NONE_KEY) {

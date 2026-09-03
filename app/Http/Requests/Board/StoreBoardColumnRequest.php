@@ -47,6 +47,7 @@ class StoreBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_PEOPLE,
                 BoardColumn::TYPE_DATE,
                 BoardColumn::TYPE_TAGS,
+                BoardColumn::TYPE_DROPDOWN,
                 BoardColumn::TYPE_NUMBER,
                 BoardColumn::TYPE_CHECKBOX,
                 BoardColumn::TYPE_TIMELINE,
