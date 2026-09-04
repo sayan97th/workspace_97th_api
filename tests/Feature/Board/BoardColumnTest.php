@@ -184,6 +184,28 @@ test('a malformed option in config.options is rejected', function () {
     ])->assertUnprocessable();
 });
 
+test('a column created at an explicit position shifts columns already there, landing right after the target', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $before = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'before', 'position' => 0]);
+    $target = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'target', 'position' => 1]);
+    $after = BoardColumn::factory()->create(['board_id' => $board->id, 'key' => 'after', 'position' => 2]);
+
+    // Mirrors the column menu's "Add column to the right": the frontend
+    // resolves `target`'s position and asks for `target->position + 1`.
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns", [
+        'key' => 'new_column',
+        'label' => 'New column',
+        'type' => BoardColumn::TYPE_TEXT,
+        'position' => $target->position + 1,
+    ]);
+
+    $response->assertCreated()->assertJsonPath('column.position', 2);
+    $this->assertDatabaseHas('board_columns', ['id' => $target->fresh()->id, 'position' => 1]);
+    $this->assertDatabaseHas('board_columns', ['id' => $after->fresh()->id, 'position' => 3]);
+    $this->assertDatabaseHas('board_columns', ['id' => $before->fresh()->id, 'position' => 0]);
+});
+
 test('a column can be moved to a new position', function () {
     $user = User::factory()->create();
     $board = createColumnTestBoard();

@@ -52,13 +52,30 @@ class BoardColumnController extends Controller
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
         $scope = $validated['scope'] ?? BoardColumn::SCOPE_ITEM;
 
+        // An explicit `position` (the column menu's "Add column to the
+        // right") lands the new column in the middle of the sequence, so —
+        // exactly like `duplicate()` below — every column already at or past
+        // that slot has to shift up first. Otherwise it would collide with
+        // whichever column already sits there, leaving their order
+        // ambiguous. Omitting `position` (the "+" gallery) just appends.
+        if (array_key_exists('position', $validated)) {
+            $position = $validated['position'];
+
+            BoardColumn::where('board_view_id', $view->id)
+                ->where('scope', $scope)
+                ->where('position', '>=', $position)
+                ->increment('position');
+        } else {
+            $position = $this->nextPosition($view, $scope);
+        }
+
         $column = $view->columns()->create([
             'board_id' => $item->id,
             'key' => $validated['key'],
             'label' => $validated['label'],
             'type' => $validated['type'],
             'scope' => $scope,
-            'position' => $validated['position'] ?? $this->nextPosition($view, $scope),
+            'position' => $position,
             'width' => $validated['width'] ?? 180,
             'config' => $validated['config'] ?? $this->defaultConfigFor($validated['type']),
             'hideable' => $validated['hideable'] ?? true,
