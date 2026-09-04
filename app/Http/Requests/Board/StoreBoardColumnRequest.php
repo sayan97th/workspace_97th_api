@@ -61,6 +61,12 @@ class StoreBoardColumnRequest extends FormRequest
             'position' => ['sometimes', 'integer', 'min:0'],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
             'config' => ['sometimes', 'nullable', 'array'],
+            'config.options' => ['sometimes', 'array'],
+            'config.options.*.id' => ['required', 'string', 'max:100'],
+            'config.options.*.label' => ['required', 'string', 'max:255'],
+            'config.options.*.color' => ['required', 'string', 'max:20'],
+            'config.options.*.is_active' => ['sometimes', 'boolean'],
+            'config.options.*.description' => ['sometimes', 'nullable', 'string', 'max:500'],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

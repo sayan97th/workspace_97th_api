@@ -174,6 +174,16 @@ test('a new option can be appended to a dropdown column inline, from its cell pi
         ->assertJsonPath('column.config.options.0.label', 'Design');
 });
 
+test('a malformed option in config.options is rejected', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'type' => BoardColumn::TYPE_DROPDOWN]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/{$column->id}", [
+        'config' => ['options' => [['label' => 'Missing id and color']]],
+    ])->assertUnprocessable();
+});
+
 test('a column can be moved to a new position', function () {
     $user = User::factory()->create();
     $board = createColumnTestBoard();
