@@ -17,6 +17,7 @@ class UpdateBoardGroupRequest extends FormRequest
         return [
             'name' => ['sometimes', 'string', 'max:255'],
             'accent_color' => ['sometimes', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
+            'is_priority' => ['sometimes', 'boolean'],
         ];
     }
 }

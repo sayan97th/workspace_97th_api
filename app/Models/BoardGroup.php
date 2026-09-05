@@ -26,6 +26,7 @@ use Illuminate\Support\Carbon;
  * @property int $board_view_id
  * @property string $name
  * @property string $accent_color
+ * @property bool $is_priority
  * @property int $position
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -33,7 +34,7 @@ use Illuminate\Support\Carbon;
  * @property-read BoardView $boardView
  * @property-read Collection<int, BoardItem> $items
  */
-#[Fillable(['board_id', 'board_view_id', 'name', 'accent_color', 'position'])]
+#[Fillable(['board_id', 'board_view_id', 'name', 'accent_color', 'is_priority', 'position'])]
 class BoardGroup extends Model
 {
     /** @use HasFactory<BoardGroupFactory> */
@@ -76,6 +77,7 @@ class BoardGroup extends Model
     {
         return [
             'position' => 'integer',
+            'is_priority' => 'boolean',
         ];
     }
 }

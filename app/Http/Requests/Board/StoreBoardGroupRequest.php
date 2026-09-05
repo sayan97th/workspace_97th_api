@@ -26,6 +26,7 @@ class StoreBoardGroupRequest extends FormRequest
             ],
             'name' => ['required', 'string', 'max:255'],
             'accent_color' => ['sometimes', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
+            'is_priority' => ['sometimes', 'boolean'],
             'position' => ['sometimes', 'integer', 'min:0'],
         ];
     }

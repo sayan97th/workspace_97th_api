@@ -22,6 +22,7 @@ class BoardGroupResource extends JsonResource
             'board_view_id' => $this->board_view_id,
             'name' => $this->name,
             'accent_color' => $this->accent_color,
+            'is_priority' => $this->is_priority,
             'position' => $this->position,
         ];
     }

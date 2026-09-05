@@ -43,6 +43,49 @@ test('a group can be created on a board', function () {
     $this->assertDatabaseHas('board_groups', ['board_id' => $board->id, 'name' => 'Backlog']);
 });
 
+test('a group defaults to not being a priority client', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $group = BoardGroup::factory()->create(['board_id' => $board->id]);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/groups")
+        ->assertOk()
+        ->assertJsonPath('data.0.is_priority', false);
+
+    expect($group->fresh()->is_priority)->toBeFalse();
+});
+
+test('a group can be created as a priority client', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/groups", ['name' => 'VIP Client', 'is_priority' => true])
+        ->assertCreated()
+        ->assertJsonPath('group.is_priority', true);
+
+    $this->assertDatabaseHas('board_groups', ['board_id' => $board->id, 'name' => 'VIP Client', 'is_priority' => true]);
+});
+
+test('a group can be marked and unmarked as a priority client', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $group = BoardGroup::factory()->create(['board_id' => $board->id, 'is_priority' => false]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/groups/{$group->id}", ['is_priority' => true])
+        ->assertOk()
+        ->assertJsonPath('group.is_priority', true);
+    expect($group->fresh()->is_priority)->toBeTrue();
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/groups/{$group->id}", ['is_priority' => false])
+        ->assertOk()
+        ->assertJsonPath('group.is_priority', false);
+    expect($group->fresh()->is_priority)->toBeFalse();
+});
+
 test('a group belonging to a different board cannot be updated', function () {
     $user = User::factory()->create();
     $board = createGroupTestBoard();

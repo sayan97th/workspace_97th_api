@@ -22,6 +22,7 @@ class BoardGroupFactory extends Factory
             'board_id' => WorkspaceNavigationItem::factory(),
             'name' => fake()->words(2, true),
             'accent_color' => fake()->randomElement(['#00c875', '#579bfc', '#a25ddc', '#fdab3d', '#e2445c']),
+            'is_priority' => false,
             'position' => 0,
         ];
     }

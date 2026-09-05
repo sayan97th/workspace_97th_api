@@ -48,6 +48,7 @@ class BoardGroupController extends Controller
             'board_id' => $item->id,
             'name' => $validated['name'],
             'accent_color' => $validated['accent_color'] ?? '#579bfc',
+            'is_priority' => $validated['is_priority'] ?? false,
             'position' => $validated['position'] ?? $this->nextPosition($view),
         ]);
 
