@@ -495,6 +495,65 @@ test('an invitation cannot be revoked through a workspace it does not belong to'
     $response->assertNotFound();
 });
 
+test('a workspace owner can search the pool of users to invite', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $amanda = User::factory()->create(['first_name' => 'Amanda', 'last_name' => 'Reyes', 'email' => 'amanda@example.com']);
+    User::factory()->create(['first_name' => 'Bob', 'last_name' => 'Smith', 'email' => 'bob@example.com']);
+
+    $response = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations/available-users?search=Amanda");
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $amanda->id)
+        ->assertJsonPath('data.0.email', 'amanda@example.com');
+});
+
+test('the pool of users to invite excludes people already in the workspace', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    $existing_member = User::factory()->create(['first_name' => 'Amanda', 'email' => 'amanda@example.com']);
+    $workspace->users()->attach($existing_member->id, ['role' => 'member']);
+
+    $response = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations/available-users?search=Amanda");
+
+    $response->assertOk()->assertJsonCount(0, 'data');
+});
+
+test('the pool of users to invite requires a minimum search length', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    User::factory()->create(['first_name' => 'Amanda', 'email' => 'amanda@example.com']);
+
+    $response = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations/available-users?search=A");
+
+    $response->assertOk()->assertJsonCount(0, 'data');
+});
+
+test('members cannot search the pool of users to invite', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+
+    User::factory()->create(['first_name' => 'Amanda', 'email' => 'amanda@example.com']);
+
+    $response = $this->actingAs($member, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations/available-users?search=Amanda");
+
+    $response->assertStatus(403);
+});
+
 test('an invitation can be declined', function () {
     $owner = User::factory()->create();
     $workspace = Workspace::factory()->create();

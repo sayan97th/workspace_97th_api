@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Workspace;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\StoreWorkspaceInvitationRequest;
+use App\Http\Resources\WorkspaceInvitationCandidateResource;
 use App\Http\Resources\WorkspaceInvitationResource;
 use App\Jobs\SendEmailJob;
 use App\Mail\WorkspaceInvitationMail;
@@ -26,6 +27,10 @@ class WorkspaceInvitationController extends Controller
     private const MAX_PER_PAGE = 100;
 
     private const SORTABLE_FIELDS = ['email', 'role', 'status', 'expires_at', 'created_at'];
+
+    private const CANDIDATE_MIN_SEARCH_LENGTH = 2;
+
+    private const CANDIDATE_MAX_RESULTS = 8;
 
     /**
      * Global roles that can manage invitations for any workspace, regardless
@@ -111,6 +116,46 @@ class WorkspaceInvitationController extends Controller
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
             ],
+        ]);
+    }
+
+    /**
+     * GET /api/workspaces/{workspace}/invitations/available-users
+     *
+     * The "pool of users" autocomplete on the invite-member form: platform
+     * users matching `search` (name or email) who aren't already a member of
+     * this workspace, so an owner/admin can add a known teammate — e.g.
+     * Amanda — by picking her instead of having to know and type her exact
+     * email address. Picking a result still goes through the normal
+     * {@see store()} email-invitation flow; this endpoint only feeds the
+     * picker. Restricted to owners and privileged staff, like `store()`.
+     */
+    public function availableUsers(Request $request, Workspace $workspace): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $this->authorizeInvitationManagement($workspace, $user, 'view workspace members to invite');
+
+        $search = trim((string) $request->query('search', ''));
+        if (mb_strlen($search) < self::CANDIDATE_MIN_SEARCH_LENGTH) {
+            return response()->json(['data' => []]);
+        }
+
+        $candidates = User::query()
+            ->whereDoesntHave('workspaces', fn (Builder $q) => $q->where('workspaces.id', $workspace->id))
+            ->where(function (Builder $q) use ($search) {
+                $q->where('first_name', 'LIKE', "%{$search}%")
+                    ->orWhere('last_name', 'LIKE', "%{$search}%")
+                    ->orWhere('email', 'LIKE', "%{$search}%");
+            })
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->limit(self::CANDIDATE_MAX_RESULTS)
+            ->get();
+
+        return response()->json([
+            'data' => WorkspaceInvitationCandidateResource::collection($candidates),
         ]);
     }
 

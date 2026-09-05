@@ -160,6 +160,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('{workspace}/transfer-ownership', [WorkspaceController::class, 'transferOwnership']);
         Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
         Route::get('{workspace}/invitations', [WorkspaceInvitationController::class, 'index']);
+        Route::get('{workspace}/invitations/available-users', [WorkspaceInvitationController::class, 'availableUsers']);
         Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);
         Route::delete('{workspace}/invitations/{invitation:id}', [WorkspaceInvitationController::class, 'destroy']);
         Route::get('{workspace}/invite-link', [WorkspaceInviteLinkController::class, 'show']);
