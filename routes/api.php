@@ -215,6 +215,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::prefix('columns')->group(function () {
             Route::get('/', [BoardColumnController::class, 'index']);
             Route::post('/', [BoardColumnController::class, 'store']);
+
+            // Column-header drag-and-drop reordering — declared before the
+            // `{column}` wildcard routes below so this literal segment isn't
+            // swallowed by route-model binding, mirroring how `items/reorder`
+            // is declared ahead of `items/{board_item}`.
+            Route::patch('reorder', [BoardColumnController::class, 'reorder']);
+
             Route::patch('{column}', [BoardColumnController::class, 'update']);
             Route::patch('{column}/move', [BoardColumnController::class, 'move']);
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);

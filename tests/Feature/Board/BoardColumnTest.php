@@ -308,6 +308,77 @@ test('duplicating a column\'s key never collides with an existing key in the sam
     $response->assertCreated()->assertJsonPath('column.key', 'notes_copy_2');
 });
 
+test('columns can be reordered via drag-and-drop', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $first = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'key' => 'first', 'position' => 0]);
+    $second = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'key' => 'second', 'position' => 1]);
+    $third = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'key' => 'third', 'position' => 2]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/reorder", [
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'view_id' => $view->id,
+        'ordered_ids' => [$third->id, $first->id, $second->id],
+    ]);
+
+    $response->assertOk()->assertJsonPath('data.0.key', 'third')
+        ->assertJsonPath('data.1.key', 'first')
+        ->assertJsonPath('data.2.key', 'second');
+    $this->assertDatabaseHas('board_columns', ['id' => $third->id, 'position' => 0]);
+    $this->assertDatabaseHas('board_columns', ['id' => $first->id, 'position' => 1]);
+    $this->assertDatabaseHas('board_columns', ['id' => $second->id, 'position' => 2]);
+});
+
+test('reordering columns never mixes item and subitem scopes', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $item_column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'scope' => BoardColumn::SCOPE_ITEM, 'position' => 0]);
+    $sub_column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'scope' => BoardColumn::SCOPE_SUBITEM, 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/reorder", [
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'view_id' => $view->id,
+        // `$sub_column` doesn't belong to this scope, so it's silently
+        // dropped rather than resequenced or rejected.
+        'ordered_ids' => [$item_column->id, $sub_column->id],
+    ])->assertOk()->assertJsonCount(1, 'data');
+
+    $this->assertDatabaseHas('board_columns', ['id' => $sub_column->id, 'position' => 0]);
+});
+
+test('reordering columns defaults to the board\'s primary tab when no view_id is given', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $first = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'key' => 'first', 'position' => 0]);
+    $second = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'key' => 'second', 'position' => 1]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/reorder", [
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'ordered_ids' => [$second->id, $first->id],
+    ])->assertOk();
+
+    $this->assertDatabaseHas('board_columns', ['id' => $second->id, 'position' => 0]);
+    $this->assertDatabaseHas('board_columns', ['id' => $first->id, 'position' => 1]);
+});
+
+test('a column id from another board is rejected from a reorder request', function () {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+    $other_board = createColumnTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'position' => 0]);
+    $foreign_column = BoardColumn::factory()->create(['board_id' => $other_board->id, 'position' => 0]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/columns/reorder", [
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'view_id' => $view->id,
+        'ordered_ids' => [$column->id, $foreign_column->id],
+    ])->assertUnprocessable();
+});
+
 test('GET columns is scoped to the given tab, defaulting to the primary tab', function () {
     $user = User::factory()->create();
     $board = createColumnTestBoard();

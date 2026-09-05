@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Board;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\DuplicateBoardColumnRequest;
 use App\Http\Requests\Board\MoveBoardColumnRequest;
+use App\Http\Requests\Board\ReorderBoardColumnsRequest;
 use App\Http\Requests\Board\StoreBoardColumnRequest;
 use App\Http\Requests\Board\UpdateBoardColumnRequest;
 use App\Http\Resources\BoardColumnResource;
@@ -14,6 +15,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class BoardColumnController extends Controller
@@ -116,6 +118,54 @@ class BoardColumnController extends Controller
         return response()->json([
             'message' => 'Column moved successfully.',
             'column' => new BoardColumnResource($column->fresh()),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/columns/reorder
+     *
+     * Column-header drag-and-drop reordering (main table header or subitem
+     * header) — resequences every column in `ordered_ids` to its index in
+     * that list, scoped to one tab (`view_id`, defaulting to the primary
+     * tab) and one column `scope`, mirroring
+     * {@see \App\Http\Controllers\Board\BoardItemController::reorder()}. Any
+     * id that doesn't actually belong to the resolved view+scope is quietly
+     * dropped rather than rejected outright, so a stale client-side column
+     * list can't fail the whole drag. Declared before the `{column}`
+     * wildcard routes in `routes/api.php` so the literal "reorder" segment
+     * isn't swallowed by route-model binding.
+     */
+    public function reorder(ReorderBoardColumnsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $validated = $request->validated();
+        $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
+        $scope = $validated['scope'];
+
+        $scoped_column_ids = BoardColumn::where('board_view_id', $view->id)
+            ->where('scope', $scope)
+            ->pluck('id');
+
+        $ordered_ids = collect($validated['ordered_ids'])
+            ->filter(fn (int $id) => $scoped_column_ids->contains($id))
+            ->values();
+
+        DB::transaction(function () use ($view, $scope, $ordered_ids) {
+            foreach ($ordered_ids as $position => $id) {
+                BoardColumn::where('id', $id)
+                    ->where('board_view_id', $view->id)
+                    ->where('scope', $scope)
+                    ->update(['position' => $position]);
+            }
+        });
+
+        $columns = BoardColumn::where('board_view_id', $view->id)
+            ->where('scope', $scope)
+            ->orderBy('position')
+            ->get();
+
+        return response()->json([
+            'message' => 'Columns reordered successfully.',
+            'data' => BoardColumnResource::collection($columns),
         ]);
     }
 
