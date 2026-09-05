@@ -118,6 +118,7 @@ class BoardItemController extends Controller
             'name' => $validated['name'],
             'description' => $validated['description'] ?? null,
             'position' => $position,
+            'is_priority' => $validated['is_priority'] ?? false,
             'created_by_id' => $request->user()?->id,
         ]);
 

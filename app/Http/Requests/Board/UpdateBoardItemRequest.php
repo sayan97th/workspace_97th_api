@@ -27,6 +27,7 @@ class UpdateBoardItemRequest extends FormRequest
                 Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_id', $board_id)),
             ],
             'position' => ['sometimes', 'integer', 'min:0'],
+            'is_priority' => ['sometimes', 'boolean'],
         ];
     }
 }

@@ -27,6 +27,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $description
  * @property int $position
  * @property bool $is_archived
+ * @property bool $is_priority
  * @property int|null $created_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -42,7 +43,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
  * @property-read Collection<int, BoardItemChecklistItem> $checklistItems
  */
-#[Fillable(['board_id', 'group_id', 'parent_id', 'name', 'description', 'position', 'is_archived', 'created_by_id'])]
+#[Fillable(['board_id', 'group_id', 'parent_id', 'name', 'description', 'position', 'is_archived', 'is_priority', 'created_by_id'])]
 class BoardItem extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
@@ -189,6 +190,7 @@ class BoardItem extends Model
         return [
             'position' => 'integer',
             'is_archived' => 'boolean',
+            'is_priority' => 'boolean',
         ];
     }
 }

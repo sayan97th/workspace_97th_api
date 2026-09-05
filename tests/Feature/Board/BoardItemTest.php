@@ -95,6 +95,47 @@ test('the item resource exposes is_archived', function () {
         ->assertJsonPath('is_archived', true);
 });
 
+test('an item can be created as a priority row', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", [
+        'name' => 'VIP request',
+        'group_id' => $group->id,
+        'is_priority' => true,
+    ]);
+
+    $response->assertCreated()->assertJsonPath('item.is_priority', true);
+    $this->assertDatabaseHas('board_items', ['name' => 'VIP request', 'is_priority' => true]);
+});
+
+test('an item and a subitem can each be marked and unmarked as priority independently', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+    $subitem = $board->items()->create(['group_id' => $group->id, 'parent_id' => $item->id, 'name' => 'Subtask', 'position' => 0]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/items/{$item->id}", ['is_priority' => true])
+        ->assertOk()
+        ->assertJsonPath('item.is_priority', true);
+    expect($item->fresh()->is_priority)->toBeTrue();
+    expect($subitem->fresh()->is_priority)->toBeFalse();
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/items/{$subitem->id}", ['is_priority' => true])
+        ->assertOk()
+        ->assertJsonPath('item.is_priority', true);
+    expect($subitem->fresh()->is_priority)->toBeTrue();
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/items/{$item->id}", ['is_priority' => false])
+        ->assertOk()
+        ->assertJsonPath('item.is_priority', false);
+    expect($item->fresh()->is_priority)->toBeFalse();
+    expect($subitem->fresh()->is_priority)->toBeTrue();
+});
+
 test('a root item can be converted into a subitem of another item', function () {
     [$board, $group] = createItemTestBoard();
     $user = User::factory()->create();

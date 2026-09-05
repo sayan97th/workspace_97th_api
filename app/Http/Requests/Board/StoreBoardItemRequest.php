@@ -39,6 +39,7 @@ class StoreBoardItemRequest extends FormRequest
                     ->whereNull('parent_id')),
             ],
             'position' => ['sometimes', 'integer', 'min:0'],
+            'is_priority' => ['sometimes', 'boolean'],
             'values' => ['sometimes', 'array'],
         ];
     }

@@ -29,6 +29,7 @@ class BoardItemResource extends JsonResource
             'description' => $this->description,
             'position' => $this->position,
             'is_archived' => $this->is_archived,
+            'is_priority' => $this->is_priority,
             // Direct subitem count, for the collapsed-row "N Subitems" badge —
             // falls back to a loaded `children` count when the `withCount`
             // alias isn't present (mirrors `checklist_total_count` below).
