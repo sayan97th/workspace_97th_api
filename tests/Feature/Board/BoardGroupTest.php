@@ -43,6 +43,28 @@ test('a group can be created on a board', function () {
     $this->assertDatabaseHas('board_groups', ['board_id' => $board->id, 'name' => 'Backlog']);
 });
 
+test('a group created at an explicit position shifts groups already there, landing right after the target', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $before = BoardGroup::factory()->create(['board_id' => $board->id, 'name' => 'before', 'position' => 0]);
+    $target = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $before->board_view_id, 'name' => 'target', 'position' => 1]);
+    $after = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $before->board_view_id, 'name' => 'after', 'position' => 2]);
+
+    // Mirrors the group menu's "Add group": the frontend resolves the
+    // clicked group's own position and asks for `position + 1` so the new
+    // table lands directly below it.
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/groups", [
+        'view_id' => $target->board_view_id,
+        'name' => 'New group',
+        'position' => $target->position + 1,
+    ]);
+
+    $response->assertCreated()->assertJsonPath('group.position', 2);
+    $this->assertDatabaseHas('board_groups', ['id' => $target->fresh()->id, 'position' => 1]);
+    $this->assertDatabaseHas('board_groups', ['id' => $after->fresh()->id, 'position' => 3]);
+    $this->assertDatabaseHas('board_groups', ['id' => $before->fresh()->id, 'position' => 0]);
+});
+
 test('a group defaults to not being a priority client', function () {
     $user = User::factory()->create();
     $board = createGroupTestBoard();

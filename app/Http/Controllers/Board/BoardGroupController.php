@@ -53,12 +53,29 @@ class BoardGroupController extends Controller
         $validated = $request->validated();
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
 
+        // An explicit `position` (the group menu's "Add group", which lands
+        // the new table directly below the one the menu was opened on) puts
+        // the new group in the middle of the sequence, so every group
+        // already at or past that slot has to shift up first — exactly like
+        // `BoardColumnController::store()`'s own "Add column to the right".
+        // Omitting `position` (the toolbar's "Add new group" button) just
+        // appends.
+        if (array_key_exists('position', $validated)) {
+            $position = $validated['position'];
+
+            BoardGroup::where('board_view_id', $view->id)
+                ->where('position', '>=', $position)
+                ->increment('position');
+        } else {
+            $position = $this->nextPosition($view);
+        }
+
         $group = $view->groups()->create([
             'board_id' => $item->id,
             'name' => $validated['name'],
             'accent_color' => $validated['accent_color'] ?? '#579bfc',
             'is_priority' => $validated['is_priority'] ?? false,
-            'position' => $validated['position'] ?? $this->nextPosition($view),
+            'position' => $position,
         ]);
 
         return response()->json([
