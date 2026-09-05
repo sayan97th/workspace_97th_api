@@ -34,6 +34,8 @@ use Illuminate\Support\Carbon;
  * @property string|null $display_style
  * @property string $board_type
  * @property string|null $item_column_label
+ * @property int|null $item_column_width
+ * @property int|null $sub_item_column_width
  * @property bool $is_favorite
  * @property int $position
  * @property int|null $created_by_id
@@ -67,6 +69,8 @@ use Illuminate\Support\Carbon;
     'display_style',
     'board_type',
     'item_column_label',
+    'item_column_width',
+    'sub_item_column_width',
     'is_favorite',
     'position',
     'created_by_id',
@@ -331,6 +335,8 @@ class WorkspaceNavigationItem extends Model
         return [
             'is_favorite' => 'boolean',
             'position' => 'integer',
+            'item_column_width' => 'integer',
+            'sub_item_column_width' => 'integer',
         ];
     }
 }

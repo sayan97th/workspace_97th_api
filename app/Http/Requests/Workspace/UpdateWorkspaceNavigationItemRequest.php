@@ -29,6 +29,8 @@ class UpdateWorkspaceNavigationItemRequest extends FormRequest
                 WorkspaceNavigationItem::BOARD_TYPE_SHAREABLE,
             ])],
             'item_column_label' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'item_column_width' => ['sometimes', 'nullable', 'integer', 'min:40', 'max:600'],
+            'sub_item_column_width' => ['sometimes', 'nullable', 'integer', 'min:40', 'max:600'],
             'is_favorite' => ['sometimes', 'boolean'],
         ];
     }
