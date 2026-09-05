@@ -7,8 +7,10 @@ use App\Http\Requests\Board\DuplicateBoardGroupRequest;
 use App\Http\Requests\Board\MoveBoardGroupRequest;
 use App\Http\Requests\Board\StoreBoardGroupRequest;
 use App\Http\Requests\Board\UpdateBoardGroupRequest;
+use App\Http\Requests\Board\UpdateGroupCollapseStateRequest;
 use App\Http\Resources\BoardGroupResource;
 use App\Models\BoardGroup;
+use App\Models\BoardGroupCollapseState;
 use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
@@ -31,8 +33,15 @@ class BoardGroupController extends Controller
     {
         $view = $this->view_resolver->resolveForRead($item, $this->viewIdParam($request));
 
+        $collapsed_group_ids = $view
+            ? BoardGroupCollapseState::where('user_id', $request->user()?->id)
+                ->where('board_view_id', $view->id)
+                ->value('collapsed_group_ids')
+            : null;
+
         return response()->json([
             'data' => BoardGroupResource::collection($view?->groups ?? collect()),
+            'collapsed_group_ids' => $collapsed_group_ids ?? [],
         ]);
     }
 
@@ -56,6 +65,36 @@ class BoardGroupController extends Controller
             'message' => 'Table created successfully.',
             'group' => new BoardGroupResource($group),
         ], 201);
+    }
+
+    /**
+     * PUT /api/boards/{item}/groups/collapsed-state
+     *
+     * Saves which of this tab's tables the authenticated viewer currently has
+     * collapsed — a personal preference, not shared with other collaborators
+     * (mirrors {@see BoardViewController::updatePersonalOrder()}).
+     * Only the collapsed ids are ever stored/sent, so this stays a small
+     * payload regardless of how many tables the tab has.
+     */
+    public function updateCollapsedState(UpdateGroupCollapseStateRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $view = $this->view_resolver->resolveForWrite($item, $request->validated('view_id'));
+
+        $group_ids = $view->groups()->pluck('id');
+        $collapsed_group_ids = collect($request->validated('collapsed_group_ids'))
+            ->filter(fn (int $id) => $group_ids->contains($id))
+            ->values()
+            ->all();
+
+        $state = BoardGroupCollapseState::updateOrCreate(
+            ['user_id' => $request->user()?->id, 'board_view_id' => $view->id],
+            ['collapsed_group_ids' => $collapsed_group_ids],
+        );
+
+        return response()->json([
+            'message' => 'Collapsed tables saved successfully.',
+            'collapsed_group_ids' => $state->collapsed_group_ids,
+        ]);
     }
 
     /**

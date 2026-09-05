@@ -224,6 +224,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::prefix('groups')->group(function () {
             Route::get('/', [BoardGroupController::class, 'index']);
             Route::post('/', [BoardGroupController::class, 'store']);
+            Route::put('collapsed-state', [BoardGroupController::class, 'updateCollapsedState']);
             Route::patch('{group}', [BoardGroupController::class, 'update']);
             Route::patch('{group}/move', [BoardGroupController::class, 'move']);
             Route::post('{group}/duplicate', [BoardGroupController::class, 'duplicate']);

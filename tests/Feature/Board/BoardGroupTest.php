@@ -179,3 +179,75 @@ test('a group created for a specific tab is persisted against that tab', functio
 
     $this->assertDatabaseHas('board_groups', ['board_id' => $board->id, 'board_view_id' => $tab->id, 'name' => 'Backlog']);
 });
+
+test('a new board has no collapsed tables by default', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    BoardGroup::factory()->create(['board_id' => $board->id]);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/groups")
+        ->assertOk()
+        ->assertJsonPath('collapsed_group_ids', []);
+});
+
+test('a viewer can save which tables are collapsed', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $group_one = BoardGroup::factory()->create(['board_id' => $board->id]);
+    $group_two = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group_one->board_view_id]);
+
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/groups/collapsed-state", ['collapsed_group_ids' => [$group_one->id]])
+        ->assertOk()
+        ->assertJsonPath('collapsed_group_ids', [$group_one->id]);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/groups")
+        ->assertOk()
+        ->assertJsonPath('collapsed_group_ids', [$group_one->id]);
+
+    $this->assertDatabaseHas('board_group_collapse_states', [
+        'user_id' => $user->id,
+        'board_view_id' => $group_one->board_view_id,
+        'collapsed_group_ids' => json_encode([$group_one->id]),
+    ]);
+
+    // Saving again fully replaces the previous set rather than merging into it.
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/groups/collapsed-state", ['collapsed_group_ids' => [$group_two->id]])
+        ->assertOk()
+        ->assertJsonPath('collapsed_group_ids', [$group_two->id]);
+});
+
+test('collapsed-table state is personal — one viewer collapsing a table does not affect another', function () {
+    $user_one = User::factory()->create();
+    $user_two = User::factory()->create();
+    $board = createGroupTestBoard();
+    $group = BoardGroup::factory()->create(['board_id' => $board->id]);
+
+    $this->actingAs($user_one, 'api')
+        ->putJson("/api/boards/{$board->id}/groups/collapsed-state", ['collapsed_group_ids' => [$group->id]])
+        ->assertOk();
+
+    $this->actingAs($user_two, 'api')
+        ->getJson("/api/boards/{$board->id}/groups")
+        ->assertOk()
+        ->assertJsonPath('collapsed_group_ids', []);
+});
+
+test('a group id belonging to a different tab is ignored when saving collapsed state', function () {
+    $user = User::factory()->create();
+    $board = createGroupTestBoard();
+    $tab = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+    $group_on_tab = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $tab->id]);
+    $group_elsewhere = BoardGroup::factory()->create(['board_id' => $board->id]);
+
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/groups/collapsed-state", [
+            'view_id' => $tab->id,
+            'collapsed_group_ids' => [$group_on_tab->id, $group_elsewhere->id],
+        ])
+        ->assertOk()
+        ->assertJsonPath('collapsed_group_ids', [$group_on_tab->id]);
+});
