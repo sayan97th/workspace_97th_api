@@ -67,6 +67,9 @@ class StoreBoardColumnRequest extends FormRequest
             'config.options.*.color' => ['required', 'string', 'max:20'],
             'config.options.*.is_active' => ['sometimes', 'boolean'],
             'config.options.*.description' => ['sometimes', 'nullable', 'string', 'max:500'],
+            // People columns only: whether assigning someone here notifies
+            // them (in-app + email) — the People cell picker's bottom toggle.
+            'config.notify_on_assignment' => ['sometimes', 'boolean'],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

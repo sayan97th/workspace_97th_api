@@ -403,7 +403,7 @@ class BoardItemController extends Controller
         $valid_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
             ->where('scope', $scope)
             ->whereIn('id', array_map('intval', array_keys($values)))
-            ->get(['id', 'type'])
+            ->get(['id', 'type', 'config'])
             ->keyBy('id');
 
         foreach ($values as $column_id => $value) {
@@ -426,9 +426,18 @@ class BoardItemController extends Controller
     /**
      * Notifies every person newly added to a people-type column value
      * (comparing against the currently-stored value), skipping self-assignment.
+     * No-ops entirely when the column's own `config.notify_on_assignment` has
+     * been switched off (see the People cell picker's bottom toggle,
+     * persisted per-column via `BoardColumnController::update()`), which
+     * takes precedence over — and is checked before ever touching — each
+     * recipient's own personal notification preferences.
      */
     private function notifyNewlyAssignedPeople(WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, mixed $new_value, User $actor): void
     {
+        if (($column->config['notify_on_assignment'] ?? true) === false) {
+            return;
+        }
+
         $existing_value = BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->first();
         $existing_ids = is_array($existing_value?->value) ? $existing_value->value : [];
         $new_ids = is_array($new_value) ? $new_value : [];
@@ -443,6 +452,7 @@ class BoardItemController extends Controller
                     action_label: 'Assigned you',
                     action_target: sprintf('to "%s" on the Board "%s"', $board_item->name, $item->label),
                     link: "/boards/{$item->id}/pulses/{$board_item->id}",
+                    board_item: $board_item,
                 );
             }
         }

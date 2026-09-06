@@ -21,6 +21,7 @@ use Illuminate\Support\Carbon;
  * @property int|null $actor_id
  * @property string $type
  * @property int|null $board_id
+ * @property int|null $board_item_id
  * @property string $action_label
  * @property string $action_target
  * @property string|null $link
@@ -31,8 +32,9 @@ use Illuminate\Support\Carbon;
  * @property-read User $user
  * @property-read User|null $actor
  * @property-read WorkspaceNavigationItem|null $board
+ * @property-read BoardItem|null $boardItem
  */
-#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at'])]
+#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at'])]
 class Notification extends Model
 {
     use HasFactory;
@@ -92,6 +94,19 @@ class Notification extends Model
     public function board(): BelongsTo
     {
         return $this->belongsTo(WorkspaceNavigationItem::class, 'board_id');
+    }
+
+    /**
+     * The specific row (item/pulse) this notification is about, if any —
+     * currently only set for {@see TYPE_ASSIGNED}, letting the email
+     * template resolve the item's table/view/workspace breadcrumb through
+     * this relation instead of duplicating those labels as flat columns.
+     *
+     * @return BelongsTo<BoardItem, $this>
+     */
+    public function boardItem(): BelongsTo
+    {
+        return $this->belongsTo(BoardItem::class, 'board_item_id');
     }
 
     /**
