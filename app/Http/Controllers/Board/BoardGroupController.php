@@ -28,6 +28,13 @@ class BoardGroupController extends Controller
      * A tab's groups are its "tables" — any number (1…N) can exist, each
      * rendered as its own titled table by the frontend's `BoardTable`. Scoped
      * to one tab — `view_id` if given, otherwise the board's primary tab.
+     *
+     * Deliberately never loads any items itself — this stays cheap even for
+     * a tab with hundreds of tables. Each table's own row count is still
+     * exposed via `item_count` (a `withCount`, not a real eager load) so the
+     * frontend can render an accurate "N items" label and a correctly-sized
+     * loading skeleton *before* that table's rows are actually fetched (see
+     * `GroupSection`'s lazy per-table loading).
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -39,8 +46,14 @@ class BoardGroupController extends Controller
                 ->value('collapsed_group_ids')
             : null;
 
+        $groups = $view
+            ? $view->groups()
+                ->withCount(['items as item_count' => fn ($q) => $q->whereNull('parent_id')->where('is_archived', false)])
+                ->get()
+            : collect();
+
         return response()->json([
-            'data' => BoardGroupResource::collection($view?->groups ?? collect()),
+            'data' => BoardGroupResource::collection($groups),
             'collapsed_group_ids' => $collapsed_group_ids ?? [],
         ]);
     }
@@ -125,7 +138,7 @@ class BoardGroupController extends Controller
 
         return response()->json([
             'message' => 'Table updated successfully.',
-            'group' => new BoardGroupResource($group->fresh()),
+            'group' => new BoardGroupResource($this->loadItemCount($group->fresh())),
         ]);
     }
 
@@ -141,7 +154,7 @@ class BoardGroupController extends Controller
 
         return response()->json([
             'message' => 'Table moved successfully.',
-            'group' => new BoardGroupResource($group->fresh()),
+            'group' => new BoardGroupResource($this->loadItemCount($group->fresh())),
         ]);
     }
 
@@ -190,7 +203,7 @@ class BoardGroupController extends Controller
 
         return response()->json([
             'message' => 'Table duplicated successfully.',
-            'group' => new BoardGroupResource($copy),
+            'group' => new BoardGroupResource($this->loadItemCount($copy)),
         ], 201);
     }
 
@@ -200,6 +213,19 @@ class BoardGroupController extends Controller
     private function ensureGroupBelongsToBoard(WorkspaceNavigationItem $item, BoardGroup $group): void
     {
         abort_if($group->board_id !== $item->id, 404);
+    }
+
+    /**
+     * Eager-counts `item_count` (mirrors `index()`'s own `withCount`) onto a
+     * single group before it goes through `BoardGroupResource` — without
+     * this, `update()`/`move()`/`duplicate()` would resolve `item_count` to
+     * its resource-level fallback of 0, and the frontend's `setGroups`
+     * handlers replace the whole group object with that response, silently
+     * resetting an already-populated table's item count back to 0.
+     */
+    private function loadItemCount(BoardGroup $group): BoardGroup
+    {
+        return $group->loadCount(['items as item_count' => fn ($q) => $q->whereNull('parent_id')->where('is_archived', false)]);
     }
 
     /**

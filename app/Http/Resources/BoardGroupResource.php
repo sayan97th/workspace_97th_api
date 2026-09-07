@@ -24,6 +24,12 @@ class BoardGroupResource extends JsonResource
             'accent_color' => $this->accent_color,
             'is_priority' => $this->is_priority,
             'position' => $this->position,
+            // Root item count (excludes subitems/archived), from `withCount`
+            // in `BoardGroupController::index()` — lets the frontend size a
+            // table's "N items" label and loading skeleton before its rows
+            // are actually fetched (see `GroupSection`'s lazy loading).
+            // Falls back to 0 for any other call site that doesn't eager-load it.
+            'item_count' => $this->item_count ?? 0,
         ];
     }
 }

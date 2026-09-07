@@ -45,6 +45,13 @@ class BoardItemController extends Controller
      * `useBoardToolbar` from this full set — since it only ever sees roots,
      * subitems are invisible to filter/sort/search/group-by by design; they
      * only ever render nested beneath their (visible, expanded) parent.
+     *
+     * Optionally narrowed to specific tables via `group_ids[]` — the Table
+     * view's `GroupSection` lazy-loads each table's rows only once it's
+     * about to scroll into view (see `BoardTableView.tsx`), rather than
+     * pulling a whole tab's items (which can span 100+ tables) up front.
+     * Every other caller (Kanban/Calendar/Gantt's eager full-tab loads, a
+     * `search`-only call) omits it and keeps getting the full tab, unchanged.
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -70,6 +77,10 @@ class BoardItemController extends Controller
             ->orderBy('group_id')->orderBy('position');
 
         $query = $this->filter_service->applySearch($query, $request->query('search'));
+
+        if ($group_ids = $this->groupIdsParam($request)) {
+            $query->whereIn('group_id', $group_ids);
+        }
 
         return response()->json([
             'data' => BoardItemResource::collection($query->get()),
@@ -567,5 +578,19 @@ class BoardItemController extends Controller
     private function viewIdParam(Request $request): ?int
     {
         return $request->filled('view_id') ? (int) $request->query('view_id') : null;
+    }
+
+    /**
+     * Reads `group_ids[]` from the query string for GET requests — see
+     * `index()`'s own doc comment. Empty/absent returns `[]`, meaning "every
+     * table in the tab" (no additional `whereIn` filter applied).
+     *
+     * @return array<int, int>
+     */
+    private function groupIdsParam(Request $request): array
+    {
+        $group_ids = $request->query('group_ids');
+
+        return is_array($group_ids) ? array_map('intval', $group_ids) : [];
     }
 }
