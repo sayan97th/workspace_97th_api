@@ -7,22 +7,28 @@ use App\Http\Requests\Board\AnalyzeBoardImportRequest;
 use App\Http\Requests\Board\CommitBoardImportRequest;
 use App\Http\Resources\BoardColumnResource;
 use App\Http\Resources\BoardGroupResource;
+use App\Http\Resources\BoardImportJobResource;
+use App\Jobs\ProcessBoardImportJob;
 use App\Models\BoardColumn;
+use App\Models\BoardImportJob;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardItemImportService;
 use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Http\Request;
 
 /**
  * Board options menu's "More actions" > "Import items" — the three-step
  * ("Upload" / "Map columns" / "Handle matches") wizard's backend. `analyze()`
  * parses whatever file was dropped in and caches it server-side under a
  * short-lived token; `commit()` takes that token plus the wizard's final
- * column-mapping/duplicate-handling choices and actually writes the rows.
+ * column-mapping/duplicate-handling choices and queues
+ * {@see ProcessBoardImportJob} to actually write the rows in the background
+ * — `show()`/`cancel()` are the progress bar's REST fallback and its "stop"
+ * button (see `useBoardImportProgress` on the frontend, which prefers the
+ * live `board-import.{user_id}` broadcast channel over polling `show()`).
  * See {@see BoardItemImportService} for the parsing/import logic itself —
- * this controller only owns the request/response shape and the transaction
- * boundary.
+ * this controller only owns the request/response shape.
  */
 class BoardImportController extends Controller
 {
@@ -80,8 +86,12 @@ class BoardImportController extends Controller
      * POST /api/boards/{item}/import/commit
      *
      * Step 3 ("Handle matches")'s final "Import Now" — loads the cached
-     * upload back by `import_token` and writes it, wrapped in one
-     * transaction so a mid-import failure can't leave a half-created table.
+     * upload back by `import_token`, creates a {@see BoardImportJob} row
+     * (so there's something to show progress for immediately) and queues
+     * {@see ProcessBoardImportJob} to actually write the rows in the
+     * background. Returns 202 (accepted, not yet done) with the freshly
+     * created job — the frontend switches to the wizard's progress step and
+     * tracks that job's id from here on.
      */
     public function commit(CommitBoardImportRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -96,19 +106,75 @@ class BoardImportController extends Controller
             ], 410);
         }
 
-        $result = DB::transaction(fn () => $this->importer->commit($item, $view, $parsed, [
-            'target_group_id' => $validated['target_group_id'] ?? null,
-            'new_group_name' => $validated['new_group_name'] ?? null,
-            'mappings' => $validated['mappings'],
-            'duplicate_mode' => $validated['duplicate_mode'],
-            'match_source_index' => $validated['match_source_index'] ?? null,
-        ]));
-
-        $this->importer->deleteParsedImport($validated['import_token']);
-
-        return response()->json([
-            'message' => 'Import completed successfully.',
-            ...$result,
+        $import_job = BoardImportJob::create([
+            'board_id' => $item->id,
+            'board_view_id' => $view->id,
+            'user_id' => $request->user()->id,
+            'import_token' => $validated['import_token'],
+            'file_name' => $parsed['file_name'],
+            'status' => BoardImportJob::STATUS_QUEUED,
+            'total_rows' => count($parsed['rows']),
+            'options' => [
+                'target_group_id' => $validated['target_group_id'] ?? null,
+                'new_group_name' => $validated['new_group_name'] ?? null,
+                'mappings' => $validated['mappings'],
+                'duplicate_mode' => $validated['duplicate_mode'],
+                'match_source_index' => $validated['match_source_index'] ?? null,
+            ],
         ]);
+
+        ProcessBoardImportJob::dispatch($import_job->id);
+
+        // On a `sync` queue connection (as in tests, and optionally local
+        // dev) `dispatch()` above already ran the job to completion before
+        // returning — but through a *different* `BoardImportJob` instance
+        // than this one, so this in-memory `$import_job` is still showing
+        // its pre-dispatch `"queued"` snapshot until refreshed.
+        return response()->json([
+            'message' => 'Import queued.',
+            'data' => new BoardImportJobResource($import_job->fresh()),
+        ], 202);
+    }
+
+    /**
+     * GET /api/boards/{item}/import/{import_job}
+     *
+     * The progress bar's polling fallback for whenever the websocket
+     * connection isn't up — otherwise it just relies on the live
+     * `board_import_progress` broadcast.
+     */
+    public function show(WorkspaceNavigationItem $item, BoardImportJob $import_job): JsonResponse
+    {
+        $this->ensureImportJobBelongsToBoard($item, $import_job);
+
+        return response()->json(['data' => new BoardImportJobResource($import_job)]);
+    }
+
+    /**
+     * POST /api/boards/{item}/import/{import_job}/cancel
+     *
+     * The progress step's "Stop" button. Only flips a flag — the job itself
+     * (see {@see ProcessBoardImportJob::handle()}) checks it between chunks
+     * and stops there, keeping whatever it already committed rather than
+     * rolling those rows back. No-ops once the job has already reached a
+     * terminal status.
+     */
+    public function cancel(Request $request, WorkspaceNavigationItem $item, BoardImportJob $import_job): JsonResponse
+    {
+        $this->ensureImportJobBelongsToBoard($item, $import_job);
+
+        if (! in_array($import_job->status, BoardImportJob::TERMINAL_STATUSES, true)) {
+            $import_job->update(['cancel_requested' => true]);
+        }
+
+        return response()->json(['data' => new BoardImportJobResource($import_job->fresh())]);
+    }
+
+    /**
+     * Guard: abort with 404 when the import job is not part of the board.
+     */
+    private function ensureImportJobBelongsToBoard(WorkspaceNavigationItem $item, BoardImportJob $import_job): void
+    {
+        abort_if($import_job->board_id !== $item->id, 404);
     }
 }

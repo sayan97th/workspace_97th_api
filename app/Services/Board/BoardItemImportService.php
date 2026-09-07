@@ -4,6 +4,7 @@ namespace App\Services\Board;
 
 use App\Concerns\InfersBoardColumnTypes;
 use App\Concerns\ReadsSpreadsheetSheets;
+use App\Jobs\ProcessBoardImportJob;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
@@ -12,6 +13,7 @@ use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
@@ -239,11 +241,25 @@ class BoardItemImportService
         }
     }
 
+    /** How many rows are written per database transaction — see `commit()`'s own doc comment. */
+    private const CHUNK_SIZE = 100;
+
     /**
-     * Creates (or reuses) the target table, its "create a new column"
-     * mappings, and every row as a board item — updating/skipping rows that
-     * match an existing item when `duplicate_mode` isn't `"add"`. Runs
-     * inside the caller's transaction (see `BoardImportController::commit()`).
+     * Creates (or reuses) the target table and its "create a new column"
+     * mappings, then writes every row as a board item — updating/skipping
+     * rows that match an existing item when `duplicate_mode` isn't `"add"`.
+     *
+     * Run by {@see ProcessBoardImportJob} rather than inline on the
+     * request that presses "Import Now", precisely so a large file's row
+     * count is never bound to one HTTP request's timeout: rows are written
+     * {@see self::CHUNK_SIZE} at a time, each chunk in its own short
+     * transaction, with `$onChunkProcessed` fired after every one (so the
+     * job can update the wizard's progress bar) and `$isCancelled` checked
+     * before the next one starts (the wizard's "stop" button) — so the rows
+     * already-committed chunks wrote stay written rather than being rolled
+     * back, and a big file makes steady, visible progress instead of the
+     * caller staring at a stalled request for however long the whole file
+     * takes.
      *
      * @param  array{headers: array<int, string>, rows: array<int, array<int, string>>}  $parsed
      * @param  array{
@@ -253,15 +269,34 @@ class BoardItemImportService
      *     duplicate_mode: string,
      *     match_source_index: int|null,
      * }  $options
-     * @return array{created: int, updated: int, skipped: int, columns_created: int, group_id: int, group_created: bool}
+     * @param  callable(int $processed, int $total): void  $onChunkProcessed
+     * @param  callable(): bool  $isCancelled
+     * @return array{created: int, updated: int, skipped: int, columns_created: int, group_id: int|null, group_created: bool, processed_rows: int, total_rows: int, cancelled: bool}
      */
-    public function commit(WorkspaceNavigationItem $board, BoardView $view, array $parsed, array $options): array
-    {
+    public function commit(
+        WorkspaceNavigationItem $board,
+        BoardView $view,
+        array $parsed,
+        array $options,
+        callable $onChunkProcessed,
+        callable $isCancelled,
+    ): array {
         $headers = $parsed['headers'];
         $rows = array_slice($parsed['rows'], 0, self::MAX_ROWS);
+        $total = count($rows);
 
-        [$group, $group_created] = $this->resolveTargetGroup($board, $view, $options);
-        [$name_index, $index_to_column, $columns_created] = $this->resolveMappings($board, $view, $headers, $rows, $options['mappings']);
+        // Checked once up front too — cancelling an import the instant it's
+        // queued shouldn't still leave behind a freshly-created table and
+        // columns nobody asked to keep, so this skips `resolveTargetGroup()`/
+        // `resolveMappings()` entirely rather than creating them first.
+        if ($this->checkCancelled($isCancelled)) {
+            return $this->cancelledResult($total);
+        }
+
+        [$group, $group_created] = DB::transaction(fn () => $this->resolveTargetGroup($board, $view, $options));
+        [$name_index, $index_to_column, $columns_created] = DB::transaction(
+            fn () => $this->resolveMappings($board, $view, $headers, $rows, $options['mappings'])
+        );
 
         $duplicate_mode = $options['duplicate_mode'];
         $match_index = $options['match_source_index'] ?? $name_index;
@@ -273,48 +308,66 @@ class BoardItemImportService
         $created = 0;
         $updated = 0;
         $skipped = 0;
+        $processed = 0;
+        $was_cancelled = false;
         $next_position = (int) $group->items()->whereNull('parent_id')->max('position') + 1;
 
-        foreach ($rows as $row) {
-            $name_raw = trim($row[$name_index] ?? '');
-            [$name, $overflow] = $this->splitOverflowingName($name_raw !== '' ? $name_raw : 'Untitled item');
+        foreach (array_chunk($rows, self::CHUNK_SIZE) as $chunk) {
+            if ($this->checkCancelled($isCancelled)) {
+                $was_cancelled = true;
 
-            $values = $this->castRowValues($index_to_column, $row, $users);
-
-            $match_raw = $match_index === $name_index ? $name_raw : trim($row[$match_index] ?? '');
-            $match_key = $this->normalizeForMatch($match_raw);
-            $existing_item = $match_key !== '' ? ($existing_by_key[$match_key] ?? null) : null;
-
-            if ($existing_item !== null && $duplicate_mode === 'skip') {
-                $skipped++;
-
-                continue;
+                break;
             }
 
-            if ($existing_item !== null && $duplicate_mode === 'update') {
-                $existing_item->fill(['name' => $name, 'description' => $overflow])->save();
+            DB::transaction(function () use (
+                $chunk, $board, $group, $name_index, $index_to_column, $duplicate_mode, $match_index,
+                &$existing_by_key, $users, &$created, &$updated, &$skipped, &$next_position,
+            ) {
+                foreach ($chunk as $row) {
+                    $name_raw = trim($row[$name_index] ?? '');
+                    [$name, $overflow] = $this->splitOverflowingName($name_raw !== '' ? $name_raw : 'Untitled item');
 
-                foreach ($values as $entry) {
-                    $existing_item->values()->updateOrCreate(['column_id' => $entry['column_id']], ['value' => $entry['value']]);
+                    $values = $this->castRowValues($index_to_column, $row, $users);
+
+                    $match_raw = $match_index === $name_index ? $name_raw : trim($row[$match_index] ?? '');
+                    $match_key = $this->normalizeForMatch($match_raw);
+                    $existing_item = $match_key !== '' ? ($existing_by_key[$match_key] ?? null) : null;
+
+                    if ($existing_item !== null && $duplicate_mode === 'skip') {
+                        $skipped++;
+
+                        continue;
+                    }
+
+                    if ($existing_item !== null && $duplicate_mode === 'update') {
+                        $existing_item->fill(['name' => $name, 'description' => $overflow])->save();
+
+                        foreach ($values as $entry) {
+                            $existing_item->values()->updateOrCreate(['column_id' => $entry['column_id']], ['value' => $entry['value']]);
+                        }
+
+                        $updated++;
+
+                        continue;
+                    }
+
+                    $item = $board->items()->create([
+                        'group_id' => $group->id,
+                        'name' => $name,
+                        'description' => $overflow,
+                        'position' => $next_position++,
+                    ]);
+
+                    if ($values !== []) {
+                        $item->values()->createMany($values);
+                    }
+
+                    $created++;
                 }
+            });
 
-                $updated++;
-
-                continue;
-            }
-
-            $item = $board->items()->create([
-                'group_id' => $group->id,
-                'name' => $name,
-                'description' => $overflow,
-                'position' => $next_position++,
-            ]);
-
-            if ($values !== []) {
-                $item->values()->createMany($values);
-            }
-
-            $created++;
+            $processed += count($chunk);
+            $onChunkProcessed($processed, $total);
         }
 
         return [
@@ -324,6 +377,43 @@ class BoardItemImportService
             'columns_created' => $columns_created,
             'group_id' => $group->id,
             'group_created' => $group_created,
+            'processed_rows' => $processed,
+            'total_rows' => $total,
+            'cancelled' => $was_cancelled,
+        ];
+    }
+
+    /**
+     * Indirection around invoking `$isCancelled` itself — `commit()` calls
+     * this the same way at every check, and without this wrapper PHPStan
+     * treats two calls to the same unreassigned callable parameter as
+     * necessarily returning the same result (true the first time only if
+     * the caller made a mistake), which isn't true here: it re-reads
+     * `cancel_requested` from the database each time. See
+     * https://phpstan.org/blog/remembering-and-forgetting-returned-values.
+     *
+     * @phpstan-impure
+     */
+    private function checkCancelled(callable $isCancelled): bool
+    {
+        return $isCancelled();
+    }
+
+    /**
+     * @return array{created: int, updated: int, skipped: int, columns_created: int, group_id: int|null, group_created: bool, processed_rows: int, total_rows: int, cancelled: bool}
+     */
+    private function cancelledResult(int $total): array
+    {
+        return [
+            'created' => 0,
+            'updated' => 0,
+            'skipped' => 0,
+            'columns_created' => 0,
+            'group_id' => null,
+            'group_created' => false,
+            'processed_rows' => 0,
+            'total_rows' => $total,
+            'cancelled' => true,
         ];
     }
 

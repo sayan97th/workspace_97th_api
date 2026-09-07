@@ -28,3 +28,9 @@ Broadcast::channel('feed.{user_id}', function ($user, $user_id) {
 Broadcast::channel('websocket-test.{user_id}', function ($user, $user_id) {
     return (int) $user->id === (int) $user_id;
 });
+
+// Private per-user channel used by the "Import items" wizard's progress bar
+// to receive BoardImportProgressUpdated broadcasts from ProcessBoardImportJob.
+Broadcast::channel('board-import.{user_id}', function ($user, $user_id) {
+    return (int) $user->id === (int) $user_id;
+});

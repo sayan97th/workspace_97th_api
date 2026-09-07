@@ -269,6 +269,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::prefix('import')->group(function () {
             Route::post('analyze', [BoardImportController::class, 'analyze']);
             Route::post('commit', [BoardImportController::class, 'commit']);
+
+            Route::get('{import_job}', [BoardImportController::class, 'show']);
+            Route::post('{import_job}/cancel', [BoardImportController::class, 'cancel']);
         });
 
         Route::prefix('groups')->group(function () {
