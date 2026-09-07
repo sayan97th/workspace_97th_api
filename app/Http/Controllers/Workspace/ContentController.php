@@ -45,6 +45,7 @@ class ContentController extends Controller
 
         $items = $workspace->navigationItems()
             ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
+            ->notArchived()
             ->with(['creator', 'workspace'])
             ->latest('created_at')
             ->limit($limit)
@@ -74,6 +75,7 @@ class ContentController extends Controller
         $query = WorkspaceNavigationItem::query()
             ->whereIn('workspace_id', $workspace_ids)
             ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
+            ->notArchived()
             ->where(fn (Builder $query) => $query->where('view_key', '!=', self::MANAGE_WORKSPACE_VIEW_KEY)
                 ->orWhereNull('view_key'))
             ->with(['creator', 'workspace']);

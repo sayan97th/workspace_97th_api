@@ -19,6 +19,7 @@
         "laravel/socialite": "^5.28",
         "laravel/tinker": "^3.0",
         "laravel/wayfinder": "^0.1.14",
+        "maatwebsite/excel": "^4.0",
         "php-open-source-saver/jwt-auth": "^2.9",
         "predis/predis": "^3.5",
         "symfony/http-client": "^8.1",

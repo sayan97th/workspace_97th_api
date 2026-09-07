@@ -7,8 +7,11 @@ use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\StoreWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavigationItemRequest;
 use App\Http\Resources\WorkspaceNavigationItemResource;
+use App\Models\BoardActivityLog;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardActivityLogger;
+use App\Services\Board\BoardDuplicationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -16,6 +19,11 @@ use Illuminate\Support\Str;
 
 class WorkspaceNavigationItemController extends Controller
 {
+    public function __construct(
+        private readonly BoardDuplicationService $duplication_service,
+        private readonly BoardActivityLogger $activity_logger,
+    ) {}
+
     /**
      * GET /api/workspaces/{workspace}/navigation
      *
@@ -24,12 +32,36 @@ class WorkspaceNavigationItemController extends Controller
     public function index(Workspace $workspace): JsonResponse
     {
         $tree = $workspace->rootNavigationItems()
+            ->notArchived()
             ->with(['childrenRecursive', 'creator', 'workspace.owners'])
             ->get();
 
         return response()->json([
-            'data' => WorkspaceNavigationItemResource::collection($tree),
+            'data' => WorkspaceNavigationItemResource::collection($this->pruneArchived($tree)),
         ]);
+    }
+
+    /**
+     * Recursively drops archived nodes (and, since a node's own subtree is
+     * only reachable through it, everything beneath them) from an
+     * already-loaded `childrenRecursive` tree — an archived board is hidden
+     * from the sidebar/nav tree, not deleted, so this can't be a query-level
+     * filter without risking the same `childrenRecursive` relation used
+     * structurally elsewhere (move/duplicate/delete) also silently skipping
+     * archived descendants.
+     *
+     * @param  Collection<int, WorkspaceNavigationItem>  $items
+     * @return Collection<int, WorkspaceNavigationItem>
+     */
+    private function pruneArchived(Collection $items): Collection
+    {
+        return $items->reject(fn (WorkspaceNavigationItem $item) => $item->is_archived)
+            ->values()
+            ->each(function (WorkspaceNavigationItem $item) {
+                if ($item->relationLoaded('childrenRecursive')) {
+                    $item->setRelation('childrenRecursive', $this->pruneArchived($item->childrenRecursive));
+                }
+            });
     }
 
     /**
@@ -73,12 +105,34 @@ class WorkspaceNavigationItemController extends Controller
         $this->ensureItemBelongsToWorkspace($workspace, $item);
 
         $validated = $request->validated();
+        $previous_label = $item->label;
+        $previous_board_type = $item->board_type;
 
         if (array_key_exists('label', $validated)) {
             $item->slug = $this->uniqueSlug($workspace, $item->parent_id, $validated['label'], $item->id);
         }
 
         $item->fill($validated)->save();
+
+        if (array_key_exists('label', $validated) && $validated['label'] !== $previous_label) {
+            $this->activity_logger->log(
+                $item,
+                $request->user(),
+                BoardActivityLog::ACTION_RENAMED,
+                "Renamed the board from \"{$previous_label}\" to \"{$validated['label']}\"",
+                ['from' => $previous_label, 'to' => $validated['label']]
+            );
+        }
+
+        if (array_key_exists('board_type', $validated) && $validated['board_type'] !== $previous_board_type) {
+            $this->activity_logger->log(
+                $item,
+                $request->user(),
+                BoardActivityLog::ACTION_TYPE_CHANGED,
+                "Changed the board type from \"{$previous_board_type}\" to \"{$validated['board_type']}\"",
+                ['from' => $previous_board_type, 'to' => $validated['board_type']]
+            );
+        }
 
         return response()->json([
             'message' => 'Navigation item updated successfully.',
@@ -119,6 +173,13 @@ class WorkspaceNavigationItemController extends Controller
 
     /**
      * POST /api/workspaces/{workspace}/navigation/{item}/duplicate
+     *
+     * Deep-copies the nav-tree subtree itself (see `copySubtree()`) and,
+     * for every leaf in that subtree (a real board, not just a folder), also
+     * deep-copies its board content — every tab's columns, groups, items and
+     * cell values — via {@see BoardDuplicationService}, so "Duplicate board"
+     * from the board options menu produces a genuinely independent copy
+     * rather than an empty shell.
      */
     public function duplicate(Request $request, Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -128,6 +189,13 @@ class WorkspaceNavigationItemController extends Controller
 
         $copy = $this->copySubtree($item, $item->parent_id, $this->nextPosition($workspace, $item->parent_id), $request->user()?->id);
         $copy->load(['childrenRecursive', 'creator', 'workspace.owners']);
+
+        $this->activity_logger->log(
+            $copy,
+            $request->user(),
+            BoardActivityLog::ACTION_DUPLICATED,
+            "Duplicated from \"{$item->label}\""
+        );
 
         return response()->json([
             'message' => 'Navigation item duplicated successfully.',
@@ -140,10 +208,11 @@ class WorkspaceNavigationItemController extends Controller
      *
      * Soft-deletes (archives) the item; the cascade removes descendants.
      */
-    public function destroy(Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
+    public function destroy(Request $request, Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
     {
         $this->ensureItemBelongsToWorkspace($workspace, $item);
 
+        $this->activity_logger->log($item, $request->user(), BoardActivityLog::ACTION_DELETED, 'Deleted the board');
         $this->deleteSubtree($item);
 
         return response()->json([
@@ -230,6 +299,10 @@ class WorkspaceNavigationItemController extends Controller
             'position' => $position,
             'created_by_id' => $created_by_id,
         ]);
+
+        if ($item->type === WorkspaceNavigationItem::TYPE_LEAF) {
+            $this->duplication_service->duplicateAllViews($item, $copy, $created_by_id);
+        }
 
         foreach ($item->childrenRecursive as $child) {
             $this->copySubtree($child, $copy->id, $child->position, $created_by_id);

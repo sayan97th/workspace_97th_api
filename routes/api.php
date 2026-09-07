@@ -21,20 +21,24 @@ use App\Http\Controllers\Auth\StaffInvitationController;
 use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
+use App\Http\Controllers\Board\BoardActivityLogController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
+use App\Http\Controllers\Board\BoardExportController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardInvitationController;
 use App\Http\Controllers\Board\BoardItemAttachmentController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
+use App\Http\Controllers\Board\BoardTrashController;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
 use App\Http\Controllers\BrandingController as PublicBrandingController;
 use App\Http\Controllers\BroadcastAuthController;
 use App\Http\Controllers\Feed\FeedUpdateController;
+use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
@@ -193,6 +197,26 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::delete('invitations/{invitation:id}', [BoardInvitationController::class, 'destroy']);
         Route::delete('collaborators/{collaborator}', [BoardInvitationController::class, 'removeCollaborator']);
     });
+
+    // Board options menu ("...") — archive/unarchive the whole board, its
+    // per-board archived/deleted-items panel, its activity log, and
+    // exporting its primary (or a given) tab to Excel.
+    Route::prefix('boards/{item}')->group(function () {
+        Route::post('archive', [BoardController::class, 'archive']);
+        Route::post('unarchive', [BoardController::class, 'unarchive']);
+
+        Route::get('activity-log', [BoardActivityLogController::class, 'index']);
+
+        Route::get('trash', [BoardTrashController::class, 'index']);
+        Route::patch('trash/{board_item}/restore', [BoardTrashController::class, 'restore']);
+        Route::delete('trash/{board_item}', [BoardTrashController::class, 'forceDelete']);
+
+        Route::get('export', [BoardExportController::class, 'export']);
+    });
+
+    // Board options menu's "Give feedback" — a free-form product note,
+    // optionally tied to the board the user was on.
+    Route::post('feedback', [FeedbackController::class, 'store']);
 
     // Content, listed across every board/doc — powers Manage Workspace's
     // Content tab ("every board/doc I have access to", the same rows the

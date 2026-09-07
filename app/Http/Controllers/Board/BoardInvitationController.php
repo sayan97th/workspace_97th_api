@@ -9,6 +9,7 @@ use App\Mail\BoardInvitationMail;
 use App\Models\BoardInvitation;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\BoardManagementGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,13 +23,6 @@ use Illuminate\Validation\ValidationException;
  */
 class BoardInvitationController extends Controller
 {
-    /**
-     * Global roles that can manage invitations for any board, regardless of
-     * their own membership in its workspace — mirrors the workspace
-     * invitation controller's equivalent gate.
-     */
-    private const PRIVILEGED_GLOBAL_ROLES = ['super_admin', 'admin'];
-
     /**
      * GET /api/boards/{item}/invitations
      *
@@ -89,7 +83,7 @@ class BoardInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($item, $user, 'invite people to this board');
+        BoardManagementGate::authorize($item, $user, 'invite people to this board');
 
         $validated = $request->validated();
         $message = $validated['message'] ?? null;
@@ -168,7 +162,7 @@ class BoardInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($item, $user, 'revoke invitations for this board');
+        BoardManagementGate::authorize($item, $user, 'revoke invitations for this board');
 
         if (! $invitation->isPending()) {
             throw ValidationException::withMessages([
@@ -194,7 +188,7 @@ class BoardInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($item, $user, 'remove people from this board');
+        BoardManagementGate::authorize($item, $user, 'remove people from this board');
 
         $item->collaborators()->detach($collaborator->id);
 
@@ -230,32 +224,4 @@ class BoardInvitationController extends Controller
         ];
     }
 
-    /**
-     * Gates every invitation-management endpoint: allowed for the board's
-     * workspace owner, the board's own creator, or a user holding a
-     * {@see PRIVILEGED_GLOBAL_ROLES} role.
-     */
-    private function authorizeInvitationManagement(WorkspaceNavigationItem $item, User $user, string $action): void
-    {
-        if ($user->hasRole(self::PRIVILEGED_GLOBAL_ROLES)) {
-            return;
-        }
-
-        if ($item->created_by_id === $user->id) {
-            return;
-        }
-
-        $membership = DB::table('workspace_user')
-            ->where('workspace_id', $item->workspace_id)
-            ->where('user_id', $user->id)
-            ->first();
-
-        if (($membership->role ?? null) === 'owner') {
-            return;
-        }
-
-        throw ValidationException::withMessages([
-            'board' => "Only the board's creator, a workspace owner, or an administrator can {$action}.",
-        ])->status(403);
-    }
 }

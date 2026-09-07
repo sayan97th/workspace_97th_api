@@ -12,10 +12,10 @@ use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\BoardViewUserOrder;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardDuplicationService;
 use App\Services\Board\ChartDataService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class BoardViewController extends Controller
@@ -203,83 +203,17 @@ class BoardViewController extends Controller
      * duplicate is a fresh structural copy to edit, not a copy of the
      * conversation history.
      */
-    public function duplicate(Request $request, WorkspaceNavigationItem $item, BoardView $board_view): JsonResponse
+    public function duplicate(Request $request, WorkspaceNavigationItem $item, BoardView $board_view, BoardDuplicationService $duplication_service): JsonResponse
     {
         $this->ensureViewBelongsToBoard($item, $board_view);
         $this->ensureViewUnlocked($board_view);
 
-        $board_view->loadMissing(['columns', 'groups.items.values']);
-
-        $copy = DB::transaction(function () use ($request, $item, $board_view) {
-            $column_id_map = [];
-
-            $view_copy = $item->views()->create([
-                'label' => "{$board_view->label} (copy)",
-                'view_type' => $board_view->view_type,
-                'emoji' => $board_view->emoji,
-                'position' => $this->nextPosition($item),
-                'is_primary' => false,
-                'pinned' => false,
-                'is_locked' => false,
-                'locked_by_id' => null,
-                'row_height' => $board_view->row_height,
-                'doc_content' => $board_view->doc_content,
-                'created_by_id' => $request->user()?->id,
-            ]);
-
-            foreach ($board_view->columns as $column) {
-                $column_copy = $view_copy->columns()->create([
-                    'board_id' => $item->id,
-                    'key' => $column->key,
-                    'label' => $column->label,
-                    'type' => $column->type,
-                    'position' => $column->position,
-                    'width' => $column->width,
-                    'config' => $column->config,
-                    'hideable' => $column->hideable,
-                    'pinnable' => $column->pinnable,
-                ]);
-                $column_id_map[$column->id] = $column_copy->id;
-            }
-
-            foreach ($board_view->groups as $group) {
-                $group_copy = $view_copy->groups()->create([
-                    'board_id' => $item->id,
-                    'name' => $group->name,
-                    'accent_color' => $group->accent_color,
-                    'position' => $group->position,
-                ]);
-
-                foreach ($group->items as $source_item) {
-                    $item_copy = $item->items()->create([
-                        'group_id' => $group_copy->id,
-                        'name' => $source_item->name,
-                        'position' => $source_item->position,
-                        'created_by_id' => $source_item->created_by_id,
-                    ]);
-
-                    foreach ($source_item->values as $source_value) {
-                        $target_column_id = $column_id_map[$source_value->column_id] ?? null;
-                        if ($target_column_id === null) {
-                            continue;
-                        }
-
-                        $item_copy->values()->create([
-                            'column_id' => $target_column_id,
-                            'value' => $source_value->value,
-                        ]);
-                    }
-                }
-            }
-
-            // The saved filter/sort/display state references the *source*
-            // tab's column ids — remapped onto the freshly cloned columns so
-            // the copy's toolbar (hidden/pinned columns, filters, sort,
-            // group-by, conditional colors) still works.
-            $view_copy->fill($this->remapColumnReferences($board_view, $column_id_map))->save();
-
-            return $view_copy;
-        });
+        $copy = $duplication_service->duplicateView(
+            $board_view,
+            $item,
+            ['label' => "{$board_view->label} (copy)", 'position' => $this->nextPosition($item)],
+            $request->user()?->id,
+        );
 
         return response()->json([
             'message' => 'View duplicated successfully.',
@@ -394,82 +328,4 @@ class BoardViewController extends Controller
         return (int) $item->views()->max('position') + 1;
     }
 
-    /**
-     * Rebuilds every saved-state field that references a column id
-     * (`filter_state.search_column_ids`/`.advanced_filter_rows[].column_id`/
-     * `.quick_filter_selections` keys, `sort_state[].sort_option_id`,
-     * `hidden_column_ids`, `pinned_column_ids`,
-     * `conditional_color_rules[].column_id`, `group_by_option_id`) so a
-     * duplicated tab's saved filters/sort/columns/grouping point at its own
-     * freshly cloned columns instead of the source tab's.
-     *
-     * @param  array<int, int>  $column_id_map  source column id => copy column id
-     * @return array<string, mixed>
-     */
-    private function remapColumnReferences(BoardView $source, array $column_id_map): array
-    {
-        $filter_state = $source->filter_state;
-        if ($filter_state) {
-            $filter_state['search_column_ids'] = $this->remapIdList($filter_state['search_column_ids'] ?? [], $column_id_map);
-
-            $filter_state['advanced_filter_rows'] = collect($filter_state['advanced_filter_rows'] ?? [])
-                ->map(fn (array $row) => [
-                    ...$row,
-                    'column_id' => $this->remapId($row['column_id'] ?? null, $column_id_map),
-                ])
-                ->all();
-
-            $filter_state['quick_filter_selections'] = collect($filter_state['quick_filter_selections'] ?? [])
-                ->mapWithKeys(fn ($option_ids, $facet_id) => [$this->remapId((string) $facet_id, $column_id_map) => $option_ids])
-                ->all();
-        }
-
-        $sort_state = $source->sort_state === null ? null : collect($source->sort_state)
-            ->map(fn (array $rule) => [
-                ...$rule,
-                'sort_option_id' => $this->remapId($rule['sort_option_id'] ?? null, $column_id_map),
-            ])
-            ->all();
-
-        $conditional_color_rules = $source->conditional_color_rules === null ? null : collect($source->conditional_color_rules)
-            ->map(fn (array $rule) => [
-                ...$rule,
-                'column_id' => $this->remapId($rule['column_id'] ?? null, $column_id_map),
-            ])
-            ->all();
-
-        return [
-            'filter_state' => $filter_state,
-            'sort_state' => $sort_state,
-            'hidden_column_ids' => $source->hidden_column_ids === null ? null : $this->remapIdList($source->hidden_column_ids, $column_id_map),
-            'pinned_column_ids' => $source->pinned_column_ids === null ? null : $this->remapIdList($source->pinned_column_ids, $column_id_map),
-            'conditional_color_rules' => $conditional_color_rules,
-            'group_by_option_id' => $this->remapId($source->group_by_option_id, $column_id_map),
-        ];
-    }
-
-    /**
-     * @param  array<int, int>  $column_id_map
-     * @return array<int, string|null>
-     */
-    private function remapIdList(array $ids, array $column_id_map): array
-    {
-        return array_map(fn ($id) => $this->remapId($id, $column_id_map), $ids);
-    }
-
-    /**
-     * Remaps a single column-id reference. Non-numeric values (e.g. the
-     * `"name"` sort sentinel or the `"default"` group-by sentinel) are left
-     * untouched, as is any id with no corresponding entry in the map.
-     *
-     * @param  array<int, int>  $column_id_map
-     */
-    private function remapId(?string $id, array $column_id_map): ?string
-    {
-        if ($id === null || ! ctype_digit($id)) {
-            return $id;
-        }
-
-        return isset($column_id_map[(int) $id]) ? (string) $column_id_map[(int) $id] : $id;
-    }
 }

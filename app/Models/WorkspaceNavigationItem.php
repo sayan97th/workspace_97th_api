@@ -37,6 +37,8 @@ use Illuminate\Support\Carbon;
  * @property int|null $item_column_width
  * @property int|null $sub_item_column_width
  * @property bool $is_favorite
+ * @property bool $is_archived
+ * @property Carbon|null $archived_at
  * @property int $position
  * @property int|null $created_by_id
  * @property int|null $owner_id
@@ -72,6 +74,8 @@ use Illuminate\Support\Carbon;
     'item_column_width',
     'sub_item_column_width',
     'is_favorite',
+    'is_archived',
+    'archived_at',
     'position',
     'created_by_id',
     'owner_id',
@@ -260,6 +264,17 @@ class WorkspaceNavigationItem extends Model
     }
 
     /**
+     * This board's activity log entries (rename, archive, duplicate, delete,
+     * ...), newest first — see {@link BoardActivityLog}.
+     *
+     * @return HasMany<BoardActivityLog, $this>
+     */
+    public function activityLogs(): HasMany
+    {
+        return $this->hasMany(BoardActivityLog::class, 'board_id')->latest('created_at');
+    }
+
+    /**
      * People who accepted a board invitation and were granted explicit
      * view access to this board, on top of whoever already sees it through
      * their workspace role.
@@ -287,6 +302,20 @@ class WorkspaceNavigationItem extends Model
 
         return $query->where('type', self::TYPE_LEAF)
             ->where(fn (Builder $q) => $q->whereNotIn('view_key', $non_board_view_keys)->orWhereNull('view_key'));
+    }
+
+    /**
+     * Scope: hides archived boards from the normal navigation tree/listing
+     * queries — an archived board still exists (and is reachable from the
+     * "View archive / trash" panel) but shouldn't clutter the sidebar or the
+     * workspace's Content tab.
+     *
+     * @param  Builder<WorkspaceNavigationItem>  $query
+     * @return Builder<WorkspaceNavigationItem>
+     */
+    public function scopeNotArchived(Builder $query): Builder
+    {
+        return $query->where('is_archived', false);
     }
 
     /**
@@ -334,6 +363,8 @@ class WorkspaceNavigationItem extends Model
     {
         return [
             'is_favorite' => 'boolean',
+            'is_archived' => 'boolean',
+            'archived_at' => 'datetime',
             'position' => 'integer',
             'item_column_width' => 'integer',
             'sub_item_column_width' => 'integer',

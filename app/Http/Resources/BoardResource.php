@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Models\BoardDiscussionView;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\BoardManagementGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -36,6 +37,10 @@ class BoardResource extends JsonResource
                 'slug' => $ancestor->slug,
             ])->values(),
             'has_unseen_comments' => $this->hasUnseenComments($request),
+            // Drives whether the board options menu's management-only rows
+            // (Settings, Permissions, Archive board, Delete board, Duplicate
+            // board) render enabled — see BoardManagementGate.
+            'can_manage' => $request->user() ? BoardManagementGate::allows($this->resource, $request->user()) : false,
         ]);
     }
 

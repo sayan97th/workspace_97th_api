@@ -33,6 +33,7 @@ class WorkspaceNavigationItemResource extends JsonResource
             'item_column_width' => $this->item_column_width,
             'sub_item_column_width' => $this->sub_item_column_width,
             'is_favorite' => $this->is_favorite,
+            'is_archived' => $this->is_archived,
             // Total updates (top-level + replies) on the board's discussion feed, powering the "Board updates"
             // badge; 0 unless the caller ran loadCount('comments') first (only BoardController::show() does).
             'comments_count' => $this->whenCounted('comments', default: 0),
