@@ -6,6 +6,7 @@ use App\Console\Commands\Board\ImportMondayBoardCommand;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
+use App\Models\BoardItemComment;
 use App\Models\BoardView;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -57,6 +58,25 @@ class MondayBoardImportService
         'Medium' => '#fdab3d',
         'Low' => '#579bfc',
     ];
+
+    /** Import the "updates" sheet's comment threads without any credential handling. */
+    public const UPDATES_MODE_SKIP = 'skip';
+
+    /** Import every comment, replacing lines that look like a credential with a placeholder. */
+    public const UPDATES_MODE_REDACT = 'redact';
+
+    /** Import every comment exactly as monday.com exported it, credentials included. */
+    public const UPDATES_MODE_RAW = 'raw';
+
+    /** Import every comment thread except ones containing a line that looks like a credential. */
+    public const UPDATES_MODE_EXCLUDE = 'exclude';
+
+    /**
+     * Matches a line that looks like a credential (`PW: ...`, `Password: ...`, `API Key: ...`,
+     * `Login: ...`, `Token: ...`, ...) — monday.com "Resources" updates in the wild store AWS/
+     * GitHub/Forge/MailGun logins this way, one label per line.
+     */
+    private const SECRET_LINE_PATTERN = '/^\s*(u|p|pw|pwd|pass|password|passwd|user(name)?|login|secret|token|api[\s_-]?key|apikey|credential)\s*[:=]/i';
 
     /**
      * Reads the whole sheet into an in-memory tree, without touching the database.
@@ -208,7 +228,7 @@ class MondayBoardImportService
      * Creates the board's columns, groups, items and subitems from a parsed tree.
      *
      * @param  array<string, mixed>  $parsed  the array returned by {@see parse()}
-     * @return array{groups: int, items: int, subitems: int, unmatched_people: array<int, string>}
+     * @return array{groups: int, items: int, subitems: int, unmatched_people: array<int, string>, item_ids_by_monday_id: array<string, int>}
      */
     public function import(WorkspaceNavigationItem $board, BoardView $view, array $parsed): array
     {
@@ -221,6 +241,7 @@ class MondayBoardImportService
         $item_count = 0;
         $subitem_count = 0;
         $unmatched = [];
+        $item_ids_by_monday_id = [];
 
         foreach ($parsed['groups'] as $group_position => $group_data) {
             $group = $board->groups()->create([
@@ -238,6 +259,7 @@ class MondayBoardImportService
                     'position' => $item_position,
                 ]);
                 $item_count++;
+                $item_ids_by_monday_id[$item_data['monday_id']] = $item->id;
 
                 $this->storeItemValues($item, $item_columns, $item_data, $users, $unmatched);
 
@@ -249,6 +271,7 @@ class MondayBoardImportService
                         'position' => $subitem_position,
                     ]);
                     $subitem_count++;
+                    $item_ids_by_monday_id[$subitem_data['monday_id']] = $subitem->id;
 
                     $this->storeSubitemValues($subitem, $subitem_columns, $subitem_data, $users, $unmatched);
                 }
@@ -260,7 +283,200 @@ class MondayBoardImportService
             'items' => $item_count,
             'subitems' => $subitem_count,
             'unmatched_people' => array_values(array_unique($unmatched)),
+            'item_ids_by_monday_id' => $item_ids_by_monday_id,
         ];
+    }
+
+    /**
+     * Reads the "updates" sheet into a flat, chronologically-ordered row list, without
+     * touching the database.
+     *
+     * @return array<int, array{monday_item_id: string, author: string, created_at: string, body: string, post_id: string, parent_post_id: string}>
+     */
+    public function parseUpdates(Worksheet $sheet): array
+    {
+        $rows = [];
+        $highest_row = $sheet->getHighestRow();
+
+        for ($row = 1; $row <= $highest_row; $row++) {
+            $monday_item_id = $this->cell($sheet, 'A', $row);
+            $body = $this->cell($sheet, 'G', $row);
+            $post_id = $this->cell($sheet, 'J', $row);
+
+            // monday.com's own ids are always numeric — this also naturally skips the
+            // title row and the "Item ID | Item Name | ..." header row underneath it,
+            // without depending on either being at a fixed row number.
+            if (! ctype_digit($monday_item_id) || $body === '' || ! ctype_digit($post_id)) {
+                continue;
+            }
+
+            $rows[] = [
+                'monday_item_id' => $monday_item_id,
+                'author' => $this->cell($sheet, 'E', $row),
+                'created_at' => $this->cell($sheet, 'F', $row),
+                'body' => $body,
+                'post_id' => $post_id,
+                'parent_post_id' => $this->cell($sheet, 'K', $row),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Creates the item detail drawer's comment threads (updates + replies) from
+     * {@see parseUpdates()}'s rows, matching each row's monday.com item id against the map
+     * {@see import()} returned. Threads more than one level deep collapse onto their
+     * top-level comment, mirroring {@see BoardItemComment}'s own one-level-of-
+     * nesting rule.
+     *
+     * @param  array<string, int>  $item_ids_by_monday_id
+     * @param  array<int, array{monday_item_id: string, author: string, created_at: string, body: string, post_id: string, parent_post_id: string}>  $rows
+     * @return array{comments: int, replies: int, skipped_no_item: int, skipped_secret: int, unmatched_authors: array<int, string>}
+     */
+    public function importUpdates(array $item_ids_by_monday_id, array $rows, string $mode): array
+    {
+        $users = User::all();
+        $comment_count = 0;
+        $reply_count = 0;
+        $skipped_no_item = 0;
+        $skipped_secret = 0;
+        $unmatched = [];
+
+        /** @var array<string, BoardItemComment> $comments_by_post_id */
+        $comments_by_post_id = [];
+
+        foreach ($rows as $row) {
+            if ($row['parent_post_id'] !== '') {
+                continue; // Replies are created in the second pass, once every parent exists.
+            }
+
+            $item_id = $item_ids_by_monday_id[$row['monday_item_id']] ?? null;
+            if ($item_id === null) {
+                $skipped_no_item++;
+
+                continue;
+            }
+
+            $body = $this->prepareCommentBody($row['body'], $mode);
+            if ($body === null) {
+                $skipped_secret++;
+
+                continue;
+            }
+
+            $comment = $this->createComment($item_id, null, $row, $body, $users, $unmatched);
+            $comments_by_post_id[$row['post_id']] = $comment;
+            $comment_count++;
+        }
+
+        foreach ($rows as $row) {
+            if ($row['parent_post_id'] === '') {
+                continue;
+            }
+
+            $parent = $comments_by_post_id[$row['parent_post_id']] ?? null;
+            if ($parent === null) {
+                $skipped_no_item++;
+
+                continue;
+            }
+
+            $body = $this->prepareCommentBody($row['body'], $mode);
+            if ($body === null) {
+                $skipped_secret++;
+
+                continue;
+            }
+
+            $this->createComment($parent->item_id, $parent->id, $row, $body, $users, $unmatched);
+            $reply_count++;
+        }
+
+        return [
+            'comments' => $comment_count,
+            'replies' => $reply_count,
+            'skipped_no_item' => $skipped_no_item,
+            'skipped_secret' => $skipped_secret,
+            'unmatched_authors' => array_values(array_unique($unmatched)),
+        ];
+    }
+
+    /**
+     * @param  array{monday_item_id: string, author: string, created_at: string, body: string, post_id: string, parent_post_id: string}  $row
+     * @param  Collection<int, User>  $users
+     * @param  array<int, string>  $unmatched
+     */
+    private function createComment(int $item_id, ?int $parent_id, array $row, string $body, Collection $users, array &$unmatched): BoardItemComment
+    {
+        $resolved = $this->resolvePersonIds($row['author'], $users);
+        array_push($unmatched, ...$resolved['unmatched']);
+
+        $comment = BoardItemComment::create([
+            'item_id' => $item_id,
+            'parent_id' => $parent_id,
+            'user_id' => $resolved['ids'][0] ?? null,
+            'body' => $body,
+        ]);
+
+        $created_at = $this->parseDateTime($row['created_at']) ?? $comment->created_at;
+        $comment->forceFill(['created_at' => $created_at, 'updated_at' => $created_at])->save();
+
+        return $comment;
+    }
+
+    /**
+     * Applies the chosen {@see UPDATES_MODE_*} handling for lines that look like a credential.
+     * Returns null when the whole comment should be dropped (exclude mode, secret found).
+     */
+    private function prepareCommentBody(string $body, string $mode): ?string
+    {
+        if ($mode === self::UPDATES_MODE_RAW) {
+            return $body;
+        }
+
+        $lines = preg_split('/\r\n|\r|\n/', $body) ?: [$body];
+        $has_secret = false;
+
+        $redacted_lines = array_map(function (string $line) use (&$has_secret) {
+            if (preg_match(self::SECRET_LINE_PATTERN, $line) !== 1) {
+                return $line;
+            }
+
+            $has_secret = true;
+
+            return '[REDACTED]';
+        }, $lines);
+
+        if (! $has_secret) {
+            return $body;
+        }
+
+        if ($mode === self::UPDATES_MODE_EXCLUDE) {
+            return null;
+        }
+
+        return implode("\n", $redacted_lines);
+    }
+
+    private function parseDateTime(string $raw): ?Carbon
+    {
+        $raw = trim($raw);
+
+        if ($raw === '') {
+            return null;
+        }
+
+        try {
+            // monday.com's own export format, e.g. "08/July/2021 05:23:52 PM".
+            return Carbon::createFromFormat('d/F/Y h:i:s A', $raw);
+        } catch (Throwable) {
+            try {
+                return Carbon::parse($raw);
+            } catch (Throwable) {
+                return null;
+            }
+        }
     }
 
     /**

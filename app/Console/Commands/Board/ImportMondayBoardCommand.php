@@ -10,6 +10,8 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use Throwable;
 
 // php artisan board:import-monday
@@ -19,7 +21,9 @@ class ImportMondayBoardCommand extends Command
         {file=import/Palomar_Roadmap_Software_Engineering_1788743889.xlsx : Path to the monday.com .xlsx export}
         {--workspace=fulfillment : Slug of the workspace to import the board into}
         {--force : Replace an existing board with the same name without prompting}
-        {--dry-run : Parse the file and print a summary without writing to the database}';
+        {--dry-run : Parse the file and print a summary without writing to the database}
+        {--updates-sheet=updates : Name of the sheet containing the item detail drawer\'s comment threads}
+        {--updates=skip : How to handle that sheet — skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
 
     protected $description = 'Import a monday.com board export (.xlsx) into a workspace as a real board';
 
@@ -30,6 +34,19 @@ class ImportMondayBoardCommand extends Command
 
     public function handle(): int
     {
+        $updates_mode = (string) $this->option('updates');
+        $valid_updates_modes = [
+            MondayBoardImportService::UPDATES_MODE_SKIP,
+            MondayBoardImportService::UPDATES_MODE_REDACT,
+            MondayBoardImportService::UPDATES_MODE_RAW,
+            MondayBoardImportService::UPDATES_MODE_EXCLUDE,
+        ];
+        if (! in_array($updates_mode, $valid_updates_modes, true)) {
+            $this->error("Invalid --updates value \"{$updates_mode}\". Expected one of: ".implode(', ', $valid_updates_modes));
+
+            return self::FAILURE;
+        }
+
         $path = $this->resolveFilePath((string) $this->argument('file'));
         if ($path === null) {
             return self::FAILURE;
@@ -62,6 +79,18 @@ class ImportMondayBoardCommand extends Command
 
         $this->info("Board: {$parsed['title']}");
         $this->line("Groups: {$group_count} | Items: {$item_count} | Subitems: {$subitem_count}");
+
+        $update_rows = [];
+        if ($updates_mode !== MondayBoardImportService::UPDATES_MODE_SKIP) {
+            $updates_sheet = $this->findSheet($spreadsheet, (string) $this->option('updates-sheet'));
+
+            if ($updates_sheet === null) {
+                $this->warn("No sheet named \"{$this->option('updates-sheet')}\" was found — skipping comment import.");
+            } else {
+                $update_rows = $this->importer->parseUpdates($updates_sheet);
+                $this->line("Updates: {$this->countTopLevel($update_rows)} threads, ".(count($update_rows) - $this->countTopLevel($update_rows)).' replies (mode: '.$updates_mode.')');
+            }
+        }
 
         if ($this->option('dry-run')) {
             $this->comment('Dry run — nothing was written to the database.');
@@ -96,7 +125,7 @@ class ImportMondayBoardCommand extends Command
         // appending a fresh root-level board.
         $parent_id = $existing?->parent_id;
 
-        $summary = DB::transaction(function () use ($workspace, $parsed, $existing, $parent_id) {
+        [$summary, $updates_summary] = DB::transaction(function () use ($workspace, $parsed, $existing, $parent_id, $update_rows, $updates_mode) {
             // A hard delete (not a soft delete) so the FK cascades actually
             // clean up the old board's views/groups/columns/items/values —
             // a soft delete would leave them orphaned under the trashed board.
@@ -105,7 +134,13 @@ class ImportMondayBoardCommand extends Command
             $board = $this->createBoard($workspace, $parsed['title'], $parent_id);
             $view = $this->createPrimaryView($board);
 
-            return $this->importer->import($board, $view, $parsed);
+            $summary = $this->importer->import($board, $view, $parsed);
+
+            $updates_summary = $update_rows === []
+                ? null
+                : $this->importer->importUpdates($summary['item_ids_by_monday_id'], $update_rows, $updates_mode);
+
+            return [$summary, $updates_summary];
         });
 
         $this->newLine();
@@ -115,14 +150,43 @@ class ImportMondayBoardCommand extends Command
             [[$summary['groups'], $summary['items'], $summary['subitems']]],
         );
 
-        if ($summary['unmatched_people'] !== []) {
+        $unmatched_people = $summary['unmatched_people'];
+
+        if ($updates_summary !== null) {
+            $this->table(
+                ['Comments', 'Replies', 'Skipped (no matching item)', 'Skipped (contained a credential)'],
+                [[$updates_summary['comments'], $updates_summary['replies'], $updates_summary['skipped_no_item'], $updates_summary['skipped_secret']]],
+            );
+            $unmatched_people = array_values(array_unique([...$unmatched_people, ...$updates_summary['unmatched_authors']]));
+        }
+
+        if ($unmatched_people !== []) {
             $this->warn('Names from the sheet that did not match an existing user (left unassigned):');
-            foreach ($summary['unmatched_people'] as $name) {
+            foreach ($unmatched_people as $name) {
                 $this->line("  - {$name}");
             }
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * @param  array<int, array{parent_post_id: string}>  $rows
+     */
+    private function countTopLevel(array $rows): int
+    {
+        return count(array_filter($rows, fn (array $row) => $row['parent_post_id'] === ''));
+    }
+
+    private function findSheet(Spreadsheet $spreadsheet, string $name): ?Worksheet
+    {
+        foreach ($spreadsheet->getAllSheets() as $sheet) {
+            if (strtolower($sheet->getTitle()) === strtolower($name)) {
+                return $sheet;
+            }
+        }
+
+        return null;
     }
 
     private function resolveFilePath(string $file): ?string
