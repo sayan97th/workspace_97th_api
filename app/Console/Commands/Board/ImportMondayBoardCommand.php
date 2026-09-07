@@ -2,21 +2,18 @@
 
 namespace App\Console\Commands\Board;
 
-use App\Models\BoardView;
+use App\Concerns\ImportsMondayBoardFiles;
 use App\Models\Workspace;
-use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\MondayBoardImportService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\IOFactory;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use Throwable;
 
 // php artisan board:import-monday --force --updates=raw
 class ImportMondayBoardCommand extends Command
 {
+    use ImportsMondayBoardFiles;
+
     protected $signature = 'board:import-monday
         {file=import/Palomar_Roadmap_Software_Engineering_1788743889.xlsx : Path to the monday.com .xlsx export}
         {--workspace=fulfillment : Slug of the workspace to import the board into}
@@ -35,14 +32,8 @@ class ImportMondayBoardCommand extends Command
     public function handle(): int
     {
         $updates_mode = (string) $this->option('updates');
-        $valid_updates_modes = [
-            MondayBoardImportService::UPDATES_MODE_SKIP,
-            MondayBoardImportService::UPDATES_MODE_REDACT,
-            MondayBoardImportService::UPDATES_MODE_RAW,
-            MondayBoardImportService::UPDATES_MODE_EXCLUDE,
-        ];
-        if (! in_array($updates_mode, $valid_updates_modes, true)) {
-            $this->error("Invalid --updates value \"{$updates_mode}\". Expected one of: ".implode(', ', $valid_updates_modes));
+        if (! $this->isValidUpdatesMode($updates_mode)) {
+            $this->error("Invalid --updates value \"{$updates_mode}\". Expected one of: ".implode(', ', $this->validUpdatesModes));
 
             return self::FAILURE;
         }
@@ -102,46 +93,26 @@ class ImportMondayBoardCommand extends Command
         // inside a folder (e.g. a placeholder someone already created there
         // for this exact import), and a re-run should replace it in place
         // rather than creating a second, root-level duplicate.
-        $existing = $workspace->navigationItems()
-            ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
-            ->where('label', $parsed['title'])
-            ->first();
+        $result = $this->importParsedBoard(
+            importer: $this->importer,
+            workspace: $workspace,
+            parsed: $parsed,
+            update_rows: $update_rows,
+            updates_mode: $updates_mode,
+            parent_id: null,
+            force: (bool) $this->option('force'),
+            search_globally: true,
+            interactive: true,
+        );
 
-        if ($existing !== null) {
-            $replace = $this->option('force') || $this->confirm(
-                "A board named \"{$parsed['title']}\" already exists in \"{$workspace->name}\". Replace it?",
-                false,
-            );
+        if ($result['action'] === 'skipped') {
+            $this->comment('Import cancelled.');
 
-            if (! $replace) {
-                $this->comment('Import cancelled.');
-
-                return self::SUCCESS;
-            }
+            return self::SUCCESS;
         }
 
-        // Recreate in the same spot in the navigation tree the replaced board
-        // was in (root, or nested inside a folder), instead of always
-        // appending a fresh root-level board.
-        $parent_id = $existing?->parent_id;
-
-        [$summary, $updates_summary] = DB::transaction(function () use ($workspace, $parsed, $existing, $parent_id, $update_rows, $updates_mode) {
-            // A hard delete (not a soft delete) so the FK cascades actually
-            // clean up the old board's views/groups/columns/items/values —
-            // a soft delete would leave them orphaned under the trashed board.
-            $existing?->forceDelete();
-
-            $board = $this->createBoard($workspace, $parsed['title'], $parent_id);
-            $view = $this->createPrimaryView($board);
-
-            $summary = $this->importer->import($board, $view, $parsed);
-
-            $updates_summary = $update_rows === []
-                ? null
-                : $this->importer->importUpdates($summary['item_ids_by_monday_id'], $update_rows, $updates_mode);
-
-            return [$summary, $updates_summary];
-        });
+        $summary = $result['summary'];
+        $updates_summary = $result['updates_summary'];
 
         $this->newLine();
         $this->info('Import complete.');
@@ -168,70 +139,5 @@ class ImportMondayBoardCommand extends Command
         }
 
         return self::SUCCESS;
-    }
-
-    /**
-     * @param  array<int, array{parent_post_id: string}>  $rows
-     */
-    private function countTopLevel(array $rows): int
-    {
-        return count(array_filter($rows, fn (array $row) => $row['parent_post_id'] === ''));
-    }
-
-    private function findSheet(Spreadsheet $spreadsheet, string $name): ?Worksheet
-    {
-        foreach ($spreadsheet->getAllSheets() as $sheet) {
-            if (strtolower($sheet->getTitle()) === strtolower($name)) {
-                return $sheet;
-            }
-        }
-
-        return null;
-    }
-
-    private function resolveFilePath(string $file): ?string
-    {
-        $is_absolute = str_starts_with($file, DIRECTORY_SEPARATOR) || preg_match('/^[A-Za-z]:[\\\\\/]/', $file) === 1;
-        $path = $is_absolute ? $file : base_path($file);
-
-        if (! is_file($path)) {
-            $this->error("File not found: {$path}");
-
-            return null;
-        }
-
-        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'xlsx') {
-            $this->error('Only .xlsx files are supported.');
-
-            return null;
-        }
-
-        return $path;
-    }
-
-    private function createBoard(Workspace $workspace, string $label, ?int $parent_id): WorkspaceNavigationItem
-    {
-        $next_position = (int) $workspace->navigationItems()->where('parent_id', $parent_id)->max('position') + 1;
-
-        return $workspace->navigationItems()->create([
-            'parent_id' => $parent_id,
-            'type' => WorkspaceNavigationItem::TYPE_LEAF,
-            'label' => $label,
-            'slug' => Str::slug($label),
-            'display_style' => 'table',
-            'board_type' => WorkspaceNavigationItem::BOARD_TYPE_MAIN,
-            'is_favorite' => false,
-            'position' => $next_position,
-        ]);
-    }
-
-    private function createPrimaryView(WorkspaceNavigationItem $board): BoardView
-    {
-        return $board->views()->create([
-            'label' => 'Main table',
-            'position' => 0,
-            'is_primary' => true,
-            'row_height' => 'single',
-        ]);
     }
 }

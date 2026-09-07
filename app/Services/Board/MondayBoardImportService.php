@@ -3,6 +3,7 @@
 namespace App\Services\Board;
 
 use App\Console\Commands\Board\ImportMondayBoardCommand;
+use App\Console\Commands\Board\ImportMondayBoardTreeCommand;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
@@ -14,6 +15,7 @@ use Database\Seeders\BoardContentSeeder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use Throwable;
 
@@ -26,15 +28,24 @@ use Throwable;
  * for the conventions this mirrors (column `config.options` shape, accent
  * color palette, primary view creation).
  *
- * Used by {@see ImportMondayBoardCommand}, which
- * owns all file/CLI/transaction concerns — this service only knows how to
- * turn a parsed worksheet into rows.
+ * Every export monday.com produces shares the same skeleton (a title row, an
+ * optional description row, one grey-shaded "Name | ... | Item ID" header
+ * row per group, and a "Subitems | Name | ... | Item ID" header wherever an
+ * item has subitems) but each *board* freely chooses its own column set —
+ * "Bugs Queue" has nothing in common with "Sales Resources" beyond that
+ * skeleton. Rather than hard-coding one board's columns, {@see parse()}
+ * reads whichever columns a header row actually names and
+ * {@see inferColumnType()} guesses each one's {@see BoardColumn} type from
+ * its label and the values underneath it, so any board's export imports
+ * with its own columns intact.
+ *
+ * Used by {@see ImportMondayBoardCommand} (one file) and
+ * {@see ImportMondayBoardTreeCommand} (a whole directory of files), which own
+ * all file/CLI/transaction concerns — this service only knows how to turn a
+ * parsed worksheet into rows.
  */
 class MondayBoardImportService
 {
-    /** The grey fill color monday.com's export uses for a table's header row. */
-    private const HEADER_FILL_COLOR = 'D6D6D6';
-
     /** @var array<int, string> */
     private const OPTION_COLOR_PALETTE = [
         '#00c875', '#579bfc', '#a25ddc', '#fdab3d', '#e2445c',
@@ -59,6 +70,20 @@ class MondayBoardImportService
         'Low' => '#579bfc',
     ];
 
+    /**
+     * Header labels (case-insensitive) that mean "this column names a staff member" — matched
+     * against {@see resolvePersonIds()} rather than stored as plain text. Deliberately narrow:
+     * a client-facing name field like "Contacts" or "Requestor name" stays text instead, since
+     * those people usually aren't app users and coercing them into this column would silently
+     * drop the name from the import.
+     *
+     * @var array<int, string>
+     */
+    private const PEOPLE_LABELS = [
+        'owner', 'owners', 'assignee', 'assignees', 'person', 'people', 'reporter', 'developer',
+        'interviewer', 'designer', 'epic owner',
+    ];
+
     /** Import the "updates" sheet's comment threads without any credential handling. */
     public const UPDATES_MODE_SKIP = 'skip';
 
@@ -79,21 +104,23 @@ class MondayBoardImportService
     private const SECRET_LINE_PATTERN = '/^\s*(u|p|pw|pwd|pass|password|passwd|user(name)?|login|secret|token|api[\s_-]?key|apikey|credential)\s*[:=]/i';
 
     /**
-     * Reads the whole sheet into an in-memory tree, without touching the database.
+     * Reads the whole sheet into an in-memory tree, without touching the database. Column
+     * layout is discovered from whatever the sheet's own header rows name — see the class
+     * docblock — so this works the same whether the sheet is a roadmap, a bug queue, or a
+     * client directory.
      *
      * @return array{
      *     title: string,
+     *     description: string|null,
      *     groups: array<int, array{
      *         name: string,
      *         items: array<int, array{
-     *             name: string, assignee: string, priority: string, status: string,
-     *             kanban_status: string, timeline_start: string, timeline_end: string,
-     *             working_branch: string, points: string, tools: string, project: string,
-     *             goal_completion_date: string, text: string, monday_id: string,
-     *             subitems: array<int, array{name: string, owner: string, status: string, date: string, monday_id: string}>,
+     *             name: string, monday_id: string, data: array<string, string>,
+     *             subitems: array<int, array{name: string, monday_id: string, data: array<string, string>}>,
      *         }>,
      *     }>,
-     *     distinct: array<string, array<string, bool>>,
+     *     item_columns: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>}>,
+     *     subitem_columns: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>}>,
      * }
      */
     public function parse(Worksheet $sheet): array
@@ -103,48 +130,48 @@ class MondayBoardImportService
         $item_index = -1;
         $mode = 'items';
 
-        $distinct = [
-            'priority' => [],
-            'status' => [],
-            'kanban_status' => [],
-            'tools' => [],
-            'project' => [],
-            'subitem_status' => [],
-        ];
+        /** @var array{columns: array<int, array{letter: string, label: string, key: string}>, id_col: string}|null */
+        $item_header = null;
+        /** @var array{columns: array<int, array{letter: string, label: string, key: string}>, id_col: string}|null */
+        $subitem_header = null;
+
+        /** @var array<string, array<int, string>> */
+        $item_values = [];
+        /** @var array<string, array<int, string>> */
+        $subitem_values = [];
 
         $highest_row = $sheet->getHighestRow();
 
         for ($row = 2; $row <= $highest_row; $row++) {
             $col_a = $this->cell($sheet, 'A', $row);
 
-            if ($this->isHeaderRow($sheet, $row)) {
+            if ($this->isItemHeaderRow($sheet, $row)) {
+                $item_header = $this->readHeader($sheet, $row, 'A', []);
                 $mode = 'items';
 
                 continue;
             }
 
-            if ($col_a === 'Subitems' && $this->cell($sheet, 'B', $row) === 'Name' && $this->cell($sheet, 'C', $row) === 'Owner') {
+            if ($this->isSubitemHeaderRow($sheet, $row)) {
+                $subitem_header = $this->readHeader($sheet, $row, 'B', ['A']);
                 $mode = 'subitems';
 
                 continue;
             }
 
-            if ($mode === 'subitems') {
-                $subitem_id = $this->cell($sheet, 'F', $row);
+            if ($mode === 'subitems' && $subitem_header !== null) {
+                $subitem_id = $this->cell($sheet, $subitem_header['id_col'], $row);
 
                 if ($subitem_id !== '' && ctype_digit($subitem_id) && $item_index >= 0) {
-                    $status = $this->cell($sheet, 'D', $row);
+                    $data = $this->readRowData($sheet, $row, $subitem_header['columns']);
+                    $this->collectValues($subitem_values, $data);
 
-                    if ($status !== '') {
-                        $distinct['subitem_status'][$status] = true;
-                    }
+                    $name = $this->cell($sheet, 'B', $row);
 
                     $groups[$group_index]['items'][$item_index]['subitems'][] = [
-                        'name' => $this->cell($sheet, 'B', $row),
-                        'owner' => $this->cell($sheet, 'C', $row),
-                        'status' => $status,
-                        'date' => $this->cell($sheet, 'E', $row),
+                        'name' => $name !== '' ? $name : 'Untitled subitem',
                         'monday_id' => $subitem_id,
+                        'data' => $data,
                     ];
 
                     continue;
@@ -155,58 +182,30 @@ class MondayBoardImportService
                 // next real item/group row — re-evaluate it below.
             }
 
-            $item_id = $this->cell($sheet, 'O', $row);
+            if ($item_header !== null) {
+                $item_id = $this->cell($sheet, $item_header['id_col'], $row);
 
-            if ($col_a !== '' && $item_id !== '' && ctype_digit($item_id)) {
-                if ($group_index < 0) {
-                    continue; // Defensive: an item row appeared before any group title.
-                }
+                if ($col_a !== '' && $item_id !== '' && ctype_digit($item_id)) {
+                    if ($group_index < 0) {
+                        continue; // Defensive: an item row appeared before any group title.
+                    }
 
-                $priority = $this->cell($sheet, 'D', $row);
-                $status = $this->cell($sheet, 'E', $row);
-                $kanban_status = $this->cell($sheet, 'F', $row);
-                $tools = $this->cell($sheet, 'K', $row);
-                $project = $this->cell($sheet, 'L', $row);
+                    $data = $this->readRowData($sheet, $row, $item_header['columns']);
+                    $this->collectValues($item_values, $data);
 
-                if ($priority !== '') {
-                    $distinct['priority'][$priority] = true;
-                }
-                if ($status !== '') {
-                    $distinct['status'][$status] = true;
-                }
-                if ($kanban_status !== '') {
-                    $distinct['kanban_status'][$kanban_status] = true;
-                }
-                if ($project !== '') {
-                    $distinct['project'][$project] = true;
-                }
-                foreach ($this->splitList($tools) as $tool) {
-                    $distinct['tools'][$tool] = true;
-                }
+                    $groups[$group_index]['items'][] = [
+                        'name' => $col_a,
+                        'monday_id' => $item_id,
+                        'data' => $data,
+                        'subitems' => [],
+                    ];
+                    $item_index = count($groups[$group_index]['items']) - 1;
 
-                $groups[$group_index]['items'][] = [
-                    'name' => $col_a,
-                    'assignee' => $this->cell($sheet, 'C', $row),
-                    'priority' => $priority,
-                    'status' => $status,
-                    'kanban_status' => $kanban_status,
-                    'timeline_start' => $this->cell($sheet, 'G', $row),
-                    'timeline_end' => $this->cell($sheet, 'H', $row),
-                    'working_branch' => $this->cell($sheet, 'I', $row),
-                    'points' => $this->cell($sheet, 'J', $row),
-                    'tools' => $tools,
-                    'project' => $project,
-                    'goal_completion_date' => $this->cell($sheet, 'M', $row),
-                    'text' => $this->cell($sheet, 'N', $row),
-                    'monday_id' => $item_id,
-                    'subitems' => [],
-                ];
-                $item_index = count($groups[$group_index]['items']) - 1;
-
-                continue;
+                    continue;
+                }
             }
 
-            if ($col_a !== '' && $item_id === '' && $this->isHeaderRow($sheet, $row + 1)) {
+            if ($col_a !== '' && $this->isItemHeaderRow($sheet, $row + 1)) {
                 $groups[] = ['name' => $col_a, 'items' => []];
                 $group_index = count($groups) - 1;
                 $item_index = -1;
@@ -214,13 +213,15 @@ class MondayBoardImportService
                 continue;
             }
 
-            // Blank separator row or an aggregate summary row — nothing to import.
+            // Blank separator row, the board's description row, or an aggregate summary row.
         }
 
         return [
             'title' => $this->boardTitle($sheet),
+            'description' => $this->boardDescription($sheet),
             'groups' => $groups,
-            'distinct' => $distinct,
+            'item_columns' => $this->inferColumns($item_header['columns'] ?? [], $item_values),
+            'subitem_columns' => $this->inferColumns($subitem_header['columns'] ?? [], $subitem_values),
         ];
     }
 
@@ -234,8 +235,8 @@ class MondayBoardImportService
     {
         $users = User::all();
 
-        $item_columns = $this->createItemColumns($board, $view, $parsed['distinct']);
-        $subitem_columns = $this->createSubitemColumns($board, $view, $parsed['distinct']);
+        $item_columns = $this->createColumnsFromDefinitions($board, $view, BoardColumn::SCOPE_ITEM, $parsed['item_columns']);
+        $subitem_columns = $this->createColumnsFromDefinitions($board, $view, BoardColumn::SCOPE_SUBITEM, $parsed['subitem_columns']);
 
         $group_count = 0;
         $item_count = 0;
@@ -246,34 +247,40 @@ class MondayBoardImportService
         foreach ($parsed['groups'] as $group_position => $group_data) {
             $group = $board->groups()->create([
                 'board_view_id' => $view->id,
-                'name' => $group_data['name'],
+                'name' => $this->truncateColumn($group_data['name']),
                 'accent_color' => self::OPTION_COLOR_PALETTE[$group_position % count(self::OPTION_COLOR_PALETTE)],
                 'position' => $group_position,
             ]);
             $group_count++;
 
             foreach ($group_data['items'] as $item_position => $item_data) {
+                [$item_name, $item_overflow] = $this->splitOverflowingName($item_data['name']);
+
                 $item = $board->items()->create([
                     'group_id' => $group->id,
-                    'name' => $item_data['name'],
+                    'name' => $item_name,
+                    'description' => $item_overflow,
                     'position' => $item_position,
                 ]);
                 $item_count++;
                 $item_ids_by_monday_id[$item_data['monday_id']] = $item->id;
 
-                $this->storeItemValues($item, $item_columns, $item_data, $users, $unmatched);
+                $this->applyColumnValues($item, $parsed['item_columns'], $item_columns, $item_data['data'], $users, $unmatched);
 
                 foreach ($item_data['subitems'] as $subitem_position => $subitem_data) {
+                    [$subitem_name, $subitem_overflow] = $this->splitOverflowingName($subitem_data['name']);
+
                     $subitem = $board->items()->create([
                         'group_id' => $group->id,
                         'parent_id' => $item->id,
-                        'name' => $subitem_data['name'] !== '' ? $subitem_data['name'] : 'Untitled subitem',
+                        'name' => $subitem_name,
+                        'description' => $subitem_overflow,
                         'position' => $subitem_position,
                     ]);
                     $subitem_count++;
                     $item_ids_by_monday_id[$subitem_data['monday_id']] = $subitem->id;
 
-                    $this->storeSubitemValues($subitem, $subitem_columns, $subitem_data, $users, $unmatched);
+                    $this->applyColumnValues($subitem, $parsed['subitem_columns'], $subitem_columns, $subitem_data['data'], $users, $unmatched);
                 }
             }
         }
@@ -480,63 +487,393 @@ class MondayBoardImportService
     }
 
     /**
-     * @return array<string, BoardColumn>
+     * True when `$row` is a board's own "Name | ... | Item ID (auto generated)" header row —
+     * the literal text monday.com's exporter always uses, regardless of which columns sit
+     * between those two.
      */
-    private function createItemColumns(WorkspaceNavigationItem $board, BoardView $view, array $distinct): array
+    private function isItemHeaderRow(Worksheet $sheet, int $row): bool
     {
-        return $this->createColumns($board, $view, BoardColumn::SCOPE_ITEM, [
-            'assignee' => ['label' => 'Assignee', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 160],
-            'priority' => ['label' => 'Priority', 'type' => BoardColumn::TYPE_LABEL, 'width' => 130, 'options' => array_keys($distinct['priority'])],
-            'status' => ['label' => 'Status', 'type' => BoardColumn::TYPE_STATUS, 'width' => 170, 'options' => array_keys($distinct['status'])],
-            'kanban_status' => ['label' => 'Ernesto - Kaban', 'type' => BoardColumn::TYPE_STATUS, 'width' => 160, 'options' => array_keys($distinct['kanban_status'])],
-            'timeline' => ['label' => 'Timeline', 'type' => BoardColumn::TYPE_TIMELINE, 'width' => 200],
-            'working_branch' => ['label' => 'Working Branch', 'type' => BoardColumn::TYPE_TEXT, 'width' => 140],
-            'points' => ['label' => 'Points /3', 'type' => BoardColumn::TYPE_NUMBER, 'width' => 110],
-            'tools' => ['label' => 'Tools', 'type' => BoardColumn::TYPE_TAGS, 'width' => 200, 'options' => array_keys($distinct['tools'])],
-            'project' => ['label' => 'Project', 'type' => BoardColumn::TYPE_DROPDOWN, 'width' => 180, 'options' => array_keys($distinct['project'])],
-            'goal_completion_date' => ['label' => 'Goal Completion Date', 'type' => BoardColumn::TYPE_DATE, 'width' => 170],
-            'text' => ['label' => 'Text', 'type' => BoardColumn::TYPE_TEXT, 'width' => 160],
-        ]);
+        if ($this->cell($sheet, 'A', $row) !== 'Name') {
+            return false;
+        }
+
+        return $this->isItemIdLabel($this->lastNonEmptyCellValue($sheet, $row));
+    }
+
+    /** True when `$row` is a "Subitems | Name | ... | Item ID (auto generated)" header row. */
+    private function isSubitemHeaderRow(Worksheet $sheet, int $row): bool
+    {
+        if ($this->cell($sheet, 'A', $row) !== 'Subitems' || $this->cell($sheet, 'B', $row) !== 'Name') {
+            return false;
+        }
+
+        return $this->isItemIdLabel($this->lastNonEmptyCellValue($sheet, $row));
+    }
+
+    private function isItemIdLabel(string $label): bool
+    {
+        return str_starts_with(mb_strtolower($label), 'item id');
+    }
+
+    private function lastNonEmptyCellValue(Worksheet $sheet, int $row): string
+    {
+        $column = $this->lastNonEmptyColumn($sheet, $row);
+
+        return $column === null ? '' : $this->cell($sheet, $column, $row);
+    }
+
+    private function lastNonEmptyColumn(Worksheet $sheet, int $row): ?string
+    {
+        $highest_index = Coordinate::columnIndexFromString($sheet->getHighestColumn());
+
+        for ($i = $highest_index; $i >= 1; $i--) {
+            $letter = Coordinate::stringFromColumnIndex($i);
+
+            if ($this->cell($sheet, $letter, $row) !== '') {
+                return $letter;
+            }
+        }
+
+        return null;
     }
 
     /**
-     * @return array<string, BoardColumn>
+     * Reads a header row into an ordered column list, keyed by a slug of its own label — e.g.
+     * a "Due Date" header becomes `['letter' => 'D', 'label' => 'Due Date', 'key' => 'due_date']`.
+     * `$name_col` (the item/subitem name column) and `$marker_cols` (the literal "Subitems"
+     * label that only marks a subitems header as such) are excluded, as is any column actually
+     * labeled "Subitems" — monday.com's own auto-generated rollup of an item's subitem names,
+     * redundant with the real subitems this import already creates.
+     *
+     * @param  array<int, string>  $marker_cols
+     * @return array{columns: array<int, array{letter: string, label: string, key: string}>, id_col: string}
      */
-    private function createSubitemColumns(WorkspaceNavigationItem $board, BoardView $view, array $distinct): array
+    private function readHeader(Worksheet $sheet, int $row, string $name_col, array $marker_cols): array
     {
-        return $this->createColumns($board, $view, BoardColumn::SCOPE_SUBITEM, [
-            'owner' => ['label' => 'Owner', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 160],
-            'status' => ['label' => 'Status', 'type' => BoardColumn::TYPE_STATUS, 'width' => 160, 'options' => array_keys($distinct['subitem_status'])],
-            'date' => ['label' => 'Date', 'type' => BoardColumn::TYPE_DATE, 'width' => 150],
-        ]);
+        $id_col = $this->lastNonEmptyColumn($sheet, $row) ?? $name_col;
+        $highest_index = Coordinate::columnIndexFromString($sheet->getHighestColumn());
+
+        $columns = [];
+
+        for ($i = 1; $i <= $highest_index; $i++) {
+            $letter = Coordinate::stringFromColumnIndex($i);
+
+            if ($letter === $name_col || $letter === $id_col || in_array($letter, $marker_cols, true)) {
+                continue;
+            }
+
+            $label = $this->cell($sheet, $letter, $row);
+
+            if ($label === '' || mb_strtolower(trim($label)) === 'subitems') {
+                continue;
+            }
+
+            $columns[] = ['letter' => $letter, 'label' => $label, 'key' => $this->columnKey($label, $columns)];
+        }
+
+        return ['columns' => $columns, 'id_col' => $id_col];
     }
 
     /**
-     * @param  array<string, array{label: string, type: string, width: int, options?: array<int, string>}>  $definitions
+     * A stable, unique-within-this-header machine key for a column label, e.g. "Due Date" ->
+     * `due_date`. Collisions (a board with two columns literally both named "Task") get a
+     * numeric suffix.
+     *
+     * @param  array<int, array{key: string}>  $existing_columns
+     */
+    private function columnKey(string $label, array $existing_columns): string
+    {
+        $base = (string) Str::of($label)->ascii()->lower()->replaceMatches('/[^a-z0-9]+/', '_')->trim('_');
+
+        if ($base === '') {
+            $base = 'field';
+        }
+
+        $existing_keys = array_column($existing_columns, 'key');
+        $key = $base;
+        $suffix = 2;
+
+        while (in_array($key, $existing_keys, true)) {
+            $key = $base.'_'.$suffix;
+            $suffix++;
+        }
+
+        return $key;
+    }
+
+    /**
+     * @param  array<int, array{letter: string, label: string, key: string}>  $columns
+     * @return array<string, string>
+     */
+    private function readRowData(Worksheet $sheet, int $row, array $columns): array
+    {
+        $data = [];
+
+        foreach ($columns as $column) {
+            $data[$column['key']] = $this->cell($sheet, $column['letter'], $row);
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, array<int, string>>  $collected
+     * @param  array<string, string>  $data
+     */
+    private function collectValues(array &$collected, array $data): void
+    {
+        foreach ($data as $key => $value) {
+            if ($value !== '') {
+                $collected[$key][] = $value;
+            }
+        }
+    }
+
+    /**
+     * Turns a header's raw column list into {@see BoardColumn} definitions: a "Timeline -
+     * Start" / "Timeline - End" (or "Date - Start" / "Date - End", ...) pair collapses into one
+     * {@see BoardColumn::TYPE_TIMELINE} column, and every other column gets its type guessed by
+     * {@see inferColumnType()} from its label and the values collected under it.
+     *
+     * @param  array<int, array{letter: string, label: string, key: string}>  $header_columns
+     * @param  array<string, array<int, string>>  $collected_values
+     * @return array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>}>
+     */
+    private function inferColumns(array $header_columns, array $collected_values): array
+    {
+        $consumed = [];
+        $definitions = [];
+
+        foreach ($header_columns as $column) {
+            if (preg_match('/^(.*?)\s*-\s*start$/i', $column['label'], $matches) !== 1) {
+                continue;
+            }
+
+            $prefix = trim($matches[1]);
+            $end_column = $this->findColumnByLabel($header_columns, ($prefix !== '' ? $prefix.' ' : '').'- End');
+
+            if ($end_column === null) {
+                continue;
+            }
+
+            $definitions[] = [
+                'key' => $this->columnKey($prefix !== '' ? $prefix : 'Timeline', $definitions),
+                'label' => $prefix !== '' ? $prefix : 'Timeline',
+                'type' => BoardColumn::TYPE_TIMELINE,
+                'options' => [],
+                'source' => [$column['key'], $end_column['key']],
+            ];
+            $consumed[$column['key']] = true;
+            $consumed[$end_column['key']] = true;
+        }
+
+        foreach ($header_columns as $column) {
+            if (isset($consumed[$column['key']])) {
+                continue;
+            }
+
+            [$type, $options] = $this->inferColumnType($column['label'], $collected_values[$column['key']] ?? []);
+
+            $definitions[] = [
+                'key' => $column['key'],
+                'label' => $column['label'],
+                'type' => $type,
+                'options' => $options,
+                'source' => [$column['key']],
+            ];
+        }
+
+        return $definitions;
+    }
+
+    /**
+     * @param  array<int, array{letter: string, label: string, key: string}>  $header_columns
+     * @return array{letter: string, label: string, key: string}|null
+     */
+    private function findColumnByLabel(array $header_columns, string $label): ?array
+    {
+        foreach ($header_columns as $column) {
+            if (strcasecmp(trim($column['label']), $label) === 0) {
+                return $column;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Guesses a {@see BoardColumn} type from a column's label and its non-empty raw values —
+     * see the class docblock. Falls back to {@see BoardColumn::TYPE_TEXT}/`TYPE_LONG_TEXT`
+     * whenever the guess is uncertain, so an unrecognized column still imports every value
+     * verbatim instead of losing data to a bad type match.
+     *
+     * @param  array<int, string>  $raw_values
+     * @return array{0: string, 1: array<int, string>}
+     */
+    private function inferColumnType(string $label, array $raw_values): array
+    {
+        $values = array_values(array_filter($raw_values, fn (string $value) => $value !== ''));
+        $label_lower = mb_strtolower(trim($label));
+
+        if ($values === []) {
+            return [BoardColumn::TYPE_TEXT, []];
+        }
+
+        if (str_contains($label_lower, 'checkbox')) {
+            return [BoardColumn::TYPE_CHECKBOX, []];
+        }
+
+        if ($this->isAllNumeric($values)) {
+            return [BoardColumn::TYPE_NUMBER, []];
+        }
+
+        if (str_contains($label_lower, 'date') && ! str_contains($label_lower, 'update') && $this->isMostlyDates($values)) {
+            return [BoardColumn::TYPE_DATE, []];
+        }
+
+        if (in_array($label_lower, self::PEOPLE_LABELS, true)) {
+            return [BoardColumn::TYPE_PEOPLE, []];
+        }
+
+        if (str_contains($label_lower, 'priority')) {
+            return [BoardColumn::TYPE_LABEL, array_values(array_unique($values))];
+        }
+
+        if (str_contains($label_lower, 'status')) {
+            return [BoardColumn::TYPE_STATUS, array_values(array_unique($values))];
+        }
+
+        if ($this->isMostlyCommaSeparated($values)) {
+            $tokens = [];
+            foreach ($values as $value) {
+                foreach ($this->splitList($value) as $token) {
+                    $tokens[$token] = true;
+                }
+            }
+
+            if (count($tokens) <= 60) {
+                return [BoardColumn::TYPE_TAGS, array_keys($tokens)];
+            }
+        } else {
+            $distinct = array_values(array_unique($values));
+
+            if (count($distinct) <= 12 && count($values) > count($distinct) && $this->maxLength($distinct) <= 40) {
+                return [BoardColumn::TYPE_STATUS, $distinct];
+            }
+        }
+
+        if ($this->maxLength($values) > 150 || $this->averageLength($values) > 80) {
+            return [BoardColumn::TYPE_LONG_TEXT, []];
+        }
+
+        return [BoardColumn::TYPE_TEXT, []];
+    }
+
+    /**
+     * @param  array<int, string>  $values
+     */
+    private function isAllNumeric(array $values): bool
+    {
+        foreach ($values as $value) {
+            if (! is_numeric($value)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int, string>  $values
+     */
+    private function isMostlyDates(array $values): bool
+    {
+        $parseable = 0;
+
+        foreach ($values as $value) {
+            if ($this->parseDate($value) !== null) {
+                $parseable++;
+            }
+        }
+
+        return ($parseable / count($values)) >= 0.9;
+    }
+
+    /**
+     * @param  array<int, string>  $values
+     */
+    private function isMostlyCommaSeparated(array $values): bool
+    {
+        $with_comma = 0;
+
+        foreach ($values as $value) {
+            if (str_contains($value, ',')) {
+                $with_comma++;
+            }
+        }
+
+        return ($with_comma / count($values)) >= 0.3;
+    }
+
+    /**
+     * @param  array<int, string>  $values
+     */
+    private function maxLength(array $values): int
+    {
+        return array_reduce($values, fn (int $max, string $value) => max($max, mb_strlen($value)), 0);
+    }
+
+    /**
+     * @param  array<int, string>  $values
+     */
+    private function averageLength(array $values): float
+    {
+        return array_sum(array_map('mb_strlen', $values)) / count($values);
+    }
+
+    /**
+     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>}>  $definitions
      * @return array<string, BoardColumn>
      */
-    private function createColumns(WorkspaceNavigationItem $board, BoardView $view, string $scope, array $definitions): array
+    private function createColumnsFromDefinitions(WorkspaceNavigationItem $board, BoardView $view, string $scope, array $definitions): array
     {
         $columns = [];
         $position = 0;
 
-        foreach ($definitions as $key => $definition) {
+        foreach ($definitions as $definition) {
             $config = empty($definition['options']) ? null : ['options' => $this->buildOptions($definition['options'])];
 
-            $columns[$key] = $board->columns()->create([
+            $columns[$definition['key']] = $board->columns()->create([
                 'board_view_id' => $view->id,
                 'scope' => $scope,
-                'key' => $key,
-                'label' => $definition['label'],
+                'key' => $this->truncateColumn($definition['key']),
+                'label' => $this->truncateColumn($definition['label']),
                 'type' => $definition['type'],
                 'position' => $position,
-                'width' => $definition['width'],
+                'width' => $this->widthForType($definition['type']),
                 'config' => $config,
             ]);
             $position++;
         }
 
         return $columns;
+    }
+
+    private function widthForType(string $type): int
+    {
+        return match ($type) {
+            BoardColumn::TYPE_PEOPLE => 160,
+            BoardColumn::TYPE_STATUS => 170,
+            BoardColumn::TYPE_LABEL => 130,
+            BoardColumn::TYPE_TIMELINE => 200,
+            BoardColumn::TYPE_NUMBER => 110,
+            BoardColumn::TYPE_TAGS => 200,
+            BoardColumn::TYPE_DROPDOWN => 180,
+            BoardColumn::TYPE_DATE => 150,
+            BoardColumn::TYPE_CHECKBOX => 90,
+            BoardColumn::TYPE_LONG_TEXT => 240,
+            default => 160,
+        };
     }
 
     /**
@@ -560,93 +897,84 @@ class MondayBoardImportService
     }
 
     /**
+     * Shapes and pushes one item/subitem's cell values according to each column's inferred
+     * type — the write-side counterpart of {@see inferColumnType()}.
+     *
+     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>}>  $definitions
      * @param  array<string, BoardColumn>  $columns
      * @param  array<string, string>  $data
      * @param  Collection<int, User>  $users
      * @param  array<int, string>  $unmatched
      */
-    private function storeItemValues(BoardItem $item, array $columns, array $data, Collection $users, array &$unmatched): void
+    private function applyColumnValues(BoardItem $item, array $definitions, array $columns, array $data, Collection $users, array &$unmatched): void
     {
         $values = [];
 
-        if ($data['assignee'] !== '') {
-            $resolved = $this->resolvePersonIds($data['assignee'], $users);
-            array_push($unmatched, ...$resolved['unmatched']);
+        foreach ($definitions as $definition) {
+            $column = $columns[$definition['key']];
+            $source = $definition['source'];
+            $raw = $data[$source[0]] ?? '';
 
-            if ($resolved['ids'] !== []) {
-                $values[] = ['column_id' => $columns['assignee']->id, 'value' => $resolved['ids']];
+            switch ($definition['type']) {
+                case BoardColumn::TYPE_TIMELINE:
+                    $timeline = $this->buildTimelineValue($raw, $data[$source[1]] ?? '');
+                    if ($timeline !== null) {
+                        $values[] = ['column_id' => $column->id, 'value' => $timeline];
+                    }
+                    break;
+
+                case BoardColumn::TYPE_PEOPLE:
+                    if ($raw !== '') {
+                        $resolved = $this->resolvePersonIds($raw, $users);
+                        array_push($unmatched, ...$resolved['unmatched']);
+
+                        if ($resolved['ids'] !== []) {
+                            $values[] = ['column_id' => $column->id, 'value' => $resolved['ids']];
+                        }
+                    }
+                    break;
+
+                case BoardColumn::TYPE_DATE:
+                    $date = $this->parseDate($raw);
+                    if ($date !== null) {
+                        $values[] = ['column_id' => $column->id, 'value' => $date];
+                    }
+                    break;
+
+                case BoardColumn::TYPE_NUMBER:
+                    if ($raw !== '' && is_numeric($raw)) {
+                        $values[] = ['column_id' => $column->id, 'value' => (float) $raw];
+                    }
+                    break;
+
+                case BoardColumn::TYPE_CHECKBOX:
+                    if ($raw !== '') {
+                        $values[] = ['column_id' => $column->id, 'value' => true];
+                    }
+                    break;
+
+                case BoardColumn::TYPE_STATUS:
+                case BoardColumn::TYPE_LABEL:
+                    $this->pushSingleOptionValue($values, $column, $raw);
+                    break;
+
+                case BoardColumn::TYPE_TAGS:
+                    $ids = $raw === '' ? [] : $this->optionIdsForLabels($column, $this->splitList($raw));
+                    if ($ids !== []) {
+                        $values[] = ['column_id' => $column->id, 'value' => $ids];
+                    }
+                    break;
+
+                default:
+                    if ($raw !== '') {
+                        $values[] = ['column_id' => $column->id, 'value' => $raw];
+                    }
+                    break;
             }
-        }
-
-        $this->pushSingleOptionValue($values, $columns['priority'], $data['priority']);
-        $this->pushSingleOptionValue($values, $columns['status'], $data['status']);
-        $this->pushSingleOptionValue($values, $columns['kanban_status'], $data['kanban_status']);
-
-        $timeline = $this->buildTimelineValue($data['timeline_start'], $data['timeline_end']);
-        if ($timeline !== null) {
-            $values[] = ['column_id' => $columns['timeline']->id, 'value' => $timeline];
-        }
-
-        if ($data['working_branch'] !== '') {
-            $values[] = ['column_id' => $columns['working_branch']->id, 'value' => $data['working_branch']];
-        }
-
-        if ($data['points'] !== '' && is_numeric($data['points'])) {
-            $values[] = ['column_id' => $columns['points']->id, 'value' => (float) $data['points']];
-        }
-
-        $tool_ids = $this->optionIdsForLabels($columns['tools'], $this->splitList($data['tools']));
-        if ($tool_ids !== []) {
-            $values[] = ['column_id' => $columns['tools']->id, 'value' => $tool_ids];
-        }
-
-        $project_ids = $data['project'] === '' ? [] : $this->optionIdsForLabels($columns['project'], [$data['project']]);
-        if ($project_ids !== []) {
-            $values[] = ['column_id' => $columns['project']->id, 'value' => $project_ids];
-        }
-
-        $goal_date = $this->parseDate($data['goal_completion_date']);
-        if ($goal_date !== null) {
-            $values[] = ['column_id' => $columns['goal_completion_date']->id, 'value' => $goal_date];
-        }
-
-        if ($data['text'] !== '') {
-            $values[] = ['column_id' => $columns['text']->id, 'value' => $data['text']];
         }
 
         if ($values !== []) {
             $item->values()->createMany($values);
-        }
-    }
-
-    /**
-     * @param  array<string, BoardColumn>  $columns
-     * @param  array<string, string>  $data
-     * @param  Collection<int, User>  $users
-     * @param  array<int, string>  $unmatched
-     */
-    private function storeSubitemValues(BoardItem $subitem, array $columns, array $data, Collection $users, array &$unmatched): void
-    {
-        $values = [];
-
-        if ($data['owner'] !== '') {
-            $resolved = $this->resolvePersonIds($data['owner'], $users);
-            array_push($unmatched, ...$resolved['unmatched']);
-
-            if ($resolved['ids'] !== []) {
-                $values[] = ['column_id' => $columns['owner']->id, 'value' => $resolved['ids']];
-            }
-        }
-
-        $this->pushSingleOptionValue($values, $columns['status'], $data['status']);
-
-        $date = $this->parseDate($data['date']);
-        if ($date !== null) {
-            $values[] = ['column_id' => $columns['date']->id, 'value' => $date];
-        }
-
-        if ($values !== []) {
-            $subitem->values()->createMany($values);
         }
     }
 
@@ -729,7 +1057,7 @@ class MondayBoardImportService
     }
 
     /**
-     * Splits a comma-separated cell (people names, tool tags) into trimmed, non-empty tokens.
+     * Splits a comma-separated cell (people names, tag tokens) into trimmed, non-empty tokens.
      *
      * @return array<int, string>
      */
@@ -778,13 +1106,6 @@ class MondayBoardImportService
         return ['ids' => array_values(array_unique($ids)), 'unmatched' => $unmatched];
     }
 
-    private function isHeaderRow(Worksheet $sheet, int $row): bool
-    {
-        return $this->cell($sheet, 'A', $row) === 'Name'
-            && $this->cell($sheet, 'B', $row) === 'Subitems'
-            && strtoupper($sheet->getStyle('A'.$row)->getFill()->getStartColor()->getRGB()) === self::HEADER_FILL_COLOR;
-    }
-
     private function boardTitle(Worksheet $sheet): string
     {
         $title = $this->cell($sheet, 'A', 1);
@@ -792,8 +1113,48 @@ class MondayBoardImportService
         return $title !== '' ? $title : 'Imported monday.com board';
     }
 
+    /**
+     * Row 2's text, when it's the board's free-text description rather than its first group's
+     * name — monday.com's export puts a group title directly under the board title with no
+     * description in between whenever the board has no description of its own, so this only
+     * counts row 2 as a description when it ISN'T immediately followed by a header row.
+     */
+    private function boardDescription(Worksheet $sheet): ?string
+    {
+        $description = $this->cell($sheet, 'A', 2);
+
+        if ($description === '' || $this->isItemHeaderRow($sheet, 3)) {
+            return null;
+        }
+
+        return $description;
+    }
+
     private function cell(Worksheet $sheet, string $column, int $row): string
     {
         return trim((string) $sheet->getCell($column.$row)->getFormattedValue());
+    }
+
+    /**
+     * `board_items.name` is a `varchar(255)` column, but a handful of real exports have a
+     * "Name" cell far longer than that (someone pasted a whole checklist into one item). Rather
+     * than let that row fail the whole import or silently lose text, the overflow moves into
+     * the item's `description` field and the visible name gets truncated.
+     *
+     * @return array{0: string, 1: string|null}
+     */
+    private function splitOverflowingName(string $name): array
+    {
+        if (mb_strlen($name) <= 255) {
+            return [$name, null];
+        }
+
+        return [mb_substr($name, 0, 252).'...', $name];
+    }
+
+    /** Defensive truncation for `varchar(255)` columns (group names, labels) with nowhere to keep an overflow. */
+    private function truncateColumn(string $value, int $limit = 255): string
+    {
+        return mb_strlen($value) > $limit ? mb_substr($value, 0, $limit) : $value;
     }
 }
