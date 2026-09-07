@@ -177,6 +177,26 @@ test('imports updates and redacts credential-looking lines with --updates=redact
     expect($subitem->comments()->count())->toBe(1);
 });
 
+test('imports updates verbatim, credentials included, with --updates=raw', function () {
+    $workspace = Workspace::factory()->create(['name' => 'Import Raw Workspace']);
+    User::factory()->create(['first_name' => 'Jane', 'last_name' => 'Doe']);
+
+    $path = sys_get_temp_dir().'/monday-import-test-'.uniqid().'.xlsx';
+    writeMondayFixture($path);
+
+    $this->artisan('board:import-monday', ['file' => $path, '--workspace' => $workspace->slug, '--updates' => 'raw'])
+        ->assertExitCode(0);
+
+    @unlink($path);
+
+    $board = WorkspaceNavigationItem::where('workspace_id', $workspace->id)->where('label', 'Test Roadmap')->firstOrFail();
+    $item = $board->items()->where('name', 'Fix login bug')->firstOrFail();
+
+    $top_level = $item->comments()->whereNull('parent_id')->firstOrFail();
+    expect($top_level->body)->toContain('super-secret-123');
+    expect($top_level->body)->not->toContain('REDACTED');
+});
+
 test('drops comment threads that contain a credential with --updates=exclude', function () {
     $workspace = Workspace::factory()->create(['name' => 'Import Exclude Workspace']);
     User::factory()->create(['first_name' => 'Jane', 'last_name' => 'Doe']);

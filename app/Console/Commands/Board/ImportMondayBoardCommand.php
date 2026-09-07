@@ -14,7 +14,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use Throwable;
 
-// php artisan board:import-monday
+// php artisan board:import-monday --force --updates=raw
 class ImportMondayBoardCommand extends Command
 {
     protected $signature = 'board:import-monday
