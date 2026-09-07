@@ -26,6 +26,7 @@ use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardExportController;
 use App\Http\Controllers\Board\BoardGroupController;
+use App\Http\Controllers\Board\BoardImportController;
 use App\Http\Controllers\Board\BoardInvitationController;
 use App\Http\Controllers\Board\BoardItemAttachmentController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
@@ -260,6 +261,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{column}/move', [BoardColumnController::class, 'move']);
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
             Route::delete('{column}', [BoardColumnController::class, 'destroy']);
+        });
+
+        // Board header's "More actions" > "Import items" wizard — parses an
+        // uploaded .csv/.xlsx/.xls into rows ("analyze"), then writes them
+        // once the "Map columns"/"Handle matches" steps resolve ("commit").
+        Route::prefix('import')->group(function () {
+            Route::post('analyze', [BoardImportController::class, 'analyze']);
+            Route::post('commit', [BoardImportController::class, 'commit']);
         });
 
         Route::prefix('groups')->group(function () {
