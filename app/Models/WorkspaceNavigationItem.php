@@ -37,6 +37,7 @@ use Illuminate\Support\Carbon;
  * @property int|null $item_column_width
  * @property int|null $sub_item_column_width
  * @property bool $is_favorite
+ * @property bool $is_priority
  * @property bool $is_archived
  * @property Carbon|null $archived_at
  * @property int $position
@@ -74,6 +75,7 @@ use Illuminate\Support\Carbon;
     'item_column_width',
     'sub_item_column_width',
     'is_favorite',
+    'is_priority',
     'is_archived',
     'archived_at',
     'position',
@@ -363,6 +365,7 @@ class WorkspaceNavigationItem extends Model
     {
         return [
             'is_favorite' => 'boolean',
+            'is_priority' => 'boolean',
             'is_archived' => 'boolean',
             'archived_at' => 'datetime',
             'position' => 'integer',

@@ -25,6 +25,7 @@ use Illuminate\Support\Str;
  * @property string $product
  * @property string $privacy
  * @property bool $is_home
+ * @property bool $is_priority
  * @property string|null $description
  * @property int $position
  * @property Carbon|null $created_at
@@ -35,7 +36,7 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, User> $users
  * @property-read Collection<int, User> $owners
  */
-#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'description', 'position'])]
+#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
 class Workspace extends Model
 {
     use HasFactory, SoftDeletes;
@@ -168,6 +169,7 @@ class Workspace extends Model
     {
         return [
             'is_home' => 'boolean',
+            'is_priority' => 'boolean',
             'invite_enabled' => 'boolean',
             'position' => 'integer',
         ];

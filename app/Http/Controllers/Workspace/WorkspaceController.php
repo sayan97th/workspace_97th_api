@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Workspace;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\StoreWorkspaceRequest;
 use App\Http\Requests\Workspace\TransferWorkspaceOwnershipRequest;
+use App\Http\Requests\Workspace\UpdateWorkspacePriorityRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceRequest;
 use App\Http\Resources\WorkspaceMemberResource;
 use App\Http\Resources\WorkspaceResource;
@@ -24,6 +25,10 @@ class WorkspaceController extends Controller
      *
      * Returns every workspace (for the "Browse all" catalog) annotated with the
      * current user's membership so the switcher can build its recent/mine lists.
+     *
+     * Ordered so priority clients ("high end clients" the team flagged via the
+     * sidebar's priority star) sort above every regular workspace, mirroring how a
+     * priority item sorts above the rest within a board.
      */
     public function index(Request $request): JsonResponse
     {
@@ -36,6 +41,7 @@ class WorkspaceController extends Controller
             ->keyBy('workspace_id');
 
         $workspaces = Workspace::orderByDesc('is_home')
+            ->orderByDesc('is_priority')
             ->orderBy('position')
             ->orderBy('name')
             ->get()
@@ -141,6 +147,40 @@ class WorkspaceController extends Controller
 
         return response()->json([
             'message' => 'Workspace updated successfully.',
+            'workspace' => new WorkspaceResource($workspace),
+        ]);
+    }
+
+    /**
+     * PATCH /api/workspaces/{workspace}/priority
+     *
+     * Flags/unflags the workspace as a priority client — "the idea of the star
+     * was just to make them a priority", so their boards/tasks are understood
+     * to matter more than a regular client's. Any member may toggle this (it's
+     * a shared team signal, not a structural change to the workspace), unlike
+     * rename/type/delete which stay owner-only.
+     */
+    public function togglePriority(UpdateWorkspacePriorityRequest $request, Workspace $workspace): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $membership = $this->membershipFor($workspace, $user->id);
+        if (! $membership) {
+            throw ValidationException::withMessages([
+                'workspace' => 'You are not a member of this workspace.',
+            ])->status(403);
+        }
+
+        $workspace->update(['is_priority' => $request->boolean('is_priority')]);
+
+        $workspace->setAttribute('membership_role', $membership->role);
+        $workspace->setAttribute('membership_is_recent', (bool) $membership->is_recent);
+
+        return response()->json([
+            'message' => $workspace->is_priority
+                ? 'Workspace marked as a priority client.'
+                : 'Workspace removed from priority clients.',
             'workspace' => new WorkspaceResource($workspace),
         ]);
     }

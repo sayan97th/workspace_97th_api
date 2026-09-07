@@ -32,6 +32,7 @@ class UpdateWorkspaceNavigationItemRequest extends FormRequest
             'item_column_width' => ['sometimes', 'nullable', 'integer', 'min:40', 'max:600'],
             'sub_item_column_width' => ['sometimes', 'nullable', 'integer', 'min:40', 'max:600'],
             'is_favorite' => ['sometimes', 'boolean'],
+            'is_priority' => ['sometimes', 'boolean'],
         ];
     }
 }

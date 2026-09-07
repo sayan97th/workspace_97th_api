@@ -42,6 +42,7 @@ class StoreWorkspaceNavigationItemRequest extends FormRequest
                 WorkspaceNavigationItem::BOARD_TYPE_SHAREABLE,
             ])],
             'is_favorite' => ['sometimes', 'boolean'],
+            'is_priority' => ['sometimes', 'boolean'],
             'position' => ['sometimes', 'integer', 'min:0'],
         ];
     }

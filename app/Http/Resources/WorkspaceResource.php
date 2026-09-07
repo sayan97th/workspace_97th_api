@@ -41,6 +41,7 @@ class WorkspaceResource extends JsonResource
             'product' => $this->product,
             'privacy' => $this->privacy,
             'is_home' => $this->is_home,
+            'is_priority' => $this->is_priority,
             'description' => $this->description,
             'position' => $this->position,
             'role' => (is_string($role) && $role !== '') ? ucfirst($role) : null,

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Workspace;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
+use App\Http\Requests\Workspace\ReorderWorkspaceNavigationItemsRequest;
 use App\Http\Requests\Workspace\StoreWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavCollapseStateRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavigationItemRequest;
@@ -18,6 +19,7 @@ use App\Services\Board\BoardDuplicationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class WorkspaceNavigationItemController extends Controller
@@ -94,6 +96,7 @@ class WorkspaceNavigationItemController extends Controller
             'display_style' => $validated['display_style'] ?? null,
             'board_type' => $validated['board_type'] ?? WorkspaceNavigationItem::BOARD_TYPE_MAIN,
             'is_favorite' => $validated['is_favorite'] ?? false,
+            'is_priority' => $validated['is_priority'] ?? false,
             'position' => $validated['position'] ?? $this->nextPosition($workspace, $parent_id),
             'created_by_id' => $request->user()?->id,
         ]);
@@ -210,6 +213,67 @@ class WorkspaceNavigationItemController extends Controller
         return response()->json([
             'message' => 'Navigation item moved successfully.',
             'item' => new WorkspaceNavigationItemResource($item->fresh()),
+        ]);
+    }
+
+    /**
+     * PATCH /api/workspaces/{workspace}/navigation/reorder
+     *
+     * Sidebar drag-and-drop reordering (and the "Move up"/"Move down" quick
+     * actions, which just submit a two-item swap) — the full new sibling
+     * order for `target_parent_id` is resequenced server-side in one
+     * transaction, mirroring {@see \App\Http\Controllers\Board\BoardItemController::reorder()}.
+     * `source_ordered_ids`/`source_parent_id` are only sent when the dragged
+     * item changed folders, so the old parent's remaining children stay
+     * contiguously ordered too.
+     */
+    public function reorder(ReorderWorkspaceNavigationItemsRequest $request, Workspace $workspace): JsonResponse
+    {
+        $validated = $request->validated();
+        $moved_item = $workspace->navigationItems()->findOrFail($validated['moved_item_id']);
+        $target_parent_id = array_key_exists('target_parent_id', $validated) ? $validated['target_parent_id'] : $moved_item->parent_id;
+
+        if ($target_parent_id !== null) {
+            if ((int) $target_parent_id === $moved_item->id || $this->isDescendant($moved_item, (int) $target_parent_id)) {
+                return response()->json([
+                    'message' => 'A navigation item cannot be moved inside itself or one of its descendants.',
+                ], 422);
+            }
+        }
+
+        $touched_ids = [];
+
+        DB::transaction(function () use ($workspace, $moved_item, $target_parent_id, $validated, &$touched_ids) {
+            if ($target_parent_id !== $moved_item->parent_id) {
+                $moved_item->parent_id = $target_parent_id;
+                $moved_item->save();
+            }
+
+            foreach ($validated['target_ordered_ids'] as $position => $id) {
+                WorkspaceNavigationItem::where('id', $id)
+                    ->where('workspace_id', $workspace->id)
+                    ->where('parent_id', $target_parent_id)
+                    ->update(['position' => $position]);
+            }
+            $touched_ids = $validated['target_ordered_ids'];
+
+            if (! empty($validated['source_ordered_ids'])) {
+                $source_parent_id = $validated['source_parent_id'] ?? null;
+                foreach ($validated['source_ordered_ids'] as $position => $id) {
+                    WorkspaceNavigationItem::where('id', $id)
+                        ->where('workspace_id', $workspace->id)
+                        ->where('parent_id', $source_parent_id)
+                        ->update(['position' => $position]);
+                }
+                $touched_ids = [...$touched_ids, ...$validated['source_ordered_ids']];
+            }
+        });
+
+        $items = WorkspaceNavigationItem::whereIn('id', $touched_ids)->get();
+
+        return response()->json([
+            'message' => 'Navigation items reordered successfully.',
+            'items' => WorkspaceNavigationItemResource::collection($items),
         ]);
     }
 
@@ -338,6 +402,7 @@ class WorkspaceNavigationItemController extends Controller
             'display_style' => $item->display_style,
             'board_type' => $item->board_type,
             'is_favorite' => false,
+            'is_priority' => false,
             'position' => $position,
             'created_by_id' => $created_by_id,
         ]);

@@ -159,6 +159,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('/', [WorkspaceController::class, 'store']);
         Route::get('{workspace}', [WorkspaceController::class, 'show']);
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
+        Route::patch('{workspace}/priority', [WorkspaceController::class, 'togglePriority']);
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
         Route::post('{workspace}/transfer-ownership', [WorkspaceController::class, 'transferOwnership']);
@@ -176,6 +177,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('/', [WorkspaceNavigationItemController::class, 'index']);
             Route::post('/', [WorkspaceNavigationItemController::class, 'store']);
             Route::put('collapsed-state', [WorkspaceNavigationItemController::class, 'updateCollapsedState']);
+
+            // Sidebar drag-and-drop / "Move up" / "Move down" reordering —
+            // declared before the `{item}` wildcard routes below so this
+            // literal segment isn't swallowed by route-model binding,
+            // mirroring how `items/reorder` is declared ahead of
+            // `items/{board_item}`.
+            Route::patch('reorder', [WorkspaceNavigationItemController::class, 'reorder']);
+
             Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
             Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
             Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate']);
