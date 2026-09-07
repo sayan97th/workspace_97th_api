@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers\Workspace;
 
+use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\StoreWorkspaceNavigationItemRequest;
+use App\Http\Requests\Workspace\UpdateWorkspaceNavCollapseStateRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavigationItemRequest;
 use App\Http\Resources\WorkspaceNavigationItemResource;
 use App\Models\BoardActivityLog;
 use App\Models\Workspace;
+use App\Models\WorkspaceNavCollapseState;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardDuplicationService;
@@ -27,17 +30,24 @@ class WorkspaceNavigationItemController extends Controller
     /**
      * GET /api/workspaces/{workspace}/navigation
      *
-     * Returns the full navigation tree for the workspace in one payload.
+     * Returns the full navigation tree for the workspace, plus which of its
+     * folders the authenticated viewer currently has collapsed (a personal
+     * preference — see {@see updateCollapsedState()}), in one payload.
      */
-    public function index(Workspace $workspace): JsonResponse
+    public function index(Request $request, Workspace $workspace): JsonResponse
     {
         $tree = $workspace->rootNavigationItems()
             ->notArchived()
             ->with(['childrenRecursive', 'creator', 'workspace.owners'])
             ->get();
 
+        $collapsed_group_ids = WorkspaceNavCollapseState::where('user_id', $request->user()?->id)
+            ->where('workspace_id', $workspace->id)
+            ->value('collapsed_group_ids');
+
         return response()->json([
             'data' => WorkspaceNavigationItemResource::collection($this->pruneArchived($tree)),
+            'collapsed_group_ids' => $collapsed_group_ids ?? [],
         ]);
     }
 
@@ -92,6 +102,38 @@ class WorkspaceNavigationItemController extends Controller
             'message' => 'Navigation item created successfully.',
             'item' => new WorkspaceNavigationItemResource($item->load(['creator', 'workspace.owners'])),
         ], 201);
+    }
+
+    /**
+     * PUT /api/workspaces/{workspace}/navigation/collapsed-state
+     *
+     * Saves which of this workspace's sidebar folders the authenticated
+     * viewer currently has collapsed — a personal preference, not shared
+     * with other workspace members (mirrors
+     * {@see BoardGroupController::updateCollapsedState()}).
+     * Only the collapsed ids are ever stored/sent, so this stays a small
+     * payload regardless of how many folders the workspace has.
+     */
+    public function updateCollapsedState(UpdateWorkspaceNavCollapseStateRequest $request, Workspace $workspace): JsonResponse
+    {
+        $group_ids = $workspace->navigationItems()
+            ->where('type', WorkspaceNavigationItem::TYPE_GROUP)
+            ->pluck('id');
+
+        $collapsed_group_ids = collect($request->validated('collapsed_group_ids'))
+            ->filter(fn (int $id) => $group_ids->contains($id))
+            ->values()
+            ->all();
+
+        $state = WorkspaceNavCollapseState::updateOrCreate(
+            ['user_id' => $request->user()?->id, 'workspace_id' => $workspace->id],
+            ['collapsed_group_ids' => $collapsed_group_ids],
+        );
+
+        return response()->json([
+            'message' => 'Collapsed navigation items saved successfully.',
+            'collapsed_group_ids' => $state->collapsed_group_ids,
+        ]);
     }
 
     /**

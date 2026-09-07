@@ -175,6 +175,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::prefix('{workspace}/navigation')->group(function () {
             Route::get('/', [WorkspaceNavigationItemController::class, 'index']);
             Route::post('/', [WorkspaceNavigationItemController::class, 'store']);
+            Route::put('collapsed-state', [WorkspaceNavigationItemController::class, 'updateCollapsedState']);
             Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
             Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
             Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate']);
