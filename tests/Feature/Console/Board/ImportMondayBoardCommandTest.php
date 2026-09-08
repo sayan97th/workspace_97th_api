@@ -21,21 +21,27 @@ function writeMondayFixture(string $path): void
     $sheet = $spreadsheet->getActiveSheet();
     $sheet->setTitle('board');
 
-    $header = ['Name', 'Subitems', 'Assignee', 'Priority', 'Status', 'Ernesto - Kaban', 'Timeline - Start', 'Timeline - End', 'Working Branch', 'Points /3', 'Tools', 'Project', 'Goal Completion Date', 'Text', 'Item ID (auto generated)'];
+    $header = ['Name', 'Subitems', 'Assignee', 'Priority', 'Status', 'Ernesto - Kaban', 'Timeline - Start', 'Timeline - End', 'Working Branch', 'Points /3', 'Tools', 'Project', 'Goal Completion Date', 'Text', 'Description', 'Item ID (auto generated)'];
     $subitem_header = ['Subitems', 'Name', 'Owner', 'Status', 'Date', 'Item ID (auto generated)'];
+
+    // "Description" only has one filled-in row, and that one sentence
+    // happens to contain a comma — the exact shape that used to trip the
+    // comma-heuristic into misreading a free-text column as a short tag
+    // list (see `MondayBoardImportService::inferColumnType()`).
+    $description = 'Reported after a client call on 2024-01-05, please verify with QA before shipping.';
 
     $rows = [
         ['Test Roadmap'],
         ['Group One'],
         $header,
-        ['Fix login bug', '', 'Jane Doe', 'High', 'Working on it', 'Backlog', '', '', '', '2', 'backend, urgent', 'Website', '', 'Some notes', '1111111111'],
-        ['Ship feature', 'Subtask A', 'Jane Doe', '', 'Done', '', '', '', '', '', '', '', '', '', '2222222222'],
+        ['Fix login bug', '', 'Jane Doe', 'High', 'Working on it', 'Backlog', '', '', '', '2', 'backend, urgent', 'Website', '', 'Some notes', $description, '1111111111'],
+        ['Ship feature', 'Subtask A', 'Jane Doe', '', 'Done', '', '', '', '', '', '', '', '', '', '', '2222222222'],
         $subitem_header,
         ['', 'Subtask A', 'Jane Doe', 'Done', '', '3333333333'],
         [],
         ['Group Two'],
         $header,
-        ['Second group item', '', '', '', '', '', '', '', '', '', '', '', '', '', '4444444444'],
+        ['Second group item', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '4444444444'],
     ];
 
     $sheet->fromArray($rows, null, 'A1');
@@ -110,6 +116,47 @@ test('imports groups, items, subitems and column values from a monday.com export
     $parent_item = $board->items()->where('name', 'Ship feature')->firstOrFail();
     expect($subitem->parent_id)->toBe($parent_item->id);
     expect($subitem->group_id)->toBe($parent_item->group_id);
+});
+
+test('auto-detects a sparsely-filled free-text column as long text instead of tags', function () {
+    $workspace = Workspace::factory()->create(['name' => 'Import Text Detection Workspace']);
+    User::factory()->create(['first_name' => 'Jane', 'last_name' => 'Doe']);
+
+    $path = sys_get_temp_dir().'/monday-import-test-'.uniqid().'.xlsx';
+    writeMondayFixture($path);
+
+    $this->artisan('board:import-monday', [
+        'file' => $path,
+        '--workspace' => $workspace->slug,
+    ])->assertExitCode(0);
+
+    @unlink($path);
+
+    $board = WorkspaceNavigationItem::where('workspace_id', $workspace->id)
+        ->where('label', 'Test Roadmap')
+        ->firstOrFail();
+
+    // "Text" (one plain word/phrase value) and "Description" (one full
+    // sentence containing a comma) must both come through as plain
+    // text/long text — not get exploded into bogus "tags" options just
+    // because one of their sentences happens to contain a comma.
+    $text_column = $board->columns()->where('scope', BoardColumn::SCOPE_ITEM)->where('key', 'text')->firstOrFail();
+    expect($text_column->type)->toBe(BoardColumn::TYPE_TEXT);
+    expect($text_column->config)->toBeNull();
+
+    $description_column = $board->columns()->where('scope', BoardColumn::SCOPE_ITEM)->where('key', 'description')->firstOrFail();
+    expect($description_column->type)->toBe(BoardColumn::TYPE_LONG_TEXT);
+    expect($description_column->config)->toBeNull();
+
+    $item = $board->items()->where('name', 'Fix login bug')->firstOrFail();
+    $description_value = $item->values()->where('column_id', $description_column->id)->firstOrFail();
+    expect($description_value->value)->toBe('Reported after a client call on 2024-01-05, please verify with QA before shipping.');
+
+    // The genuinely short, comma-separated "Tools" column is unaffected — it
+    // must still resolve to a real tags column with its options intact.
+    $tools_column = $board->columns()->where('scope', BoardColumn::SCOPE_ITEM)->where('key', 'tools')->firstOrFail();
+    expect($tools_column->type)->toBe(BoardColumn::TYPE_TAGS);
+    expect(collect($tools_column->config['options'])->pluck('label')->all())->toEqualCanonicalizing(['backend', 'urgent']);
 });
 
 test('replaces an existing board with the same name when --force is passed', function () {

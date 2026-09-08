@@ -100,6 +100,9 @@ class MondayBoardImportService
      */
     private const SECRET_LINE_PATTERN = '/^\s*(u|p|pw|pwd|pass|password|passwd|user(name)?|login|secret|token|api[\s_-]?key|apikey|credential)\s*[:=]/i';
 
+    /** A real tag/label token reads as a short word or phrase; prose split on a comma produces much longer fragments. */
+    private const MAX_TAG_TOKEN_LENGTH = 40;
+
     /**
      * Reads the whole sheet into an in-memory tree, without touching the database. Column
      * layout is discovered from whatever the sheet's own header rows name — see the class
@@ -748,8 +751,14 @@ class MondayBoardImportService
                 }
             }
 
-            if (count($tokens) <= 60) {
-                return [BoardColumn::TYPE_TAGS, array_keys($tokens)];
+            $token_labels = array_keys($tokens);
+
+            // A genuine tag list splits into short, word-or-phrase-like tokens
+            // ("backend", "urgent"); free-text prose that merely contains a
+            // comma splits into much longer sentence fragments — that shape
+            // difference is what tells the two apart, not the raw token count.
+            if (count($token_labels) <= 60 && $this->maxLength($token_labels) <= self::MAX_TAG_TOKEN_LENGTH) {
+                return [BoardColumn::TYPE_TAGS, $token_labels];
             }
         } else {
             $distinct = array_values(array_unique($values));

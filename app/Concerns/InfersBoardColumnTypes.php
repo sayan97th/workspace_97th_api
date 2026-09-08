@@ -56,6 +56,9 @@ trait InfersBoardColumnTypes
         'interviewer', 'designer', 'epic owner',
     ];
 
+    /** A real tag/label token reads as a short word or phrase; prose split on a comma produces much longer fragments. */
+    private const MAX_TAG_TOKEN_LENGTH = 40;
+
     /**
      * Falls back to {@see BoardColumn::TYPE_TEXT}/`TYPE_LONG_TEXT` whenever
      * the guess is uncertain, so an unrecognized column still imports every
@@ -110,8 +113,14 @@ trait InfersBoardColumnTypes
                 }
             }
 
-            if (count($tokens) <= 60) {
-                return [BoardColumn::TYPE_TAGS, array_keys($tokens)];
+            $token_labels = array_keys($tokens);
+
+            // A genuine tag list splits into short, word-or-phrase-like tokens
+            // ("backend", "urgent"); free-text prose that merely contains a
+            // comma splits into much longer sentence fragments — that shape
+            // difference is what tells the two apart, not the raw token count.
+            if (count($token_labels) <= 60 && $this->maxLength($token_labels) <= self::MAX_TAG_TOKEN_LENGTH) {
+                return [BoardColumn::TYPE_TAGS, $token_labels];
             }
         } else {
             $distinct = array_values(array_unique($values));

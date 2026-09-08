@@ -92,6 +92,27 @@ test('analyze auto-maps every column instead of leaving unmatched ones as "don\'
         ->assertJsonPath('suggested_mappings.2.new_type', 'people');
 });
 
+test('analyze suggests long text for a sparsely-filled prose column instead of tags', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+
+    // Only one row has a "Description" value, and that one sentence happens
+    // to contain a comma — the same shape that used to make the comma-based
+    // tag heuristic misfire and shred free text into bogus tag options.
+    $csv = "Name,Description\n"
+        ."Task One,\"Reported after a client call on 2024-01-05, please verify with QA before shipping.\"\n"
+        ."Task Two,\n";
+
+    $response = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
+        'file' => fakeFlatCsvUpload($csv),
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('source_columns.1.suggested_type', 'long_text')
+        ->assertJsonPath('suggested_mappings.1.mode', 'create')
+        ->assertJsonPath('suggested_mappings.1.new_type', 'long_text');
+});
+
 test('commit queues a background job that creates a new table and items', function () {
     $user = User::factory()->create();
     $board = createImportTestBoard();
