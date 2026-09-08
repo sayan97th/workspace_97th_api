@@ -55,11 +55,13 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property Carbon|null $two_factor_confirmed_at
  * @property string|null $remember_token
  * @property int|null $current_team_id
+ * @property int|null $last_active_workspace_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read string $full_name
  * @property-read string|null $profile_photo_url
  * @property-read Team|null $currentTeam
+ * @property-read Workspace|null $lastActiveWorkspace
  * @property-read Collection<int, Team> $ownedTeams
  * @property-read Collection<int, Membership> $teamMemberships
  * @property-read Collection<int, Team> $teams
@@ -70,7 +72,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Department|null $department
  */
 #[Fillable([
-    'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
+    'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'last_active_workspace_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
     'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
     'notification_preferences', 'desktop_notifications_enabled',
     'language', 'time_format', 'date_format', 'first_day_of_week',
@@ -157,6 +159,27 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
         return $this->belongsToMany(Workspace::class, 'workspace_user')
             ->withPivot(['role', 'is_recent'])
             ->withTimestamps();
+    }
+
+    /**
+     * The workspace the user last had open, restored by the frontend switcher
+     * on login/page reload so it doesn't always fall back to the home
+     * workspace. Written by the "activate workspace" endpoint.
+     *
+     * @return BelongsTo<Workspace, $this>
+     */
+    public function lastActiveWorkspace(): BelongsTo
+    {
+        return $this->belongsTo(Workspace::class, 'last_active_workspace_id');
+    }
+
+    /**
+     * Records the given workspace as the one the user last had open.
+     */
+    public function setLastActiveWorkspace(Workspace $workspace): void
+    {
+        $this->update(['last_active_workspace_id' => $workspace->id]);
+        $this->setRelation('lastActiveWorkspace', $workspace);
     }
 
     /**

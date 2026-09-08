@@ -186,6 +186,27 @@ class WorkspaceController extends Controller
     }
 
     /**
+     * PATCH /api/workspaces/{workspace}/activate
+     *
+     * Records this workspace as the one the current user last had open, so the
+     * switcher restores it on their next login/page reload instead of always
+     * defaulting to the home workspace. Fired by the frontend every time the
+     * user switches workspaces.
+     */
+    public function activate(Request $request, Workspace $workspace): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $user->setLastActiveWorkspace($workspace);
+
+        return response()->json([
+            'message' => 'Active workspace updated successfully.',
+            'last_active_workspace_id' => $workspace->id,
+        ]);
+    }
+
+    /**
      * DELETE /api/workspaces/{workspace}
      *
      * Soft-deletes the workspace. Restricted to owners.

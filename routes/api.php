@@ -161,6 +161,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('{workspace}', [WorkspaceController::class, 'show']);
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
         Route::patch('{workspace}/priority', [WorkspaceController::class, 'togglePriority']);
+        Route::patch('{workspace}/activate', [WorkspaceController::class, 'activate']);
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
         Route::post('{workspace}/transfer-ownership', [WorkspaceController::class, 'transferOwnership']);

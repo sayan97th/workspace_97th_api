@@ -51,6 +51,10 @@ class ProfileResource extends JsonResource
             'date_format' => $this->date_format,
             'first_day_of_week' => $this->first_day_of_week,
 
+            // Lets the frontend switcher restore this workspace on load instead
+            // of always defaulting to the home workspace.
+            'last_active_workspace_id' => $this->last_active_workspace_id,
+
             'roles' => $this->when(
                 $this->relationLoaded('roles'),
                 fn () => $this->roles->map(fn ($role) => [
