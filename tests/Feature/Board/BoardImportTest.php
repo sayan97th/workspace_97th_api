@@ -64,6 +64,34 @@ test('analyze parses a flat csv upload and returns a token', function () {
     expect($response->json('import_token'))->toBeString()->not->toBe('');
 });
 
+test('analyze auto-maps every column instead of leaving unmatched ones as "don\'t import"', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id]);
+
+    // "Status" already exists on the board — it should be auto-mapped to
+    // that existing column, while "Owner" (which doesn't) should default to
+    // auto-creating a new column instead of being skipped.
+    BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view->id,
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'label' => 'Status',
+        'type' => BoardColumn::TYPE_STATUS,
+    ]);
+
+    $response = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
+        'file' => fakeFlatCsvUpload(),
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('suggested_mappings.0.mode', 'name')
+        ->assertJsonPath('suggested_mappings.1.mode', 'map')
+        ->assertJsonPath('suggested_mappings.2.mode', 'create')
+        ->assertJsonPath('suggested_mappings.2.new_label', 'Owner')
+        ->assertJsonPath('suggested_mappings.2.new_type', 'people');
+});
+
 test('commit queues a background job that creates a new table and items', function () {
     $user = User::factory()->create();
     $board = createImportTestBoard();

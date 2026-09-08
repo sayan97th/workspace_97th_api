@@ -114,42 +114,72 @@ class BoardItemImportService
     }
 
     /**
-     * Pre-fills the "Map columns" step: the column literally labeled "Name"
-     * (or, failing that, the first column — every monday.com export's own
-     * convention) is mapped to the item's built-in name field, and any other
-     * column whose label case-insensitively matches an existing board column
-     * is mapped straight to it. Everything else starts unmapped, left for
-     * the "Unmapped columns" default / a manual pick.
+     * Pre-fills the "Map columns" step so every source column already has a
+     * destination and the user never has to hand-pick one: the column
+     * literally labeled "Name" (or, failing that, the first column — every
+     * monday.com export's own convention) is mapped to the item's built-in
+     * name field, any other column whose label case-insensitively matches an
+     * existing board column is mapped straight to it, and every remaining
+     * column defaults to `"create"` — a brand-new column typed from
+     * `buildSourceColumns()`'s own value-based guess (`suggested_type`) —
+     * rather than being left unmapped. The user can still override any row
+     * to "Don't import" themselves; nothing here is forced.
      *
-     * @param  array<int, string>  $headers
+     * @param  array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string}>  $source_columns  {@see buildSourceColumns()}'s output — already carries each column's guessed type
      * @param  Collection<int, BoardColumn>  $existing_columns
-     * @return array<int, array{source_index: int, mode: string, target_column_id: int|null}>
+     * @return array<int, array{source_index: int, mode: string, target_column_id: int|null, new_label: string|null, new_type: string|null}>
      */
-    public function suggestMappings(array $headers, Collection $existing_columns): array
+    public function suggestMappings(array $source_columns, Collection $existing_columns): array
     {
         $name_index = 0;
-        foreach ($headers as $index => $label) {
-            if (mb_strtolower(trim($label)) === 'name') {
-                $name_index = $index;
+        foreach ($source_columns as $column) {
+            if (mb_strtolower(trim($column['label'])) === 'name') {
+                $name_index = $column['index'];
                 break;
             }
         }
 
         $columns_by_label = $existing_columns->keyBy(fn (BoardColumn $column) => mb_strtolower(trim($column->label)));
+        $creatable_types = $this->creatableColumnTypes();
 
         $mappings = [];
-        foreach ($headers as $index => $label) {
+        foreach ($source_columns as $column) {
+            $index = $column['index'];
+
             if ($index === $name_index) {
-                $mappings[] = ['source_index' => $index, 'mode' => 'name', 'target_column_id' => null];
+                $mappings[] = [
+                    'source_index' => $index,
+                    'mode' => 'name',
+                    'target_column_id' => null,
+                    'new_label' => null,
+                    'new_type' => null,
+                ];
 
                 continue;
             }
 
-            $match = $columns_by_label->get(mb_strtolower(trim($label)));
+            $existing = $columns_by_label->get(mb_strtolower(trim($column['label'])));
+
+            if ($existing !== null) {
+                $mappings[] = [
+                    'source_index' => $index,
+                    'mode' => 'map',
+                    'target_column_id' => $existing->id,
+                    'new_label' => null,
+                    'new_type' => null,
+                ];
+
+                continue;
+            }
+
+            $type = in_array($column['suggested_type'], $creatable_types, true) ? $column['suggested_type'] : BoardColumn::TYPE_TEXT;
+
             $mappings[] = [
                 'source_index' => $index,
-                'mode' => $match !== null ? 'map' : 'skip',
-                'target_column_id' => $match?->id,
+                'mode' => 'create',
+                'target_column_id' => null,
+                'new_label' => $this->truncate($column['label']),
+                'new_type' => $type,
             ];
         }
 

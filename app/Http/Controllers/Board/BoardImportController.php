@@ -69,13 +69,14 @@ class BoardImportController extends Controller
 
         $existing_columns = $view->columns()->where('scope', BoardColumn::SCOPE_ITEM)->orderBy('position')->get();
         $groups = $view->groups()->orderBy('position')->get();
+        $source_columns = $this->importer->buildSourceColumns($parsed['headers'], $parsed['rows']);
 
         return response()->json([
             'import_token' => $import_token,
             'file_name' => $file->getClientOriginalName(),
             'row_count' => count($parsed['rows']),
-            'source_columns' => $this->importer->buildSourceColumns($parsed['headers'], $parsed['rows']),
-            'suggested_mappings' => $this->importer->suggestMappings($parsed['headers'], $existing_columns),
+            'source_columns' => $source_columns,
+            'suggested_mappings' => $this->importer->suggestMappings($source_columns, $existing_columns),
             'board_columns' => BoardColumnResource::collection($existing_columns),
             'groups' => BoardGroupResource::collection($groups),
             'creatable_column_types' => $this->importer->creatableColumnTypes(),
