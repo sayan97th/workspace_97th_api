@@ -159,6 +159,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::prefix('workspaces')->group(function () {
         Route::get('/', [WorkspaceController::class, 'index']);
         Route::post('/', [WorkspaceController::class, 'store']);
+
+        // Id-based lookup for the frontend's `/workspaces/{workspace_id}/...`
+        // tab routes, which only have the numeric id from the URL — declared
+        // ahead of the slug-bound `{workspace}` route below for clarity, though
+        // the differing segment count means they can't actually collide.
+        Route::get('by-id/{workspace:id}', [WorkspaceController::class, 'show']);
+
         Route::get('{workspace}', [WorkspaceController::class, 'show']);
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
         Route::patch('{workspace}/priority', [WorkspaceController::class, 'togglePriority']);

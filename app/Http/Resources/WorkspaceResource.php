@@ -46,6 +46,10 @@ class WorkspaceResource extends JsonResource
             'position' => $this->position,
             'role' => (is_string($role) && $role !== '') ? ucfirst($role) : null,
             'memberships' => $memberships,
+            // Lets the frontend jump straight from this workspace to its
+            // "Manage Workspace" board without a separate navigation-tree
+            // lookup — see `Workspace::manageNavigationItem()`.
+            'manage_node_id' => $this->manageNavigationItem?->id,
         ];
     }
 }

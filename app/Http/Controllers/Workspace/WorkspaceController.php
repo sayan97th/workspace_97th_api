@@ -43,7 +43,8 @@ class WorkspaceController extends Controller
             ->get()
             ->keyBy('workspace_id');
 
-        $workspaces = Workspace::orderByDesc('is_home')
+        $workspaces = Workspace::with('manageNavigationItem')
+            ->orderByDesc('is_home')
             ->orderByDesc('is_priority')
             ->orderBy('position')
             ->orderBy('name')
@@ -61,6 +62,11 @@ class WorkspaceController extends Controller
 
     /**
      * GET /api/workspaces/{workspace}
+     * GET /api/workspaces/by-id/{workspace} (bound by numeric id instead of slug)
+     *
+     * The `by-id` route exists for the frontend's `/workspaces/{workspace_id}/...`
+     * tab routes, which only ever have the workspace's numeric id on hand (from
+     * the URL itself), not its slug.
      */
     public function show(Request $request, Workspace $workspace): JsonResponse
     {

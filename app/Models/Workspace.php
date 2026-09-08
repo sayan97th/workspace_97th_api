@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -35,6 +36,7 @@ use Illuminate\Support\Str;
  * @property Carbon|null $deleted_at
  * @property-read Collection<int, WorkspaceNavigationItem> $navigationItems
  * @property-read Collection<int, WorkspaceNavigationItem> $rootNavigationItems
+ * @property-read WorkspaceNavigationItem|null $manageNavigationItem
  * @property-read Collection<int, User> $users
  * @property-read Collection<int, User> $owners
  * @property-read User|null $creator
@@ -128,6 +130,21 @@ class Workspace extends Model
         return $this->hasMany(WorkspaceNavigationItem::class)
             ->whereNull('parent_id')
             ->orderBy('position');
+    }
+
+    /**
+     * This workspace's single "Manage Workspace" entry point — a root-level
+     * navigation leaf seeded once per workspace (see
+     * {@see \App\Http\Controllers\Workspace\WorkspaceController::store()})
+     * whose `view_key` is the reserved `"workspace_manage"` string. Lets the
+     * frontend resolve `/workspaces/{workspace_id}/...` routes straight to
+     * their underlying board id without walking the whole navigation tree.
+     *
+     * @return HasOne<WorkspaceNavigationItem, $this>
+     */
+    public function manageNavigationItem(): HasOne
+    {
+        return $this->hasOne(WorkspaceNavigationItem::class)->where('view_key', 'workspace_manage');
     }
 
     /**
