@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -20,6 +21,7 @@ use Illuminate\Support\Str;
  * @property string $invite_role
  * @property bool $invite_enabled
  * @property int|null $invite_generated_by
+ * @property int|null $created_by
  * @property string $mono
  * @property string $color
  * @property string $product
@@ -35,8 +37,9 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, WorkspaceNavigationItem> $rootNavigationItems
  * @property-read Collection<int, User> $users
  * @property-read Collection<int, User> $owners
+ * @property-read User|null $creator
  */
-#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
+#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'created_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
 class Workspace extends Model
 {
     use HasFactory, SoftDeletes;
@@ -158,6 +161,27 @@ class Workspace extends Model
     public function invitations(): HasMany
     {
         return $this->hasMany(WorkspaceInvitation::class);
+    }
+
+    /**
+     * The user who originally created this workspace. Permanent — unlike the
+     * "owner" role (which can be transferred), this never changes, so it's
+     * what {@see isCreator()} uses to block that person from ever being
+     * removed from their own workspace.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * Whether the given user is this workspace's original creator.
+     */
+    public function isCreator(int $user_id): bool
+    {
+        return $this->created_by !== null && $this->created_by === $user_id;
     }
 
     /**

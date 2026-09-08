@@ -131,6 +131,19 @@ class WorkspacePermissionCatalog
     }
 
     /**
+     * Global roles that can manage any workspace's membership (invite, remove,
+     * change a member's role) regardless of their own membership in it —
+     * mirrors the `role:super_admin,admin` gate used elsewhere in
+     * `routes/api.php` for account-management surfaces.
+     *
+     * @return array<int, string>
+     */
+    public static function privilegedGlobalRoles(): array
+    {
+        return ['super_admin', 'admin'];
+    }
+
+    /**
      * @return array<int, string>
      */
     public static function roleIds(): array

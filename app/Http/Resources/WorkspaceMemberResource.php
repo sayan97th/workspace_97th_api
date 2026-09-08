@@ -29,6 +29,8 @@ class WorkspaceMemberResource extends JsonResource
             'is_recent' => (bool) $this->pivot->is_recent,
             'invited_by' => $this->pivot->invited_by,
             'joined_at' => $this->pivot->created_at,
+            /** @see \App\Models\Workspace::isCreator() — set by the controller before building this resource. */
+            'is_creator' => (bool) ($this->is_workspace_creator ?? false),
         ];
     }
 }

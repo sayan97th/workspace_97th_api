@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Workspace;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Workspace\Concerns\AuthorizesWorkspaceManagement;
 use App\Http\Requests\Workspace\StoreWorkspaceRequest;
 use App\Http\Requests\Workspace\TransferWorkspaceOwnershipRequest;
 use App\Http\Requests\Workspace\UpdateWorkspacePriorityRequest;
@@ -20,6 +21,8 @@ use Illuminate\Validation\ValidationException;
 
 class WorkspaceController extends Controller
 {
+    use AuthorizesWorkspaceManagement;
+
     /**
      * GET /api/workspaces
      *
@@ -96,6 +99,7 @@ class WorkspaceController extends Controller
             'privacy' => $validated['privacy'] ?? 'open',
             'description' => $validated['description'] ?? null,
             'invite_generated_by' => $user->id,
+            'created_by' => $user->id,
         ]);
 
         $workspace->users()->attach($user->id, ['role' => 'owner', 'is_recent' => true]);
@@ -343,21 +347,17 @@ class WorkspaceController extends Controller
      */
     public function members(Workspace $workspace): JsonResponse
     {
-        $members = $workspace->users()->orderBy('first_name')->orderBy('last_name')->get();
+        $members = $workspace->users()
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->get()
+            ->each(fn (User $member) => $member->setAttribute(
+                'is_workspace_creator',
+                $workspace->isCreator($member->id)
+            ));
 
         return response()->json([
             'data' => WorkspaceMemberResource::collection($members),
         ]);
-    }
-
-    /**
-     * Look up the current user's membership row for a workspace.
-     */
-    private function membershipFor(Workspace $workspace, int $user_id): ?object
-    {
-        return DB::table('workspace_user')
-            ->where('workspace_id', $workspace->id)
-            ->where('user_id', $user_id)
-            ->first();
     }
 }

@@ -53,6 +53,7 @@ use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Http\Controllers\Workspace\WorkspaceInvitationController;
 use App\Http\Controllers\Workspace\WorkspaceInviteLinkController;
+use App\Http\Controllers\Workspace\WorkspaceMemberController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Http\Controllers\Workspace\WorkspacePermissionController;
 use Illuminate\Support\Facades\Route;
@@ -166,6 +167,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('{workspace}/leave', [WorkspaceController::class, 'leave']);
         Route::post('{workspace}/transfer-ownership', [WorkspaceController::class, 'transferOwnership']);
         Route::get('{workspace}/members', [WorkspaceController::class, 'members']);
+        Route::patch('{workspace}/members/{member}', [WorkspaceMemberController::class, 'update']);
+        Route::delete('{workspace}/members/{member}', [WorkspaceMemberController::class, 'destroy']);
         Route::get('{workspace}/invitations', [WorkspaceInvitationController::class, 'index']);
         Route::get('{workspace}/invitations/available-users', [WorkspaceInvitationController::class, 'availableUsers']);
         Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);

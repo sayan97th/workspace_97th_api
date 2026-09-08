@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Workspace;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Workspace\Concerns\AuthorizesWorkspaceManagement;
 use App\Http\Requests\Workspace\StoreWorkspaceInvitationRequest;
 use App\Http\Resources\WorkspaceInvitationCandidateResource;
 use App\Http\Resources\WorkspaceInvitationResource;
@@ -22,6 +23,8 @@ use Illuminate\Validation\ValidationException;
 
 class WorkspaceInvitationController extends Controller
 {
+    use AuthorizesWorkspaceManagement;
+
     private const DEFAULT_PER_PAGE = 20;
 
     private const MAX_PER_PAGE = 100;
@@ -31,13 +34,6 @@ class WorkspaceInvitationController extends Controller
     private const CANDIDATE_MIN_SEARCH_LENGTH = 2;
 
     private const CANDIDATE_MAX_RESULTS = 8;
-
-    /**
-     * Global roles that can manage invitations for any workspace, regardless
-     * of their own membership in it — mirrors the `role:super_admin,admin`
-     * gate used elsewhere in `routes/api.php` for account-management surfaces.
-     */
-    private const PRIVILEGED_GLOBAL_ROLES = ['super_admin', 'admin'];
 
     /**
      * GET /api/workspaces/{workspace}/invitations
@@ -54,7 +50,7 @@ class WorkspaceInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($workspace, $user, 'view sent invitations');
+        $this->authorizeWorkspaceManagement($workspace, $user, 'view sent invitations');
 
         $per_page = max(1, min((int) $request->integer('per_page', self::DEFAULT_PER_PAGE), self::MAX_PER_PAGE));
 
@@ -135,7 +131,7 @@ class WorkspaceInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($workspace, $user, 'view workspace members to invite');
+        $this->authorizeWorkspaceManagement($workspace, $user, 'view workspace members to invite');
 
         $search = trim((string) $request->query('search', ''));
         if (mb_strlen($search) < self::CANDIDATE_MIN_SEARCH_LENGTH) {
@@ -171,7 +167,7 @@ class WorkspaceInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($workspace, $user, 'invite members');
+        $this->authorizeWorkspaceManagement($workspace, $user, 'invite members');
 
         $validated = $request->validated();
         $role = (string) $validated['role'];
@@ -262,7 +258,7 @@ class WorkspaceInvitationController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $this->authorizeInvitationManagement($workspace, $user, 'revoke invitations');
+        $this->authorizeWorkspaceManagement($workspace, $user, 'revoke invitations');
 
         if (! $invitation->isPending()) {
             throw ValidationException::withMessages([
@@ -277,35 +273,4 @@ class WorkspaceInvitationController extends Controller
         ]);
     }
 
-    /**
-     * Look up the current user's membership row for a workspace.
-     */
-    private function membershipFor(Workspace $workspace, int $user_id): ?object
-    {
-        return DB::table('workspace_user')
-            ->where('workspace_id', $workspace->id)
-            ->where('user_id', $user_id)
-            ->first();
-    }
-
-    /**
-     * Gates every invitation-management endpoint: allowed for the workspace's
-     * own owner, or for a user holding a {@see PRIVILEGED_GLOBAL_ROLES} role
-     * (staff who manage invitations across workspaces they don't belong to).
-     */
-    private function authorizeInvitationManagement(Workspace $workspace, User $user, string $action): void
-    {
-        if ($user->hasRole(self::PRIVILEGED_GLOBAL_ROLES)) {
-            return;
-        }
-
-        $membership = $this->membershipFor($workspace, $user->id);
-        if (($membership->role ?? null) === 'owner') {
-            return;
-        }
-
-        throw ValidationException::withMessages([
-            'workspace' => "Only the workspace owner or an administrator can {$action}.",
-        ])->status(403);
-    }
 }
