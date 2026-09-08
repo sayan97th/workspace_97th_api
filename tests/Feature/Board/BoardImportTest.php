@@ -95,7 +95,7 @@ test('commit queues a background job that creates a new table and items', functi
     $first_item = $group->items()->orderBy('position')->first();
     expect($first_item->name)->toBe('Task One');
 
-    // The token's cached upload is cleaned up once the job finishes.
+    // The token's disk-cached upload is cleaned up as soon as commit() hands its payload off to the job row.
     expect(app(BoardItemImportService::class)->loadParsedImport($analyze['import_token']))->toBeNull();
 });
 
@@ -215,6 +215,50 @@ test('commit with an expired or unknown import token is rejected', function () {
     ]);
 
     $response->assertStatus(410);
+});
+
+test('the queued job imports rows from its own parsed_payload even when the token\'s disk cache is gone', function () {
+    // Simulates a queue worker that doesn't share a filesystem with the web
+    // process that handled analyze()/commit() — the import_token here never
+    // had anything stored under it, so BoardItemImportService::loadParsedImport()
+    // would return null; the job must not depend on that cache at all.
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id]);
+
+    $headers = ['Name', 'Status'];
+    $rows = [['Task One', 'Done'], ['Task Two', 'Working on it']];
+    $mappings = [
+        ['source_index' => 0, 'mode' => 'name'],
+        ['source_index' => 1, 'mode' => 'create', 'new_label' => 'Status', 'new_type' => 'text'],
+    ];
+
+    $import_job = BoardImportJob::create([
+        'board_id' => $board->id,
+        'board_view_id' => $view->id,
+        'user_id' => $user->id,
+        'import_token' => (string) Str::uuid(),
+        'file_name' => 'tasks.csv',
+        'status' => BoardImportJob::STATUS_QUEUED,
+        'total_rows' => count($rows),
+        'parsed_payload' => ['file_name' => 'tasks.csv', 'headers' => $headers, 'rows' => $rows],
+        'options' => [
+            'target_group_id' => null,
+            'new_group_name' => 'Tasks',
+            'mappings' => $mappings,
+            'duplicate_mode' => 'add',
+            'match_source_index' => null,
+        ],
+    ]);
+
+    expect(app(BoardItemImportService::class)->loadParsedImport($import_job->import_token))->toBeNull();
+
+    app(ProcessBoardImportJob::class, ['board_import_job_id' => $import_job->id])->handle(app(BoardItemImportService::class));
+
+    $import_job->refresh();
+    expect($import_job->status)->toBe(BoardImportJob::STATUS_COMPLETED)
+        ->and($import_job->created_count)->toBe(2)
+        ->and($import_job->parsed_payload)->toBeNull();
 });
 
 test('a job already cancelled before it starts processing creates nothing', function () {

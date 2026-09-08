@@ -27,6 +27,13 @@ use Throwable;
  * when `cancel_requested` has been set so it stops between chunks instead of
  * mid-write.
  *
+ * Reads its rows from `$import_job->parsed_payload` rather than
+ * {@see BoardItemImportService::loadParsedImport()}'s token-keyed disk
+ * cache — this job runs on whatever queue worker picked it up, which isn't
+ * guaranteed to share a filesystem with the web process that handled
+ * `commit()`, so the payload travels through the database (the one thing
+ * both processes definitely share) instead.
+ *
  * Deliberately `$tries = 1` — a retried run would re-execute `commit()` from
  * scratch against a token whose rows may already be partially imported
  * (`"add"` duplicate mode has no way to tell an already-imported row apart
@@ -57,7 +64,7 @@ class ProcessBoardImportJob implements ShouldQueue
         }
 
         if ($import_job->cancel_requested) {
-            $import_job->update(['status' => BoardImportJob::STATUS_CANCELLED, 'finished_at' => now()]);
+            $import_job->update(['status' => BoardImportJob::STATUS_CANCELLED, 'parsed_payload' => null, 'finished_at' => now()]);
             broadcast(new BoardImportProgressUpdated($import_job));
 
             return;
@@ -68,7 +75,7 @@ class ProcessBoardImportJob implements ShouldQueue
 
         $board = WorkspaceNavigationItem::find($import_job->board_id);
         $view = BoardView::find($import_job->board_view_id);
-        $parsed = $importer->loadParsedImport($import_job->import_token);
+        $parsed = $import_job->parsed_payload;
 
         if ($board === null || $view === null || $parsed === null) {
             $this->markFailed($import_job, 'The uploaded file could no longer be found — please try the import again.');
@@ -95,8 +102,6 @@ class ProcessBoardImportJob implements ShouldQueue
             return;
         }
 
-        $importer->deleteParsedImport($import_job->import_token);
-
         $import_job->update([
             'status' => $result['cancelled'] ? BoardImportJob::STATUS_CANCELLED : BoardImportJob::STATUS_COMPLETED,
             'processed_rows' => $result['processed_rows'],
@@ -106,6 +111,7 @@ class ProcessBoardImportJob implements ShouldQueue
             'skipped_count' => $result['skipped'],
             'columns_created' => $result['columns_created'],
             'group_id' => $result['group_id'],
+            'parsed_payload' => null,
             'finished_at' => now(),
         ]);
         broadcast(new BoardImportProgressUpdated($import_job));
@@ -128,7 +134,12 @@ class ProcessBoardImportJob implements ShouldQueue
 
     private function markFailed(BoardImportJob $import_job, string $message): void
     {
-        $import_job->update(['status' => BoardImportJob::STATUS_FAILED, 'error_message' => $message, 'finished_at' => now()]);
+        $import_job->update([
+            'status' => BoardImportJob::STATUS_FAILED,
+            'error_message' => $message,
+            'parsed_payload' => null,
+            'finished_at' => now(),
+        ]);
         broadcast(new BoardImportProgressUpdated($import_job));
     }
 

@@ -7,6 +7,7 @@ use App\Concerns\ReadsSpreadsheetSheets;
 use App\Jobs\ProcessBoardImportJob;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
+use App\Models\BoardImportJob;
 use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\User;
@@ -37,7 +38,12 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
  * uploaded file is parsed once (`readSpreadsheet`) and cached to disk keyed
  * by a short-lived token (`storeParsedImport`/`loadParsedImport`) — the
  * "Map columns"/"Handle matches" steps and the final `commit()` never need
- * to touch the uploaded file again.
+ * to touch the uploaded file again. That disk cache only bridges those
+ * in-request steps though: once `commit()` reads it back, `BoardImportController`
+ * copies the payload onto the {@see BoardImportJob} row itself
+ * before deleting the cache file, since the queued job that does the actual
+ * writing (`ProcessBoardImportJob`) may run on a different machine than
+ * whichever one handled this request.
  */
 class BoardItemImportService
 {

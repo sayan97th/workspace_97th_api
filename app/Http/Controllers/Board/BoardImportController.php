@@ -92,6 +92,15 @@ class BoardImportController extends Controller
      * background. Returns 202 (accepted, not yet done) with the freshly
      * created job — the frontend switches to the wizard's progress step and
      * tracks that job's id from here on.
+     *
+     * The parsed payload is copied onto the job row itself (`parsed_payload`)
+     * rather than left for the queued job to re-read off the token-keyed
+     * disk cache: that cache lives on whichever instance handled this
+     * request, which isn't guaranteed to be the same filesystem the queue
+     * worker runs on, so handing the job its own copy through the database
+     * (genuinely shared) is what makes this survive onto a separate worker
+     * process. The disk cache is deleted right away since nothing needs it
+     * past this point.
      */
     public function commit(CommitBoardImportRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -114,6 +123,7 @@ class BoardImportController extends Controller
             'file_name' => $parsed['file_name'],
             'status' => BoardImportJob::STATUS_QUEUED,
             'total_rows' => count($parsed['rows']),
+            'parsed_payload' => $parsed,
             'options' => [
                 'target_group_id' => $validated['target_group_id'] ?? null,
                 'new_group_name' => $validated['new_group_name'] ?? null,
@@ -122,6 +132,8 @@ class BoardImportController extends Controller
                 'match_source_index' => $validated['match_source_index'] ?? null,
             ],
         ]);
+
+        $this->importer->deleteParsedImport($validated['import_token']);
 
         ProcessBoardImportJob::dispatch($import_job->id);
 

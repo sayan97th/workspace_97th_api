@@ -31,6 +31,7 @@ use Illuminate\Support\Carbon;
  * @property string $file_name
  * @property string $status
  * @property array<string, mixed> $options
+ * @property array{file_name: string, headers: array<int, string>, rows: array<int, array<int, string>>}|null $parsed_payload
  * @property int $total_rows
  * @property int $processed_rows
  * @property int $created_count
@@ -49,7 +50,7 @@ use Illuminate\Support\Carbon;
  * @property-read User $user
  */
 #[Fillable([
-    'board_id', 'board_view_id', 'group_id', 'user_id', 'import_token', 'file_name', 'status', 'options',
+    'board_id', 'board_view_id', 'group_id', 'user_id', 'import_token', 'file_name', 'status', 'options', 'parsed_payload',
     'total_rows', 'processed_rows', 'created_count', 'updated_count', 'skipped_count', 'columns_created',
     'cancel_requested', 'error_message', 'started_at', 'finished_at',
 ])]
@@ -117,6 +118,7 @@ class BoardImportJob extends Model
     {
         return [
             'options' => 'array',
+            'parsed_payload' => 'array',
             'total_rows' => 'integer',
             'processed_rows' => 'integer',
             'created_count' => 'integer',
