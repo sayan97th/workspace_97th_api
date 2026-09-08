@@ -248,11 +248,15 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::get('content/creators', [ContentController::class, 'creators']);
 
     // The default workspace-role permission matrix — shared config, not a
-    // single workspace's own settings. Any authenticated member can view it
-    // (Manage Workspace's Permissions tab); only staff can edit it.
-    Route::get('workspace-permissions', [WorkspacePermissionController::class, 'index']);
-    Route::middleware('role:super_admin,admin,staff')
-        ->patch('workspace-permissions', [WorkspacePermissionController::class, 'update']);
+    // single workspace's own settings. Manage Workspace's Permissions tab
+    // stays visible to everyone but renders disabled for anyone outside this
+    // role floor, so both viewing and editing are restricted here too —
+    // a member without the role can't reach the matrix by hitting the API
+    // directly either.
+    Route::middleware('role:super_admin,admin,staff')->group(function () {
+        Route::get('workspace-permissions', [WorkspacePermissionController::class, 'index']);
+        Route::patch('workspace-permissions', [WorkspacePermissionController::class, 'update']);
+    });
 
     // Board content — the reusable "table board" engine: any number of
     // tables (groups) per board, items (pulses) with typed column values,

@@ -18,6 +18,11 @@ class WorkspacePermissionController extends Controller
 {
     /**
      * GET /api/workspace-permissions
+     *
+     * Restricted to staff via the `role:super_admin,admin,staff` route
+     * middleware, same as `update` — Manage Workspace's Permissions tab
+     * stays visible to every member but renders disabled outside this role
+     * floor, so the underlying matrix must be unreachable for them too.
      */
     public function index(): JsonResponse
     {
