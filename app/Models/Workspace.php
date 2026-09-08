@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Concerns\HasRandomBigId;
+use App\Http\Controllers\Workspace\WorkspaceController;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -44,7 +46,12 @@ use Illuminate\Support\Str;
 #[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'created_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
 class Workspace extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, HasRandomBigId, SoftDeletes;
+
+    /** The id is a randomly-generated 10-digit number, not an auto-increment. */
+    public $incrementing = false;
+
+    protected $keyType = 'int';
 
     /**
      * Bootstrap the model and its traits.
@@ -135,7 +142,7 @@ class Workspace extends Model
     /**
      * This workspace's single "Manage Workspace" entry point — a root-level
      * navigation leaf seeded once per workspace (see
-     * {@see \App\Http\Controllers\Workspace\WorkspaceController::store()})
+     * {@see WorkspaceController::store()})
      * whose `view_key` is the reserved `"workspace_manage"` string. Lets the
      * frontend resolve `/workspaces/{workspace_id}/...` routes straight to
      * their underlying board id without walking the whole navigation tree.
