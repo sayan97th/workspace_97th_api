@@ -4,7 +4,6 @@ namespace App\Services\Board;
 
 use App\Console\Commands\Board\ImportMondayBoardCommand;
 use App\Console\Commands\Board\ImportMondayBoardTreeCommand;
-use App\Http\Controllers\Board\BoardViewController;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
@@ -23,10 +22,8 @@ use Throwable;
  * Parses a monday.com board `.xlsx` export and imports it as a real board
  * (groups, items, subitems and column values), reusing the same table-board
  * engine every hand-built board goes through — see
- * {@see BoardContentSeeder} and
- * {@see BoardViewController::seedDefaultColumns()}
- * for the conventions this mirrors (column `config.options` shape, accent
- * color palette, primary view creation).
+ * {@see BoardContentSeeder} for the conventions this mirrors (column
+ * `config.options` shape, accent color palette).
  *
  * Every export monday.com produces shares the same skeleton (a title row, an
  * optional description row, one grey-shaded "Name | ... | Item ID" header

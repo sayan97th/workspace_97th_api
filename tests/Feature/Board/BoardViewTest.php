@@ -21,6 +21,20 @@ function createViewTestBoard(): WorkspaceNavigationItem
     ]);
 }
 
+test('the lazily-created primary view starts with no columns', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/views")
+        ->assertOk()
+        ->assertJsonPath('data.0.is_primary', true);
+
+    $primary_view = BoardView::where('board_id', $board->id)->where('is_primary', true)->firstOrFail();
+
+    expect(BoardColumn::where('board_view_id', $primary_view->id)->count())->toBe(0);
+});
+
 test('a view can be created as a new tab', function () {
     $user = User::factory()->create();
     $board = createViewTestBoard();

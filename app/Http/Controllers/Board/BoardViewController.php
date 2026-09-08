@@ -8,7 +8,6 @@ use App\Http\Requests\Board\StoreBoardViewRequest;
 use App\Http\Requests\Board\UpdateBoardViewRequest;
 use App\Http\Requests\Board\UpdatePersonalViewOrderRequest;
 use App\Http\Resources\BoardViewResource;
-use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\BoardViewUserOrder;
 use App\Models\WorkspaceNavigationItem;
@@ -16,7 +15,6 @@ use App\Services\Board\BoardDuplicationService;
 use App\Services\Board\ChartDataService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 
 class BoardViewController extends Controller
 {
@@ -47,6 +45,12 @@ class BoardViewController extends Controller
      * get one. Content-index endpoints (`BoardColumnController`,
      * `BoardGroupController`, `BoardItemController`) resolve to an empty
      * list until this has run at least once for a given board.
+     *
+     * Deliberately does not seed any starter `BoardColumn` rows: the item's
+     * own name is a built-in field, not a column, so a brand-new tab has no
+     * columns at all until the user explicitly adds one (see
+     * {@see BoardColumnController::store()}) or imports a file that creates
+     * them (see {@see BoardImportController}).
      */
     private function ensurePrimaryViewExists(WorkspaceNavigationItem $item): void
     {
@@ -54,77 +58,13 @@ class BoardViewController extends Controller
             return;
         }
 
-        $view = $item->views()->create([
+        $item->views()->create([
             'label' => 'Main table',
             'view_type' => BoardViewType::Table->value,
             'position' => 0,
             'is_primary' => true,
             'row_height' => 'single',
         ]);
-
-        $this->seedDefaultColumns($view, $item);
-    }
-
-    /**
-     * Seeds a brand-new board's primary tab with a starter column set on
-     * both scopes — mirroring monday.com's own "New Board" template, whose
-     * item columns (Person/Status/Date/Dropdown/Numbers/People) and subitem
-     * columns (Owner/Status/Date) exist from the first load rather than only
-     * after the user manually adds each one. Explicit new tabs added later via
-     * {@see store()} intentionally stay empty — this only fires once, the
-     * very first time a board's primary tab is lazily created.
-     */
-    private function seedDefaultColumns(BoardView $view, WorkspaceNavigationItem $item): void
-    {
-        $status_config = [
-            'options' => [
-                ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d', 'is_active' => true],
-                ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875', 'is_active' => true],
-                ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => true],
-            ],
-        ];
-        $dropdown_config = [
-            'options' => [
-                ['id' => (string) Str::uuid(), 'label' => 'Design', 'color' => '#a25ddc', 'is_active' => true],
-                ['id' => (string) Str::uuid(), 'label' => 'Backend', 'color' => '#579bfc', 'is_active' => true],
-                ['id' => (string) Str::uuid(), 'label' => 'Urgent', 'color' => '#e2445c', 'is_active' => true],
-            ],
-        ];
-
-        $item_columns = [
-            ['key' => 'person', 'label' => 'Person', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 150, 'config' => null],
-            ['key' => 'status', 'label' => 'Status', 'type' => BoardColumn::TYPE_STATUS, 'width' => 160, 'config' => $status_config],
-            ['key' => 'date', 'label' => 'Date', 'type' => BoardColumn::TYPE_DATE, 'width' => 150, 'config' => null],
-            ['key' => 'dropdown', 'label' => 'Dropdown', 'type' => BoardColumn::TYPE_DROPDOWN, 'width' => 200, 'config' => $dropdown_config],
-            ['key' => 'numbers', 'label' => 'Numbers', 'type' => BoardColumn::TYPE_NUMBER, 'width' => 130, 'config' => null],
-            ['key' => 'people', 'label' => 'People', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 150, 'config' => null],
-        ];
-        foreach ($item_columns as $position => $column) {
-            $view->columns()->create([
-                'board_id' => $item->id,
-                'scope' => BoardColumn::SCOPE_ITEM,
-                'position' => $position,
-                'hideable' => true,
-                'pinnable' => true,
-                ...$column,
-            ]);
-        }
-
-        $subitem_columns = [
-            ['key' => 'owner', 'label' => 'Owner', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 150, 'config' => null],
-            ['key' => 'status', 'label' => 'Status', 'type' => BoardColumn::TYPE_STATUS, 'width' => 160, 'config' => $status_config],
-            ['key' => 'date', 'label' => 'Date', 'type' => BoardColumn::TYPE_DATE, 'width' => 150, 'config' => null],
-        ];
-        foreach ($subitem_columns as $position => $column) {
-            $view->columns()->create([
-                'board_id' => $item->id,
-                'scope' => BoardColumn::SCOPE_SUBITEM,
-                'position' => $position,
-                'hideable' => true,
-                'pinnable' => true,
-                ...$column,
-            ]);
-        }
     }
 
     /**
