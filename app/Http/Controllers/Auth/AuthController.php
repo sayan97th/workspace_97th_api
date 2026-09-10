@@ -15,6 +15,7 @@ use App\Mail\WelcomeMail;
 use App\Models\User;
 use App\Models\UserSession;
 use App\Models\WorkspaceInvitation;
+use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -32,8 +33,10 @@ class AuthController extends Controller
      */
     private const TWO_FACTOR_EMAIL_CODE_TTL_MINUTES = 10;
 
-    public function __construct(private CreateTeam $createTeam)
-    {
+    public function __construct(
+        private CreateTeam $createTeam,
+        private HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService
+    ) {
         //
     }
 
@@ -55,6 +58,7 @@ class AuthController extends Controller
             $this->createTeam->handle($user, $user->full_name."'s Team", isPersonal: true);
 
             $user->assignRole('client');
+            $this->homeWorkspaceEnrollmentService->enroll($user);
 
             $this->joinPendingWorkspaceInvitations($user);
 

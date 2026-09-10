@@ -7,6 +7,7 @@ use App\Concerns\PasswordValidationRules;
 use App\Concerns\ProfileValidationRules;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -22,8 +23,10 @@ class CreateAdmin extends Command
 
     protected $description = 'Create a new admin user account';
 
-    public function __construct(private readonly CreateTeam $createTeam)
-    {
+    public function __construct(
+        private readonly CreateTeam $createTeam,
+        private readonly HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService
+    ) {
         parent::__construct();
     }
 
@@ -63,6 +66,7 @@ class CreateAdmin extends Command
                 $this->createTeam->handle($user, "{$user->full_name}'s Team", isPersonal: true);
 
                 $user->assignRole('admin');
+                $this->homeWorkspaceEnrollmentService->enroll($user);
 
                 return $user;
             });

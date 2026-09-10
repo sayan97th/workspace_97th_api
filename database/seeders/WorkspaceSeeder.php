@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Illuminate\Database\Seeder;
 
 class WorkspaceSeeder extends Seeder
@@ -42,11 +43,11 @@ class WorkspaceSeeder extends Seeder
 
         $fulfillment = Workspace::where('slug', 'fulfillment')->firstOrFail();
 
-        // Enroll every existing user in the home workspace so any login sees it.
-        $membership = ['role' => 'member', 'is_recent' => true];
-        User::query()->each(function (User $user) use ($fulfillment, $membership) {
-            $fulfillment->users()->syncWithoutDetaching([$user->id => $membership]);
-        });
+        // Enroll every existing user in the home workspace so any login sees
+        // it — staff/admin accounts as "owner" (they jointly manage it),
+        // everyone else as a plain "member". See HomeWorkspaceEnrollmentService.
+        $enrollment_service = app(HomeWorkspaceEnrollmentService::class);
+        User::with('roles')->get()->each(fn (User $user) => $enrollment_service->enroll($user));
 
         // Rebuild the Fulfillment navigation tree from scratch (idempotent).
         $fulfillment->navigationItems()->withTrashed()->forceDelete();

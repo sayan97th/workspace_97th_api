@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\AcceptStaffInvitationRequest;
 use App\Models\StaffInvitation;
 use App\Models\User;
+use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -21,6 +22,11 @@ use Illuminate\Validation\ValidationException;
 class StaffInvitationController extends Controller
 {
     use IssuesJwtTokens;
+
+    public function __construct(private HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService)
+    {
+        //
+    }
 
     /**
      * GET /api/auth/staff-invitations/{invitation}
@@ -64,6 +70,7 @@ class StaffInvitationController extends Controller
             ]);
 
             $user->assignRole($invitation->role);
+            $this->homeWorkspaceEnrollmentService->enroll($user);
             $invitation->update(['accepted_at' => now()]);
 
             return $user;

@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\AcceptBoardInvitationRequest;
 use App\Models\BoardInvitation;
 use App\Models\User;
+use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -22,6 +23,11 @@ use Illuminate\Validation\ValidationException;
 class BoardInvitationController extends Controller
 {
     use IssuesJwtTokens;
+
+    public function __construct(private HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService)
+    {
+        //
+    }
 
     /**
      * GET /api/auth/board-invitations/{invitation}
@@ -89,6 +95,7 @@ class BoardInvitationController extends Controller
                 ]);
 
                 $user->assignRole('client');
+                $this->homeWorkspaceEnrollmentService->enroll($user);
 
                 return $user;
             });

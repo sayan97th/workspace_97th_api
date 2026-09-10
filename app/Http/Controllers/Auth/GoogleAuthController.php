@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\SendEmailJob;
 use App\Mail\WelcomeMail;
 use App\Models\User;
+use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -19,8 +20,10 @@ class GoogleAuthController extends Controller
 {
     use IssuesJwtTokens;
 
-    public function __construct(private CreateTeam $createTeam)
-    {
+    public function __construct(
+        private CreateTeam $createTeam,
+        private HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService
+    ) {
         //
     }
 
@@ -69,6 +72,7 @@ class GoogleAuthController extends Controller
                 $this->createTeam->handle($user, $user->full_name."'s Team", isPersonal: true);
 
                 $user->assignRole('client');
+                $this->homeWorkspaceEnrollmentService->enroll($user);
 
                 SendEmailJob::dispatch(new WelcomeMail($user), $user->email);
 
