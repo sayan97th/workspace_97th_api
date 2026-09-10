@@ -32,12 +32,12 @@ class WorkspaceAvatarService
         $this->purgeFiles($workspace);
 
         $avatar_path = $file->storeAs(
-            self::DIRECTORY,
+            self::DIRECTORY."/{$workspace->id}",
             Str::uuid().'.'.$file->getClientOriginalExtension(),
             config('filesystems.app_disk')
         );
 
-        $thumbnail_path = self::DIRECTORY.'/thumbnails/'.Str::uuid().'.webp';
+        $thumbnail_path = self::DIRECTORY."/{$workspace->id}/thumbnails/".Str::uuid().'.webp';
         Storage::disk(config('filesystems.app_disk'))->put(
             $thumbnail_path,
             $this->makeSquareThumbnail((string) $file->getRealPath(), self::THUMBNAIL_SIZE)

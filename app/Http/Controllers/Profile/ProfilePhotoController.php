@@ -28,7 +28,7 @@ class ProfilePhotoController extends Controller
         $file = $request->file('profile_photo');
         $extension = $file->getClientOriginalExtension();
         $filename = Str::uuid().'.'.$extension;
-        $path = $file->storeAs('profile-photos', $filename, config('filesystems.app_disk'));
+        $path = $file->storeAs("profile-photos/{$user->id}", $filename, config('filesystems.app_disk'));
 
         $user->update(['profile_photo_path' => $path]);
 
