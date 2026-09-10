@@ -50,6 +50,7 @@ use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Controllers\Profile\WorkingStatusController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
+use App\Http\Controllers\Workspace\WorkspaceAvatarController;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Http\Controllers\Workspace\WorkspaceInvitationController;
 use App\Http\Controllers\Workspace\WorkspaceInviteLinkController;
@@ -168,6 +169,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
         Route::get('{workspace}', [WorkspaceController::class, 'show']);
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
+        Route::post('{workspace}/avatar', [WorkspaceAvatarController::class, 'store']);
+        Route::delete('{workspace}/avatar', [WorkspaceAvatarController::class, 'destroy']);
         Route::patch('{workspace}/priority', [WorkspaceController::class, 'togglePriority']);
         Route::patch('{workspace}/activate', [WorkspaceController::class, 'activate']);
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);

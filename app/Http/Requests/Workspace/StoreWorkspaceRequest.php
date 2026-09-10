@@ -18,7 +18,7 @@ class StoreWorkspaceRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'mono' => ['sometimes', 'nullable', 'string', 'max:2'],
-            'color' => ['sometimes', 'nullable', 'string', 'max:9'],
+            'color' => ['sometimes', 'nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'product' => ['sometimes', 'nullable', 'string', 'max:255'],
             'privacy' => ['sometimes', 'nullable', 'string', 'in:open,closed'],
         ];

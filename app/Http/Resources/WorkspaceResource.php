@@ -38,6 +38,8 @@ class WorkspaceResource extends JsonResource
             'slug' => $this->slug,
             'mono' => $this->mono,
             'color' => $this->color,
+            'avatar_url' => $this->avatar_url,
+            'avatar_thumbnail_url' => $this->avatar_thumbnail_url,
             'product' => $this->product,
             'privacy' => $this->privacy,
             'is_home' => $this->is_home,

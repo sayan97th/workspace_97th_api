@@ -4,7 +4,9 @@ namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
 use App\Http\Controllers\Workspace\WorkspaceController;
+use Illuminate\Database\Eloquent\Attributes\Appends;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -14,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -27,6 +30,8 @@ use Illuminate\Support\Str;
  * @property int|null $created_by
  * @property string $mono
  * @property string $color
+ * @property string|null $avatar_path
+ * @property string|null $avatar_thumbnail_path
  * @property string $product
  * @property string $privacy
  * @property bool $is_home
@@ -36,6 +41,8 @@ use Illuminate\Support\Str;
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
+ * @property-read string|null $avatar_url
+ * @property-read string|null $avatar_thumbnail_url
  * @property-read Collection<int, WorkspaceNavigationItem> $navigationItems
  * @property-read Collection<int, WorkspaceNavigationItem> $rootNavigationItems
  * @property-read WorkspaceNavigationItem|null $manageNavigationItem
@@ -43,7 +50,8 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, User> $owners
  * @property-read User|null $creator
  */
-#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'created_by', 'mono', 'color', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
+#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'created_by', 'mono', 'color', 'avatar_path', 'avatar_thumbnail_path', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
+#[Appends(['avatar_url', 'avatar_thumbnail_url'])]
 class Workspace extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
@@ -206,6 +214,34 @@ class Workspace extends Model
     public function isCreator(int $user_id): bool
     {
         return $this->created_by !== null && $this->created_by === $user_id;
+    }
+
+    /**
+     * Full-size uploaded avatar image, or null when the workspace still uses
+     * its generated mono/color badge instead of a custom photo.
+     *
+     * @return Attribute<string|null, never>
+     */
+    protected function avatarUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->avatar_path ? Storage::disk('public')->url($this->avatar_path) : null,
+        );
+    }
+
+    /**
+     * Small square-cropped version of {@see avatarUrl()}, generated at upload
+     * time (see {@see \App\Services\Workspace\WorkspaceAvatarService}) for the
+     * badges rendered across the sidebar switcher / browse modal, which never
+     * need the full-resolution original.
+     *
+     * @return Attribute<string|null, never>
+     */
+    protected function avatarThumbnailUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->avatar_thumbnail_path ? Storage::disk('public')->url($this->avatar_thumbnail_path) : null,
+        );
     }
 
     /**
