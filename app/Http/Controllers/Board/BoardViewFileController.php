@@ -45,7 +45,7 @@ class BoardViewFileController extends Controller
             $path = $file->storeAs(
                 "board-view-files/{$board_view->id}",
                 Str::uuid().'.'.$extension,
-                'public'
+                config('filesystems.app_disk')
             );
 
             $created = $board_view->files()->create([
@@ -76,7 +76,7 @@ class BoardViewFileController extends Controller
         $this->ensureViewBelongsToBoard($item, $board_view);
         $this->ensureFileBelongsToView($board_view, $file);
 
-        Storage::disk('public')->delete($file->file_path);
+        Storage::disk(config('filesystems.app_disk'))->delete($file->file_path);
         $file->delete();
 
         return response()->json([

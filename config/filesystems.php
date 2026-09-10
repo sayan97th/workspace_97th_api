@@ -17,6 +17,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Application Upload Disk
+    |--------------------------------------------------------------------------
+    |
+    | This is the disk used for every file the application itself stores
+    | (attachments, avatars, branding assets, etc). It defaults to the local
+    | "public" disk, but is switched to "s3" via STORAGE_DRIVER in staging
+    | and production so uploads are persisted to an AWS S3 bucket instead.
+    |
+    */
+
+    'app_disk' => env('STORAGE_DRIVER', 'public'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Filesystem Disks
     |--------------------------------------------------------------------------
     |

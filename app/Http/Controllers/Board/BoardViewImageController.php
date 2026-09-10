@@ -32,12 +32,12 @@ class BoardViewImageController extends Controller
         $path = $file->storeAs(
             "board-doc-images/{$board_view->id}",
             Str::uuid().'.'.$extension,
-            'public'
+            config('filesystems.app_disk')
         );
 
         return response()->json([
             'message' => 'Image uploaded successfully.',
-            'url' => Storage::disk('public')->url($path),
+            'url' => Storage::disk(config('filesystems.app_disk'))->url($path),
         ], 201);
     }
 

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
 use App\Http\Controllers\Workspace\WorkspaceController;
+use App\Services\Workspace\WorkspaceAvatarService;
 use Illuminate\Database\Eloquent\Attributes\Appends;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -225,13 +226,13 @@ class Workspace extends Model
     protected function avatarUrl(): Attribute
     {
         return Attribute::make(
-            get: fn () => $this->avatar_path ? Storage::disk('public')->url($this->avatar_path) : null,
+            get: fn () => $this->avatar_path ? Storage::disk(config('filesystems.app_disk'))->url($this->avatar_path) : null,
         );
     }
 
     /**
      * Small square-cropped version of {@see avatarUrl()}, generated at upload
-     * time (see {@see \App\Services\Workspace\WorkspaceAvatarService}) for the
+     * time (see {@see WorkspaceAvatarService}) for the
      * badges rendered across the sidebar switcher / browse modal, which never
      * need the full-resolution original.
      *
@@ -240,7 +241,7 @@ class Workspace extends Model
     protected function avatarThumbnailUrl(): Attribute
     {
         return Attribute::make(
-            get: fn () => $this->avatar_thumbnail_path ? Storage::disk('public')->url($this->avatar_thumbnail_path) : null,
+            get: fn () => $this->avatar_thumbnail_path ? Storage::disk(config('filesystems.app_disk'))->url($this->avatar_thumbnail_path) : null,
         );
     }
 

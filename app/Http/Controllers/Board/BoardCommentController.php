@@ -101,7 +101,7 @@ class BoardCommentController extends Controller
             $path = $file->storeAs(
                 "board-discussion-attachments/{$item->id}",
                 Str::uuid().'.'.$extension,
-                'public'
+                config('filesystems.app_disk')
             );
 
             $comment->attachments()->create([
@@ -292,8 +292,8 @@ class BoardCommentController extends Controller
     private function deleteAttachmentFiles(BoardComment $comment): void
     {
         foreach ($comment->attachments as $attachment) {
-            if (Storage::disk('public')->exists($attachment->file_path)) {
-                Storage::disk('public')->delete($attachment->file_path);
+            if (Storage::disk(config('filesystems.app_disk'))->exists($attachment->file_path)) {
+                Storage::disk(config('filesystems.app_disk'))->delete($attachment->file_path);
             }
         }
     }

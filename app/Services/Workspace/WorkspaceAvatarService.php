@@ -2,6 +2,8 @@
 
 namespace App\Services\Workspace;
 
+use App\Http\Controllers\Admin\AccountSetting\BrandingController;
+use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Models\Workspace;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -10,15 +12,13 @@ use RuntimeException;
 
 /**
  * Stores/removes a workspace's custom avatar image, mirroring the
- * store-then-persist-path convention used by {@see \App\Http\Controllers\Admin\AccountSetting\BrandingController}
- * and {@see \App\Http\Controllers\Profile\ProfilePhotoController}, plus a
+ * store-then-persist-path convention used by {@see BrandingController}
+ * and {@see ProfilePhotoController}, plus a
  * generated square thumbnail for the small badges rendered across the
  * sidebar switcher / browse modal.
  */
 class WorkspaceAvatarService
 {
-    private const DISK = 'public';
-
     private const DIRECTORY = 'workspace-avatars';
 
     private const THUMBNAIL_SIZE = 160;
@@ -34,11 +34,11 @@ class WorkspaceAvatarService
         $avatar_path = $file->storeAs(
             self::DIRECTORY,
             Str::uuid().'.'.$file->getClientOriginalExtension(),
-            self::DISK
+            config('filesystems.app_disk')
         );
 
         $thumbnail_path = self::DIRECTORY.'/thumbnails/'.Str::uuid().'.webp';
-        Storage::disk(self::DISK)->put(
+        Storage::disk(config('filesystems.app_disk'))->put(
             $thumbnail_path,
             $this->makeSquareThumbnail((string) $file->getRealPath(), self::THUMBNAIL_SIZE)
         );
@@ -125,8 +125,8 @@ class WorkspaceAvatarService
 
     private function deleteIfExists(?string $path): void
     {
-        if ($path && Storage::disk(self::DISK)->exists($path)) {
-            Storage::disk(self::DISK)->delete($path);
+        if ($path && Storage::disk(config('filesystems.app_disk'))->exists($path)) {
+            Storage::disk(config('filesystems.app_disk'))->delete($path);
         }
     }
 }

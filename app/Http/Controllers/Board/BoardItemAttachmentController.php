@@ -49,7 +49,7 @@ class BoardItemAttachmentController extends Controller
             $path = $file->storeAs(
                 "board-item-attachments/{$board_item->id}",
                 Str::uuid().'.'.$extension,
-                'public'
+                config('filesystems.app_disk')
             );
 
             return $board_item->attachments()->create([
@@ -76,8 +76,8 @@ class BoardItemAttachmentController extends Controller
         $this->ensureItemBelongsToBoard($item, $board_item);
         $this->ensureAttachmentBelongsToItem($board_item, $attachment);
 
-        if (Storage::disk('public')->exists($attachment->file_path)) {
-            Storage::disk('public')->delete($attachment->file_path);
+        if (Storage::disk(config('filesystems.app_disk'))->exists($attachment->file_path)) {
+            Storage::disk(config('filesystems.app_disk'))->delete($attachment->file_path);
         }
         $attachment->delete();
 

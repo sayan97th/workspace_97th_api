@@ -144,7 +144,7 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     {
         return Attribute::make(
             get: fn () => $this->profile_photo_path
-                ? Storage::disk('public')->url($this->profile_photo_path)
+                ? Storage::disk(config('filesystems.app_disk'))->url($this->profile_photo_path)
                 : null,
         );
     }

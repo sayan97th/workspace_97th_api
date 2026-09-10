@@ -22,7 +22,7 @@ class BrandingController extends Controller
         $this->deleteIfExists($settings->logo_path);
 
         $file = $request->file('file');
-        $path = $file->storeAs('account-branding', Str::uuid().'.'.$file->getClientOriginalExtension(), 'public');
+        $path = $file->storeAs('account-branding', Str::uuid().'.'.$file->getClientOriginalExtension(), config('filesystems.app_disk'));
         $settings->update(['logo_path' => $path]);
 
         return response()->json([
@@ -55,7 +55,7 @@ class BrandingController extends Controller
         $this->deleteIfExists($settings->email_header_path);
 
         $file = $request->file('file');
-        $path = $file->storeAs('account-branding', Str::uuid().'.'.$file->getClientOriginalExtension(), 'public');
+        $path = $file->storeAs('account-branding', Str::uuid().'.'.$file->getClientOriginalExtension(), config('filesystems.app_disk'));
         $settings->update(['email_header_path' => $path]);
 
         return response()->json([
@@ -81,8 +81,8 @@ class BrandingController extends Controller
 
     private function deleteIfExists(?string $path): void
     {
-        if ($path && Storage::disk('public')->exists($path)) {
-            Storage::disk('public')->delete($path);
+        if ($path && Storage::disk(config('filesystems.app_disk'))->exists($path)) {
+            Storage::disk(config('filesystems.app_disk'))->delete($path);
         }
     }
 }

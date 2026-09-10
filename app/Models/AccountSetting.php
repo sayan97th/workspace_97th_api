@@ -122,7 +122,7 @@ class AccountSetting extends Model
     protected function logoUrl(): Attribute
     {
         return Attribute::make(
-            get: fn () => $this->logo_path ? Storage::disk('public')->url($this->logo_path) : null,
+            get: fn () => $this->logo_path ? Storage::disk(config('filesystems.app_disk'))->url($this->logo_path) : null,
         );
     }
 
@@ -132,7 +132,7 @@ class AccountSetting extends Model
     protected function emailHeaderUrl(): Attribute
     {
         return Attribute::make(
-            get: fn () => $this->email_header_path ? Storage::disk('public')->url($this->email_header_path) : null,
+            get: fn () => $this->email_header_path ? Storage::disk(config('filesystems.app_disk'))->url($this->email_header_path) : null,
         );
     }
 }

@@ -58,7 +58,7 @@ class BoardCommentAttachment extends Model
     protected function downloadUrl(): Attribute
     {
         return Attribute::make(
-            get: fn () => Storage::disk('public')->url($this->file_path),
+            get: fn () => Storage::disk(config('filesystems.app_disk'))->url($this->file_path),
         );
     }
 
