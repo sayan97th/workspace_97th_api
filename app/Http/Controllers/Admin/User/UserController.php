@@ -12,6 +12,7 @@ use App\Mail\StaffInvitationMail;
 use App\Models\StaffInvitation;
 use App\Models\User;
 use App\Support\AuditLogger;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -19,7 +20,14 @@ class UserController extends Controller
 {
     private const STAFF_ROLES = ['super_admin', 'admin', 'staff'];
 
-    private const ALLOWED_SORT_FIELDS = ['first_name', 'last_name', 'email', 'created_at'];
+    private const ALLOWED_SORT_FIELDS = ['name', 'email', 'role', 'department', 'status', 'created_at'];
+
+    /** Highest-privilege first, used to rank a user's role for sorting when they hold more than one. */
+    private const ROLE_SORT_PRIORITY = ['super_admin', 'admin', 'staff', 'client'];
+
+    private const DEFAULT_PER_PAGE = 25;
+
+    private const MAX_PER_PAGE = 100;
 
     /**
      * GET /api/admin/users
@@ -57,8 +65,8 @@ class UserController extends Controller
             $role = null;
         }
 
-        $query = User::with(['roles:id,name,display_name', 'department:id,name'])
-            ->orderBy($sort_field, $sort_direction);
+        $query = User::with(['roles:id,name,display_name', 'department:id,name']);
+        $this->applySort($query, $sort_field, $sort_direction);
 
         if ($type === 'staff') {
             $query->whereHas('roles', fn ($q) => $q->whereIn('name', self::STAFF_ROLES));
@@ -102,7 +110,9 @@ class UserController extends Controller
             $query->where('department_id', (int) $department);
         }
 
-        $per_page = min((int) $request->query('per_page', 15), 500);
+        // Clamped to [1, MAX_PER_PAGE] so a stray 0/negative value never reaches paginate(),
+        // and so the page size stays reasonable for a UI table regardless of what's requested.
+        $per_page = max(1, min((int) $request->query('per_page', self::DEFAULT_PER_PAGE), self::MAX_PER_PAGE));
         $users = $query->paginate($per_page);
 
         return response()->json([
@@ -193,6 +203,38 @@ class UserController extends Controller
     }
 
     /**
+     * DELETE /api/admin/users/{user}
+     *
+     * Permanently removes the account. There is no soft-delete for `User`, so this cannot be
+     * undone, unlike {@see ban()} which only flips `is_active` and can be reversed via
+     * {@see unban()}.
+     */
+    public function destroy(Request $request, User $user): JsonResponse
+    {
+        /** @var User $actor */
+        $actor = $request->user();
+
+        if ($actor->id === $user->id) {
+            return response()->json(['message' => 'You cannot delete your own account.'], 422);
+        }
+
+        if (! $this->actorCanManage($actor, $user)) {
+            return response()->json(['message' => 'You do not have permission to delete this account.'], 403);
+        }
+
+        AuditLogger::log('user.deleted', "Deleted {$user->full_name}'s account.", $actor, [
+            'target_user_id' => $user->id,
+            'target_email' => $user->email,
+        ]);
+
+        $user->delete();
+
+        return response()->json([
+            'message' => 'User account has been deleted.',
+        ]);
+    }
+
+    /**
      * POST /api/admin/users/invite
      *
      * Invites a brand-new platform user by email, with a role (and optionally a department)
@@ -266,5 +308,52 @@ class UserController extends Controller
         $target_roles = $target->roles->pluck('name');
 
         return $target_roles->intersect(self::STAFF_ROLES)->isEmpty();
+    }
+
+    /**
+     * Orders the user list by one of the columns the "Users" table renders. `role` and
+     * `department` aren't plain columns on `users` (roles are a many-to-many relation,
+     * department names live on a soft-deletable related table), so each gets its own
+     * comparable expression rather than a plain `orderBy()`.
+     *
+     * @param  Builder<User>  $query
+     */
+    private function applySort(Builder $query, string $sort_field, string $sort_direction): void
+    {
+        switch ($sort_field) {
+            case 'name':
+                $query->orderBy('first_name', $sort_direction)->orderBy('last_name', $sort_direction);
+                break;
+
+            case 'status':
+                $query->orderBy('is_active', $sort_direction);
+                break;
+
+            case 'department':
+                // Left join (not the `department` relation) so users with no department, or
+                // whose department was soft-deleted, still appear, sorted by name being null.
+                $query->select('users.*')
+                    ->leftJoin('departments', function ($join) {
+                        $join->on('departments.id', '=', 'users.department_id')
+                            ->whereNull('departments.deleted_at');
+                    })
+                    ->orderBy('departments.name', $sort_direction);
+                break;
+
+            case 'role':
+                $case_when = collect(self::ROLE_SORT_PRIORITY)
+                    ->map(fn (string $role, int $index) => "WHEN EXISTS (SELECT 1 FROM user_role INNER JOIN roles ON roles.id = user_role.role_id WHERE user_role.user_id = users.id AND roles.name = '{$role}') THEN ".($index + 1))
+                    ->implode(' ');
+                $query->orderByRaw("(CASE {$case_when} ELSE ".(count(self::ROLE_SORT_PRIORITY) + 1).' END) '.$sort_direction);
+                break;
+
+            case 'email':
+                $query->orderBy('email', $sort_direction);
+                break;
+
+            default:
+                $query->orderBy('created_at', $sort_direction);
+                break;
+        }
     }
 }

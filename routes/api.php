@@ -395,6 +395,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('users/{user}', [AdminUserController::class, 'update']);
             Route::patch('users/{user}/ban', [AdminUserController::class, 'ban']);
             Route::patch('users/{user}/unban', [AdminUserController::class, 'unban']);
+            Route::delete('users/{user}', [AdminUserController::class, 'destroy']);
             Route::post('users/invite', [AdminUserController::class, 'invite']);
         });
 
