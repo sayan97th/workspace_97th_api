@@ -404,6 +404,11 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('users/{user}', [AdminUserController::class, 'destroy']);
             Route::post('users/invite', [AdminUserController::class, 'invite']);
 
+            // Password management — set a password directly, or email the account a reset
+            // link so the user chooses their own, mirroring `PasswordResetController::forgotPassword()`.
+            Route::patch('users/{user}/password', [AdminUserController::class, 'setPassword']);
+            Route::post('users/{user}/send-password-reset-link', [AdminUserController::class, 'sendPasswordResetLink']);
+
             // Sign in as another account to troubleshoot what they see. Further restricted
             // inside the controller: a plain admin may only impersonate client-tier accounts,
             // and nobody may impersonate a super_admin.

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin\User;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\User\InviteUserRequest;
+use App\Http\Requests\Admin\User\SetUserPasswordRequest;
 use App\Http\Requests\Admin\User\UpdateUserRequest;
 use App\Http\Resources\StaffInvitationResource;
 use App\Http\Resources\UserWithRolesResource;
@@ -15,6 +16,7 @@ use App\Support\AuditLogger;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Password;
 
 class UserController extends Controller
 {
@@ -231,6 +233,62 @@ class UserController extends Controller
 
         return response()->json([
             'message' => 'User account has been deleted.',
+        ]);
+    }
+
+    /**
+     * PATCH /api/admin/users/{user}/password
+     *
+     * Sets the account's password directly, bypassing the emailed reset flow, for cases
+     * where an administrator needs to hand someone working credentials right away.
+     */
+    public function setPassword(SetUserPasswordRequest $request, User $user): JsonResponse
+    {
+        /** @var User $actor */
+        $actor = $request->user();
+
+        if ($actor->id === $user->id) {
+            return response()->json(['message' => 'Use your profile settings to change your own password.'], 422);
+        }
+
+        if (! $this->actorCanManage($actor, $user)) {
+            return response()->json(['message' => "You do not have permission to change this account's password."], 403);
+        }
+
+        $user->update(['password' => $request->validated('password')]);
+
+        AuditLogger::log('user.password_set', "Set a new password for {$user->full_name}'s account.", $actor, ['target_user_id' => $user->id]);
+
+        return response()->json([
+            'message' => 'Password updated successfully.',
+        ]);
+    }
+
+    /**
+     * POST /api/admin/users/{user}/send-password-reset-link
+     *
+     * Emails the account the same reset link they'd get from "Forgot password", so the
+     * user picks their own next password instead of the administrator relaying one.
+     */
+    public function sendPasswordResetLink(Request $request, User $user): JsonResponse
+    {
+        /** @var User $actor */
+        $actor = $request->user();
+
+        if ($actor->id === $user->id) {
+            return response()->json(['message' => 'Use the sign-in page to reset your own password.'], 422);
+        }
+
+        if (! $this->actorCanManage($actor, $user)) {
+            return response()->json(['message' => "You do not have permission to reset this account's password."], 403);
+        }
+
+        Password::sendResetLink(['email' => $user->email]);
+
+        AuditLogger::log('user.password_reset_sent', "Sent a password reset link to {$user->full_name}.", $actor, ['target_user_id' => $user->id]);
+
+        return response()->json([
+            'message' => "A password reset email has been sent to {$user->email}.",
         ]);
     }
 

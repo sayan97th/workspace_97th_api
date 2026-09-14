@@ -1,7 +1,12 @@
 <?php
 
+use App\Jobs\SendEmailJob;
+use App\Mail\PasswordResetMail;
+use App\Models\Department;
 use App\Models\User;
 use Database\Seeders\RolePermissionSeeder;
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Hash;
 
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
@@ -191,6 +196,102 @@ test('a super admin can ban an admin account', function () {
     expect($admin->fresh()->is_active)->toBeFalse();
 });
 
+test('an admin can set a user password directly', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create();
+    $target->assignRole('client');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$target->id}/password", [
+            'password' => 'Str0ng!Passw0rd',
+            'password_confirmation' => 'Str0ng!Passw0rd',
+        ])
+        ->assertOk();
+
+    expect(Hash::check('Str0ng!Passw0rd', $target->fresh()->password))->toBeTrue();
+});
+
+test('setting a user password requires confirmation', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create();
+    $target->assignRole('client');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$target->id}/password", ['password' => 'Str0ng!Passw0rd'])
+        ->assertStatus(422);
+});
+
+test('a user cannot set their own password through the admin endpoint', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$admin->id}/password", [
+            'password' => 'Str0ng!Passw0rd',
+            'password_confirmation' => 'Str0ng!Passw0rd',
+        ])
+        ->assertStatus(422);
+});
+
+test('an admin cannot set the password of another admin or super admin account', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $other_admin = User::factory()->create();
+    $other_admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$other_admin->id}/password", [
+            'password' => 'Str0ng!Passw0rd',
+            'password_confirmation' => 'Str0ng!Passw0rd',
+        ])
+        ->assertForbidden();
+});
+
+test('an admin can send a password reset link to a user', function () {
+    Bus::fake();
+
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create();
+    $target->assignRole('client');
+
+    $this->actingAs($admin, 'api')
+        ->postJson("/api/admin/users/{$target->id}/send-password-reset-link")
+        ->assertOk()
+        ->assertJsonPath('message', "A password reset email has been sent to {$target->email}.");
+
+    Bus::assertDispatched(SendEmailJob::class, fn (SendEmailJob $job) => $job->recipientEmail === $target->email
+        && $job->mailable instanceof PasswordResetMail
+        && $job->mailable->user->is($target));
+});
+
+test('a user cannot send themselves a reset link through the admin endpoint', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')
+        ->postJson("/api/admin/users/{$admin->id}/send-password-reset-link")
+        ->assertStatus(422);
+});
+
+test('an admin cannot send a password reset link to another admin or super admin account', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $other_admin = User::factory()->create();
+    $other_admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')
+        ->postJson("/api/admin/users/{$other_admin->id}/send-password-reset-link")
+        ->assertForbidden();
+});
+
 test('an invalid sort_field is rejected', function () {
     $staff = User::factory()->create();
     $staff->assignRole('staff');
@@ -231,7 +332,7 @@ test('users can be sorted by role', function () {
 });
 
 test('users can be sorted by department, with unassigned users still included', function () {
-    $department = \App\Models\Department::factory()->create(['name' => 'Engineering']);
+    $department = Department::factory()->create(['name' => 'Engineering']);
 
     $staff = User::factory()->create();
     $staff->assignRole('staff');
