@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\AccountSetting\BrandingController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\BoardOwnershipController;
 use App\Http\Controllers\Admin\DepartmentController;
+use App\Http\Controllers\Admin\Impersonation\ImpersonationController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\SessionController as AdminSessionController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
@@ -243,6 +244,11 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // optionally tied to the board the user was on.
     Route::post('feedback', [FeedbackController::class, 'store']);
 
+    // Ends the caller's own impersonation session. Deliberately outside the `admin`-role-gated
+    // group below: this is called while holding the *target's* token, which for a client target
+    // holds none of those roles, not the impersonating admin's.
+    Route::post('impersonation/stop', [ImpersonationController::class, 'stop']);
+
     // Content, listed across every board/doc — powers Manage Workspace's
     // Content tab ("every board/doc I have access to", the same rows the
     // sidebar renders), as opposed to `boards/{item}/views` which lists a
@@ -397,6 +403,11 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('users/{user}/unban', [AdminUserController::class, 'unban']);
             Route::delete('users/{user}', [AdminUserController::class, 'destroy']);
             Route::post('users/invite', [AdminUserController::class, 'invite']);
+
+            // Sign in as another account to troubleshoot what they see. Further restricted
+            // inside the controller: a plain admin may only impersonate client-tier accounts,
+            // and nobody may impersonate a super_admin.
+            Route::post('users/{user}/impersonate', [ImpersonationController::class, 'store']);
         });
 
         // Role management — super_admin only

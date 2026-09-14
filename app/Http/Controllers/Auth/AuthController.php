@@ -251,6 +251,16 @@ class AuthController extends Controller
     {
         $previous_jti = $this->guard()->payload()->get('jti');
 
+        // Impersonation tokens are deliberately non-renewable (see
+        // `ImpersonationController::IMPERSONATION_TTL_MINUTES`) — refreshing would silently
+        // strip the `impersonator_id`/`impersonation_session_id` claims and turn what's meant
+        // to be a short, logged session into an ordinary, indefinitely-renewable one.
+        if ($this->guard()->payload()->get('impersonator_id')) {
+            return response()->json([
+                'message' => 'Impersonation sessions cannot be refreshed. Stop impersonating and start a new session if you need more time.',
+            ], 422);
+        }
+
         $token = $this->guard()->refresh();
 
         /** @var User $user */

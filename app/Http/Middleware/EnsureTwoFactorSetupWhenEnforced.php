@@ -23,6 +23,9 @@ class EnsureTwoFactorSetupWhenEnforced
         'api/auth/me',
         'api/auth/logout',
         'api/auth/refresh',
+        // An impersonated account may not have 2FA set up even when the account enforces it
+        // account-wide; always let an admin end the session rather than getting stuck mid-way.
+        'api/impersonation/stop',
     ];
 
     /**
