@@ -40,6 +40,9 @@ class UpdateBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_FILES,
                 BoardColumn::TYPE_TIME_TRACKING,
                 BoardColumn::TYPE_AUTO_NUMBER,
+                BoardColumn::TYPE_FORMULA,
+                BoardColumn::TYPE_CONNECT_BOARD,
+                BoardColumn::TYPE_MIRROR,
             ])],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
             'config' => ['sometimes', 'nullable', 'array'],
@@ -52,6 +55,15 @@ class UpdateBoardColumnRequest extends FormRequest
             // People columns only: whether assigning someone here notifies
             // them (in-app + email) — the People cell picker's bottom toggle.
             'config.notify_on_assignment' => ['sometimes', 'boolean'],
+            // Formula columns only: the operation applied to `source_column_ids`, in row order.
+            'config.operation' => ['sometimes', 'string', Rule::in(['sum', 'subtract', 'multiply', 'divide', 'concat'])],
+            'config.source_column_ids' => ['sometimes', 'array', 'min:1'],
+            'config.source_column_ids.*' => ['integer', Rule::exists('board_columns', 'id')],
+            // Connect-board columns only: the other board this column's cells link items on.
+            'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
+            // Mirror columns only: which of this tab's own connect-board columns to read through, and which column on that linked board to display.
+            'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
+            'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

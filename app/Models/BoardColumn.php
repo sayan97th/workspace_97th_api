@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Concerns\BelongsToBoardView;
+use App\Services\Board\MirrorColumnResolver;
 use Database\Factories\BoardColumnFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
@@ -117,6 +118,15 @@ class BoardColumn extends Model
 
     /** A read-only sequential number assigned once, server-side, when the item is created — mirrors monday.com's "Item ID" column. Never editable from the cell. */
     public const TYPE_AUTO_NUMBER = 'auto_number';
+
+    /** A read-only value computed from other columns on the same item, per `config.operation` (`sum`/`subtract`/`multiply`/`divide`/`concat`) applied to `config.source_column_ids`. Never stores a {@see BoardItemValue} of its own; recomputed on every read. */
+    public const TYPE_FORMULA = 'formula';
+
+    /** Links this item to one or more items on a *different* board (`config.linked_board_id`), stored as an array of that board's item ids, mirroring `TYPE_DEPENDENCY`'s value shape but cross-board. The prerequisite a `TYPE_MIRROR` column reads through. */
+    public const TYPE_CONNECT_BOARD = 'connect_board';
+
+    /** A read-only value mirrored from the item(s) a `TYPE_CONNECT_BOARD` column (`config.source_column_id`) links to, reading `config.mirrored_column_id` off the linked board. Never stores a {@see BoardItemValue} of its own; resolved by {@see MirrorColumnResolver}. */
+    public const TYPE_MIRROR = 'mirror';
 
     /**
      * The board (navigation leaf) this column belongs to.

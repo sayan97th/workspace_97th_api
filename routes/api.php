@@ -23,6 +23,7 @@ use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
 use App\Http\Controllers\Board\BoardActivityLogController;
+use App\Http\Controllers\Board\BoardAutomationController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardExportController;
@@ -288,6 +289,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('{column}', [BoardColumnController::class, 'destroy']);
         });
 
+        // Rule-based (no AI) automations — see `BoardAutomation`'s own doc comment.
+        Route::prefix('automations')->group(function () {
+            Route::get('/', [BoardAutomationController::class, 'index']);
+            Route::post('/', [BoardAutomationController::class, 'store']);
+            Route::patch('{automation}', [BoardAutomationController::class, 'update']);
+            Route::delete('{automation}', [BoardAutomationController::class, 'destroy']);
+        });
+
         // Board header's "More actions" > "Import items" wizard — parses an
         // uploaded .csv/.xlsx/.xls into rows ("analyze"), then writes them
         // once the "Map columns"/"Handle matches" steps resolve ("commit").
@@ -318,6 +327,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // aren't swallowed by it.
             Route::post('duplicate', [BoardItemController::class, 'bulkDuplicate']);
             Route::patch('move', [BoardItemController::class, 'bulkMove']);
+            Route::patch('values', [BoardItemController::class, 'bulkSetValue']);
             Route::patch('reorder', [BoardItemController::class, 'reorder']);
             Route::patch('archive', [BoardItemController::class, 'bulkArchive']);
             Route::delete('/', [BoardItemController::class, 'bulkDestroy']);

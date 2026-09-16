@@ -50,6 +50,15 @@ class Notification extends Model
     public const TYPE_REACTIONS = 'reactions';
 
     /**
+     * Sent by a {@see BoardAutomation}'s `notify_person` action.
+     * Matches `App\Enums\NotificationPreferenceKey::AutomationsNotify`'s value
+     * exactly (not just prefixed by it), since `NotificationService::notify()`
+     * gates delivery by reading `"{$type}_app"`/`"{$type}_email"` straight off
+     * the recipient's `notification_preferences`.
+     */
+    public const TYPE_AUTOMATION = 'automations_notify';
+
+    /**
      * System-generated notification with no `actor_id`, used to verify the
      * websocket connection is delivering real-time events end to end.
      */

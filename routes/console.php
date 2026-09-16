@@ -13,3 +13,5 @@ Schedule::call(function () {
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
 
 Schedule::command('feed:publish-scheduled')->everyMinute();
+
+Schedule::command('automations:run-date-triggers')->dailyAt('08:00');

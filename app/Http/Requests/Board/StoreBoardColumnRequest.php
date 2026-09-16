@@ -63,6 +63,9 @@ class StoreBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_FILES,
                 BoardColumn::TYPE_TIME_TRACKING,
                 BoardColumn::TYPE_AUTO_NUMBER,
+                BoardColumn::TYPE_FORMULA,
+                BoardColumn::TYPE_CONNECT_BOARD,
+                BoardColumn::TYPE_MIRROR,
             ])],
             'position' => ['sometimes', 'integer', 'min:0'],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
@@ -76,6 +79,18 @@ class StoreBoardColumnRequest extends FormRequest
             // People columns only: whether assigning someone here notifies
             // them (in-app + email) — the People cell picker's bottom toggle.
             'config.notify_on_assignment' => ['sometimes', 'boolean'],
+            // Formula/Connect-board/Mirror columns only, all optional even for
+            // their own type: a fresh column from the "+" gallery is created
+            // unconfigured (like Status/Label start with a default option set
+            // but Formula/Mirror have no sensible default), then configured
+            // afterward through the header menu's "Configure ..." modal (see
+            // `BoardColumnController::update()`), not at creation time.
+            'config.operation' => ['sometimes', 'string', Rule::in(['sum', 'subtract', 'multiply', 'divide', 'concat'])],
+            'config.source_column_ids' => ['sometimes', 'array', 'min:1'],
+            'config.source_column_ids.*' => ['integer', Rule::exists('board_columns', 'id')],
+            'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
+            'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
+            'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

@@ -71,10 +71,18 @@ class BoardItemResource extends JsonResource
             // array as a list and silently reindexes it from 0 via array_values(),
             // destroying the column-id keys. An stdClass isn't array-shaped, so it
             // skips that pass and round-trips through json_encode() untouched.
+            //
+            // `mirror_values` (set by `MirrorColumnResolver::attach()`, see
+            // `BoardItemController`) is merged in the same shape so a Mirror
+            // column's computed value shows up in `values` exactly like any
+            // other column's, with no frontend special-casing needed.
             'values' => $this->whenLoaded(
                 'values',
-                fn () => (object) $this->values->mapWithKeys(fn ($value) => [(string) $value->column_id => $value->value])->all(),
-                (object) []
+                fn () => (object) [
+                    ...$this->values->mapWithKeys(fn ($value) => [(string) $value->column_id => $value->value])->all(),
+                    ...($this->mirror_values ?? []),
+                ],
+                (object) ($this->mirror_values ?? [])
             ),
         ];
     }

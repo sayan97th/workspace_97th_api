@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Board;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\BulkBoardItemsRequest;
 use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
+use App\Http\Requests\Board\BulkSetColumnValueRequest;
 use App\Http\Requests\Board\ReorderBoardItemsRequest;
 use App\Http\Requests\Board\StoreBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemParentRequest;
@@ -18,11 +19,14 @@ use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardViewResolver;
+use App\Services\Board\MirrorColumnResolver;
 use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class BoardItemController extends Controller
@@ -31,6 +35,8 @@ class BoardItemController extends Controller
         private readonly BoardItemFilterService $filter_service,
         private readonly BoardViewResolver $view_resolver,
         private readonly NotificationService $notification_service,
+        private readonly MirrorColumnResolver $mirror_resolver,
+        private readonly BoardAutomationService $automation_service,
     ) {}
 
     /**
@@ -82,8 +88,11 @@ class BoardItemController extends Controller
             $query->whereIn('group_id', $group_ids);
         }
 
+        $items = $query->get();
+        $this->attachMirrorValues($items, $view->id, BoardColumn::SCOPE_ITEM);
+
         return response()->json([
-            'data' => BoardItemResource::collection($query->get()),
+            'data' => BoardItemResource::collection($items),
         ]);
     }
 
@@ -97,6 +106,7 @@ class BoardItemController extends Controller
         $this->ensureItemBelongsToBoard($item, $board_item);
 
         $board_item->load(['values', 'group', 'creator', 'checklistItems']);
+        $this->attachMirrorValues(collect([$board_item]), $board_item->group->board_view_id, $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM);
 
         return response()->json(new BoardItemDetailResource($board_item));
     }
@@ -297,6 +307,30 @@ class BoardItemController extends Controller
     }
 
     /**
+     * PATCH /api/boards/{item}/items/values
+     *
+     * Selection action bar's "Edit column" bulk action — applies one column's
+     * value to every given item in one request, reusing `syncValues()` per
+     * item so this gets the exact same behavior a single inline cell edit
+     * gets for free (the People-column "assigned you" notification, silently
+     * skipping a column id that doesn't belong to this item's own tab).
+     */
+    public function bulkSetValue(BulkSetColumnValueRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $validated = $request->validated();
+        $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
+
+        foreach ($items as $board_item) {
+            $this->syncValues($item, $board_item, [$validated['column_id'] => $validated['value']], $request->user());
+        }
+
+        return response()->json([
+            'message' => 'Items updated successfully.',
+            'items' => BoardItemResource::collection($items->fresh('values')),
+        ]);
+    }
+
+    /**
      * PATCH /api/boards/{item}/items/reorder
      *
      * Drag-and-drop reordering. `scope=root` resequences a table's root
@@ -429,10 +463,14 @@ class BoardItemController extends Controller
                 $this->notifyNewlyAssignedPeople($item, $board_item, $column, $value, $actor);
             }
 
+            $old_value = BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->first()?->value;
+
             $board_item->values()->updateOrCreate(
                 ['column_id' => $column->id],
                 ['value' => $value]
             );
+
+            $this->automation_service->handleValueChanged($board_item, $column, $old_value, $value, $actor);
         }
     }
 
@@ -469,6 +507,19 @@ class BoardItemController extends Controller
                 );
             }
         }
+    }
+
+    /**
+     * Resolves every Mirror column in `$board_view_id`+`$scope` against
+     * `$items` and attaches the result (see {@see MirrorColumnResolver}) —
+     * skips the extra queries entirely for a tab with no Mirror columns.
+     *
+     * @param  Collection<int, BoardItem>  $items
+     */
+    private function attachMirrorValues(Collection $items, int $board_view_id, string $scope): void
+    {
+        $columns = BoardColumn::where('board_view_id', $board_view_id)->where('scope', $scope)->get(['id', 'type', 'config']);
+        $this->mirror_resolver->attach($items, $columns);
     }
 
     /**
