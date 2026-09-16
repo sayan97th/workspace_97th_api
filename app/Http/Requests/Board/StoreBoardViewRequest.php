@@ -31,7 +31,7 @@ class StoreBoardViewRequest extends FormRequest
             'group_by_option_id' => ['sometimes', 'nullable', 'string', 'max:255'],
             'hidden_column_ids' => ['sometimes', 'nullable', 'array'],
             'pinned_column_ids' => ['sometimes', 'nullable', 'array'],
-            'row_height' => ['sometimes', 'string', Rule::in(['single', 'double', 'triple'])],
+            'row_height' => ['sometimes', 'string', Rule::in(['single', 'double', 'triple', 'quad'])],
             'conditional_color_rules' => ['sometimes', 'nullable', 'array'],
             'doc_content' => ['sometimes', 'nullable', 'string'],
             // Chart type/data source/grouping — only meaningful for a `chart`-type view. See App\Services\Board\ChartDataService.
