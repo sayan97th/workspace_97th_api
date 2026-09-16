@@ -72,16 +72,20 @@ class BoardItemResource extends JsonResource
             // destroying the column-id keys. An stdClass isn't array-shaped, so it
             // skips that pass and round-trips through json_encode() untouched.
             //
+            // Built with `+` (array union), not `[...$a, ...$b]` — a column id key
+            // survives `mapWithKeys()` as a PHP *integer* (a numeric string key is
+            // always coerced back to int), and the `...` spread operator, unlike
+            // `+`, only preserves string keys: an integer-keyed array unpacked with
+            // `...` is silently renumbered from 0, which reproduces the exact bug
+            // this cast is here to prevent, just one line earlier.
+            //
             // `mirror_values` (set by `MirrorColumnResolver::attach()`, see
             // `BoardItemController`) is merged in the same shape so a Mirror
             // column's computed value shows up in `values` exactly like any
             // other column's, with no frontend special-casing needed.
             'values' => $this->whenLoaded(
                 'values',
-                fn () => (object) [
-                    ...$this->values->mapWithKeys(fn ($value) => [(string) $value->column_id => $value->value])->all(),
-                    ...($this->mirror_values ?? []),
-                ],
+                fn () => (object) (($this->mirror_values ?? []) + $this->values->mapWithKeys(fn ($value) => [(string) $value->column_id => $value->value])->all()),
                 (object) ($this->mirror_values ?? [])
             ),
         ];
