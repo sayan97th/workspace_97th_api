@@ -30,6 +30,7 @@ use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardImportController;
 use App\Http\Controllers\Board\BoardInvitationController;
 use App\Http\Controllers\Board\BoardItemAttachmentController;
+use App\Http\Controllers\Board\BoardItemCellFileController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
@@ -347,6 +348,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::get('/', [BoardItemAttachmentController::class, 'index']);
                 Route::post('/', [BoardItemAttachmentController::class, 'store']);
                 Route::delete('{attachment}', [BoardItemAttachmentController::class, 'destroy']);
+            });
+
+            // Files cell (a `files`-type column) — distinct from
+            // `{board_item}/attachments` above, which attaches to the item as
+            // a whole rather than one specific column's cell.
+            Route::prefix('{board_item}/columns/{column}/files')->group(function () {
+                Route::post('/', [BoardItemCellFileController::class, 'store']);
+                Route::delete('{file_id}', [BoardItemCellFileController::class, 'destroy']);
             });
         });
 

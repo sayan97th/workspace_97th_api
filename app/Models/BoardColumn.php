@@ -100,6 +100,24 @@ class BoardColumn extends Model
 
     public const TYPE_EMAIL = 'email';
 
+    /** A 0-5 star rating, set by clicking a star directly in the cell. */
+    public const TYPE_RATING = 'rating';
+
+    /** A team "vote" button — the cell stores the array of user ids who voted, mirroring a People column's own array shape. */
+    public const TYPE_VOTE = 'vote';
+
+    /** A clickable URL with its own display text, stored as `{url, text}` — distinct from a plain Text column, which has no separate display label. */
+    public const TYPE_LINK = 'link';
+
+    /** One or more files attached directly to this cell (not the item as a whole — see `BoardItemAttachment` for that), stored as an array of `{id, file_name, url, mime_type, size_bytes}`. */
+    public const TYPE_FILES = 'files';
+
+    /** A start/stop timer, stored as `{seconds, running_since}` — `running_since` is the ISO timestamp the timer was last started, or null while stopped; the displayed duration is `seconds` plus elapsed time since `running_since` when running. */
+    public const TYPE_TIME_TRACKING = 'time_tracking';
+
+    /** A read-only sequential number assigned once, server-side, when the item is created — mirrors monday.com's "Item ID" column. Never editable from the cell. */
+    public const TYPE_AUTO_NUMBER = 'auto_number';
+
     /**
      * The board (navigation leaf) this column belongs to.
      *

@@ -133,6 +133,8 @@ class BoardItemController extends Controller
             'created_by_id' => $request->user()?->id,
         ]);
 
+        $this->assignAutoNumberValues($board_item, $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM);
+
         if (! empty($validated['values'])) {
             $this->syncValues($item, $board_item, $validated['values'], $request->user());
         }
@@ -478,6 +480,37 @@ class BoardItemController extends Controller
     }
 
     /**
+     * Assigns every Auto-number column in this item's scope its next
+     * sequential value (1, 2, 3, ...), scoped to that column alone — a
+     * board's second Auto-number column (if it ever added one) counts
+     * independently from the first. No-ops for a column the item already
+     * has a value for, so this is safe to call unconditionally from both
+     * `store()` (a client-supplied value never wins a race with this) and
+     * `copySubtree()` (after deliberately stripping the original's own
+     * auto-number value — see its own comment).
+     */
+    private function assignAutoNumberValues(BoardItem $board_item, string $scope): void
+    {
+        $auto_number_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
+            ->where('scope', $scope)
+            ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
+            ->get(['id']);
+
+        foreach ($auto_number_columns as $column) {
+            if (BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->exists()) {
+                continue;
+            }
+
+            $next = BoardItemValue::where('column_id', $column->id)
+                ->pluck('value')
+                ->map(fn ($value) => is_numeric($value) ? (int) $value : 0)
+                ->max() ?? 0;
+
+            $board_item->values()->create(['column_id' => $column->id, 'value' => $next + 1]);
+        }
+    }
+
+    /**
      * The next free position among a group's items (append to the end).
      * Root items (`$parent_id === null`) and a given item's subitems each
      * have their own independent position sequence.
@@ -519,12 +552,28 @@ class BoardItemController extends Controller
             'created_by_id' => $original->created_by_id,
         ]);
 
+        $scope = $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
+
+        // An Auto-number column's value is a stable, per-item identity (like
+        // monday.com's "Item ID"), not board content — a duplicate gets its
+        // own freshly-assigned number below instead of literally cloning the
+        // original's, which every other column type does.
+        $auto_number_column_ids = BoardColumn::where('board_view_id', $original->group->board_view_id)
+            ->where('scope', $scope)
+            ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
+            ->pluck('id');
+
         foreach ($original->values as $value) {
+            if ($auto_number_column_ids->contains($value->column_id)) {
+                continue;
+            }
             $copy->values()->create([
                 'column_id' => $value->column_id,
                 'value' => $value->value,
             ]);
         }
+
+        $this->assignAutoNumberValues($copy, $scope);
 
         if ($with_children) {
             foreach ($original->childrenRecursive as $child) {
