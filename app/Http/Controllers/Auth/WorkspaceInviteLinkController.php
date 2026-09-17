@@ -98,6 +98,14 @@ class WorkspaceInviteLinkController extends Controller
             ],
         ]);
 
+        // A previous "Remove from workspace" on this home workspace set this flag
+        // so HomeWorkspaceEnrollmentService::enroll() would stop silently re-adding
+        // the member on login; joining again here supersedes that removal.
+        if ($workspace->is_home && $user->excluded_from_home_workspace) {
+            $user->excluded_from_home_workspace = false;
+            $user->save();
+        }
+
         $token = $this->guard()->login($user);
 
         return $this->respondWithToken($token, $user);

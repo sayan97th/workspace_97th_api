@@ -86,6 +86,12 @@ class WorkspaceMemberController extends Controller
      * original creator (permanent, see {@see Workspace::isCreator()}), and
      * the sole remaining owner (assign another owner first) — the same
      * invariant {@see WorkspaceController::leave()} protects.
+     *
+     * For a home workspace (`is_home = true`), removal also flags the member
+     * `excluded_from_home_workspace` so {@see \App\Services\Workspace\HomeWorkspaceEnrollmentService::enroll()}
+     * stops silently re-adding them on their next login — without that flag,
+     * a home-workspace removal would otherwise look successful here and then
+     * get reversed the moment the member logged back in.
      */
     public function destroy(Request $request, Workspace $workspace, User $member): JsonResponse
     {
@@ -125,7 +131,18 @@ class WorkspaceMemberController extends Controller
             ])->status(422);
         }
 
-        $workspace->users()->detach($member->id);
+        $detached_count = $workspace->users()->detach($member->id);
+
+        if ($detached_count === 0) {
+            throw ValidationException::withMessages([
+                'member' => 'That person could not be removed from this workspace. Please try again.',
+            ])->status(409);
+        }
+
+        if ($workspace->is_home && ! $member->excluded_from_home_workspace) {
+            $member->excluded_from_home_workspace = true;
+            $member->save();
+        }
 
         return response()->json([
             'message' => 'Member removed from the workspace.',

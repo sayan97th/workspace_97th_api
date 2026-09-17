@@ -56,6 +56,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string|null $remember_token
  * @property int|null $current_team_id
  * @property int|null $last_active_workspace_id
+ * @property bool $excluded_from_home_workspace
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read string $full_name
@@ -112,6 +113,7 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
             'hide_online_status' => 'boolean',
             'notification_preferences' => 'array',
             'desktop_notifications_enabled' => 'boolean',
+            'excluded_from_home_workspace' => 'boolean',
         ];
     }
 

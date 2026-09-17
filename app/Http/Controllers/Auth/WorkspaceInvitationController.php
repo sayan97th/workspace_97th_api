@@ -97,6 +97,15 @@ class WorkspaceInvitationController extends Controller
                 $user->id => ['role' => $invitation->role, 'is_recent' => true, 'invited_by' => $invitation->invited_by],
             ]);
 
+            // A previous "Remove from workspace" on this home workspace set this
+            // flag so HomeWorkspaceEnrollmentService::enroll() would stop silently
+            // re-adding the member on login; being deliberately re-invited here
+            // supersedes that removal, so the flag no longer applies.
+            if ($invitation->workspace->is_home && $user->excluded_from_home_workspace) {
+                $user->excluded_from_home_workspace = false;
+                $user->save();
+            }
+
             $invitation->update(['accepted_at' => now()]);
         });
 

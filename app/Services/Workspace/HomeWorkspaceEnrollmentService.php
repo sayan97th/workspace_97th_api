@@ -28,9 +28,19 @@ class HomeWorkspaceEnrollmentService
      * Enrolls (or re-syncs) the user's membership on every home workspace,
      * granting "owner" to staff/admin accounts and "member" to everyone else.
      * Idempotent — safe to call again after a user's app-level role changes.
+     *
+     * Skips a user flagged `excluded_from_home_workspace`: an owner/admin
+     * deliberately removed them from a home workspace via "Remove from
+     * workspace" ({@see \App\Http\Controllers\Workspace\WorkspaceMemberController::destroy()}),
+     * and without this check that removal would silently get undone the next
+     * time they logged in, since every login re-runs this enrollment.
      */
     public function enroll(User $user): void
     {
+        if ($user->excluded_from_home_workspace) {
+            return;
+        }
+
         $role = $user->hasRole(self::STAFF_ROLES) ? 'owner' : 'member';
 
         Workspace::where('is_home', true)->get()->each(
