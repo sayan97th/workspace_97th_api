@@ -466,6 +466,25 @@ test('bulk duplicate deep-copies a parent item and its subitems', function () {
         ->assertJsonPath('items.0.children.0.name', 'Child');
 });
 
+test('duplicating a single subitem keeps the copy nested under its original parent', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $child = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Child', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", [
+        'item_ids' => [$child->id],
+    ]);
+
+    $duplicate_id = $response->assertCreated()->json('items.0.id');
+
+    $this->assertDatabaseHas('board_items', [
+        'id' => $duplicate_id,
+        'parent_id' => $parent->id,
+        'name' => 'Child (copy)',
+    ]);
+});
+
 test('inline cell edits ignore a column that belongs to a different tab of the same board', function () {
     [$board, $group] = createItemTestBoard();
     $user = User::factory()->create();

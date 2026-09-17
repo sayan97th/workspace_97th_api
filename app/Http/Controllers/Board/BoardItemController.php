@@ -271,7 +271,14 @@ class BoardItemController extends Controller
         $with_subitems = $request->boolean('with_subitems', true);
 
         $duplicates = $originals->map(
-            fn (BoardItem $original) => $this->copySubtree($item, $original, $original->group_id, null, $this->nextPosition($item, $original->group_id), $with_subitems)
+            fn (BoardItem $original) => $this->copySubtree(
+                $item,
+                $original,
+                $original->group_id,
+                $original->parent_id,
+                $this->nextPosition($item, $original->group_id, $original->parent_id),
+                $with_subitems
+            )
         );
 
         return response()->json([

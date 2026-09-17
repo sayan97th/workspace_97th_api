@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\User;
+use App\Models\WorkspaceNavigationItem;
 use Illuminate\Support\Facades\Broadcast;
 
 /*
@@ -33,4 +35,25 @@ Broadcast::channel('websocket-test.{user_id}', function ($user, $user_id) {
 // to receive BoardImportProgressUpdated broadcasts from ProcessBoardImportJob.
 Broadcast::channel('board-import.{user_id}', function ($user, $user_id) {
     return (int) $user->id === (int) $user_id;
+});
+
+// Presence channel powering the Table view's face-pile: every workspace
+// member who joins is broadcast to every other joiner via here/joining/
+// leaving, so the UI shows who else is currently on this board.
+Broadcast::channel('presence-board.{board_id}', function (User $user, int $board_id) {
+    $board = WorkspaceNavigationItem::find($board_id);
+    if (! $board) {
+        return false;
+    }
+
+    $is_member = $user->workspaces()->where('workspaces.id', $board->workspace_id)->exists();
+    if (! $is_member) {
+        return false;
+    }
+
+    return [
+        'id' => $user->id,
+        'name' => $user->full_name,
+        'avatar' => $user->profile_photo_url,
+    ];
 });
