@@ -66,7 +66,8 @@ class BoardTrashController extends Controller
             $item,
             $request->user(),
             BoardActivityLog::ACTION_ITEM_RESTORED,
-            "Restored \"{$target->name}\""
+            "Restored \"{$target->name}\"",
+            ['item_id' => $target->id]
         );
 
         return response()->json(['message' => 'Item restored successfully.']);
@@ -82,13 +83,15 @@ class BoardTrashController extends Controller
     {
         $target = BoardItem::withTrashed()->where('board_id', $item->id)->findOrFail($board_item);
         $name = $target->name;
+        $target_id = $target->id;
         $target->forceDelete();
 
         $this->activity_logger->log(
             $item,
             $request->user(),
             BoardActivityLog::ACTION_ITEM_DELETED,
-            "Permanently deleted \"{$name}\""
+            "Permanently deleted \"{$name}\"",
+            ['item_id' => $target_id]
         );
 
         return response()->json(['message' => 'Item permanently deleted.']);

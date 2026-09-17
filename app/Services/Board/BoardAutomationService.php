@@ -16,16 +16,20 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Runs the two rule-based (no AI) automation recipes a board tab can define,
- * see {@see BoardAutomation}'s own doc comment for the trigger/action vocabulary:
+ * Runs the rule-based (no AI) automation recipes a board tab can define, see
+ * {@see BoardAutomation}'s own doc comment for the trigger/action vocabulary:
  *
  * - "When `trigger_column_id` changes to `trigger_value`, run `action_type`" —
  *   {@see handleValueChanged()}, called synchronously from the same choke
  *   point every column-value write already goes through,
- *   {@see BoardItemController::syncValues()}.
+ *   {@see BoardItemController::syncValues()}. Covers `status_changed`,
+ *   `person_assigned`.
  * - "When `trigger_column_id`'s date arrives, run `action_type`" —
  *   {@see runDueDateTriggers()}, called once daily by the scheduled
  *   `automations:run-date-triggers` command.
+ * - "When an item/subitem is created, run `action_type`" —
+ *   {@see handleItemCreated()}, called synchronously from
+ *   {@see BoardItemController::store()}.
  */
 class BoardAutomationService
 {
@@ -33,18 +37,29 @@ class BoardAutomationService
 
     /**
      * Reacts to one column's value having just changed on `$item` — a no-op
-     * for every column that isn't a `status`/`label` kind, or that no
-     * `status_changed` automation watches.
+     * for every column that isn't a `status`/`label`/`people` kind, or that
+     * no `status_changed`/`person_assigned` automation watches.
      */
     public function handleValueChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
     {
-        if (! in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL], true)) {
+        if (in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL], true)) {
+            $this->handleStatusChanged($item, $column, $old_value, $new_value, $actor);
+
             return;
         }
 
-        // A single-select column's value is a plain option id string — comparing
-        // the raw values is enough to tell whether this write actually changed
-        // which option is selected, versus an unrelated re-save of the same one.
+        if ($column->type === BoardColumn::TYPE_PEOPLE) {
+            $this->handlePersonAssigned($item, $column, $old_value, $new_value, $actor);
+        }
+    }
+
+    /**
+     * A single-select column's value is a plain option id string — comparing
+     * the raw values is enough to tell whether this write actually changed
+     * which option is selected, versus an unrelated re-save of the same one.
+     */
+    private function handleStatusChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
         if ($new_value === $old_value) {
             return;
         }
@@ -61,6 +76,59 @@ class BoardAutomationService
                 continue;
             }
 
+            $this->executeAction($automation, $item, $actor);
+        }
+    }
+
+    /**
+     * Fires once for every person newly added to a `people` column's value
+     * (comparing against what was stored before this write) — a
+     * `trigger_value` of null watches for anyone being assigned; a specific
+     * user id only fires when that exact person is the one newly added.
+     */
+    private function handlePersonAssigned(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
+        $old_ids = is_array($old_value) ? $old_value : [];
+        $new_ids = is_array($new_value) ? $new_value : [];
+        $newly_added_ids = array_diff($new_ids, $old_ids);
+
+        if (empty($newly_added_ids)) {
+            return;
+        }
+
+        $automations = BoardAutomation::query()
+            ->where('board_view_id', $item->group->board_view_id)
+            ->where('is_enabled', true)
+            ->where('trigger_type', BoardAutomation::TRIGGER_PERSON_ASSIGNED)
+            ->where('trigger_column_id', $column->id)
+            ->get();
+
+        foreach ($automations as $automation) {
+            $watched_user_id = $automation->trigger_value;
+            $matches = $watched_user_id === null || in_array((string) $watched_user_id, array_map('strval', $newly_added_ids), true);
+
+            if ($matches) {
+                $this->executeAction($automation, $item, $actor);
+            }
+        }
+    }
+
+    /**
+     * Reacts to `$item` having just been created — fires every enabled
+     * `item_created` (root item) or `subitem_created` (has a parent)
+     * automation on the item's tab.
+     */
+    public function handleItemCreated(BoardItem $item, ?User $actor): void
+    {
+        $trigger_type = $item->parent_id === null ? BoardAutomation::TRIGGER_ITEM_CREATED : BoardAutomation::TRIGGER_SUBITEM_CREATED;
+
+        $automations = BoardAutomation::query()
+            ->where('board_view_id', $item->group->board_view_id)
+            ->where('is_enabled', true)
+            ->where('trigger_type', $trigger_type)
+            ->get();
+
+        foreach ($automations as $automation) {
             $this->executeAction($automation, $item, $actor);
         }
     }
@@ -140,7 +208,8 @@ class BoardAutomationService
                 $item->board,
                 $actor,
                 BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" moved \"{$item->name}\" to a different table"
+                "Automation \"{$automation_label}\" moved \"{$item->name}\" to a different table",
+                ['item_id' => $item->id]
             );
 
             return;
@@ -167,7 +236,72 @@ class BoardAutomationService
                 $item->board,
                 $actor,
                 BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" notified {$recipient->full_name}"
+                "Automation \"{$automation_label}\" notified {$recipient->full_name}",
+                ['item_id' => $item->id]
+            );
+
+            return;
+        }
+
+        if ($automation->action_type === BoardAutomation::ACTION_ARCHIVE_ITEM) {
+            $item->delete();
+
+            $this->activity_logger->log(
+                $item->board,
+                $actor,
+                BoardActivityLog::ACTION_AUTOMATION_RAN,
+                "Automation \"{$automation_label}\" archived \"{$item->name}\"",
+                ['item_id' => $item->id]
+            );
+
+            return;
+        }
+
+        if ($automation->action_type === BoardAutomation::ACTION_SET_COLUMN_VALUE) {
+            $target_column_id = $automation->action_params['target_column_id'] ?? null;
+            if (! $target_column_id) {
+                return;
+            }
+
+            $item->values()->updateOrCreate(
+                ['column_id' => $target_column_id],
+                ['value' => $automation->action_params['value'] ?? null]
+            );
+
+            $this->activity_logger->log(
+                $item->board,
+                $actor,
+                BoardActivityLog::ACTION_AUTOMATION_RAN,
+                "Automation \"{$automation_label}\" updated a column on \"{$item->name}\"",
+                ['item_id' => $item->id]
+            );
+
+            return;
+        }
+
+        if ($automation->action_type === BoardAutomation::ACTION_CREATE_ITEM) {
+            $target_group_id = (int) ($automation->action_params['target_group_id'] ?? 0);
+            if (! $target_group_id) {
+                return;
+            }
+
+            $position = (int) BoardItem::where('group_id', $target_group_id)->whereNull('parent_id')->max('position') + 1;
+
+            BoardItem::create([
+                'board_id' => $item->board_id,
+                'group_id' => $target_group_id,
+                'parent_id' => null,
+                'name' => $automation->action_params['item_name'] ?? 'New item',
+                'position' => $position,
+                'created_by_id' => $actor?->id,
+            ]);
+
+            $this->activity_logger->log(
+                $item->board,
+                $actor,
+                BoardActivityLog::ACTION_AUTOMATION_RAN,
+                "Automation \"{$automation_label}\" created a new item",
+                ['item_id' => $item->id]
             );
         }
     }

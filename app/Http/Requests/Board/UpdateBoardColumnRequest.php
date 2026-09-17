@@ -43,6 +43,7 @@ class UpdateBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_FORMULA,
                 BoardColumn::TYPE_CONNECT_BOARD,
                 BoardColumn::TYPE_MIRROR,
+                BoardColumn::TYPE_CHECKLIST,
             ])],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
             'config' => ['sometimes', 'nullable', 'array'],
@@ -64,6 +65,12 @@ class UpdateBoardColumnRequest extends FormRequest
             // Mirror columns only: which of this tab's own connect-board columns to read through, and which column on that linked board to display.
             'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
+            // Validation rules, settable on any column kind — see `StoreBoardColumnRequest`'s own comment.
+            'config.validation' => ['sometimes', 'nullable', 'array'],
+            'config.validation.required' => ['sometimes', 'boolean'],
+            'config.validation.min' => ['sometimes', 'nullable', 'numeric'],
+            'config.validation.max' => ['sometimes', 'nullable', 'numeric'],
+            'config.validation.pattern' => ['sometimes', 'nullable', 'string', 'max:500'],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

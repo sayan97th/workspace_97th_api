@@ -66,6 +66,7 @@ class StoreBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_FORMULA,
                 BoardColumn::TYPE_CONNECT_BOARD,
                 BoardColumn::TYPE_MIRROR,
+                BoardColumn::TYPE_CHECKLIST,
             ])],
             'position' => ['sometimes', 'integer', 'min:0'],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
@@ -91,6 +92,14 @@ class StoreBoardColumnRequest extends FormRequest
             'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
             'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
+            // Validation rules, settable on any column kind from the header
+            // menu's "Settings" panel — advisory only (flags an empty/out-of-
+            // range/mismatched cell for the user), never blocks a cell save.
+            'config.validation' => ['sometimes', 'nullable', 'array'],
+            'config.validation.required' => ['sometimes', 'boolean'],
+            'config.validation.min' => ['sometimes', 'nullable', 'numeric'],
+            'config.validation.max' => ['sometimes', 'nullable', 'numeric'],
+            'config.validation.pattern' => ['sometimes', 'nullable', 'string', 'max:500'],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

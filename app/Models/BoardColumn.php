@@ -128,6 +128,9 @@ class BoardColumn extends Model
     /** A read-only value mirrored from the item(s) a `TYPE_CONNECT_BOARD` column (`config.source_column_id`) links to, reading `config.mirrored_column_id` off the linked board. Never stores a {@see BoardItemValue} of its own; resolved by {@see MirrorColumnResolver}. */
     public const TYPE_MIRROR = 'mirror';
 
+    /** A per-item checklist of sub-tasks, stored as an array of `{id, text, is_done}` — distinct from {@see \App\Models\BoardItemChecklistItem}, which is one fixed checklist per item shown in its drawer, not a column an item can have several of. */
+    public const TYPE_CHECKLIST = 'checklist';
+
     /**
      * The board (navigation leaf) this column belongs to.
      *

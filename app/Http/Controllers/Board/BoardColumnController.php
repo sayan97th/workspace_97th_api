@@ -195,6 +195,11 @@ class BoardColumnController extends Controller
     {
         $this->ensureColumnBelongsToBoard($item, $column);
 
+        $target_board_id = $request->integer('target_board_id') ?: null;
+        if ($target_board_id !== null) {
+            return $this->duplicateToAnotherBoard($request, $column, $target_board_id);
+        }
+
         $target_position = $column->position + 1;
 
         BoardColumn::where('board_view_id', $column->board_view_id)
@@ -219,6 +224,42 @@ class BoardColumnController extends Controller
 
         return response()->json([
             'message' => 'Column duplicated successfully.',
+            'column' => new BoardColumnResource($copy),
+        ], 201);
+    }
+
+    /**
+     * Column menu's "Duplicate to another board" — copies the column's
+     * structure (label, type, config, validation) onto a different board's
+     * tab, never its cell values, since that board's items are a completely
+     * different set of rows than the source column's own values belong to.
+     * Lands at the end of the target tab's own column sequence, on the
+     * board's primary tab when `target_view_id` is omitted (see
+     * `BoardViewResolver::resolveForWrite()`).
+     */
+    private function duplicateToAnotherBoard(DuplicateBoardColumnRequest $request, BoardColumn $column, int $target_board_id): JsonResponse
+    {
+        $target_item = WorkspaceNavigationItem::findOrFail($target_board_id);
+        abort_if($target_item->type !== WorkspaceNavigationItem::TYPE_LEAF, 422, 'The target is not a board.');
+
+        $is_member = DB::table('workspace_user')
+            ->where('workspace_id', $target_item->workspace_id)
+            ->where('user_id', $request->user()?->id)
+            ->exists();
+        abort_unless($is_member, 403, 'You do not have access to the target board.');
+
+        $target_view = $this->view_resolver->resolveForWrite($target_item, $request->integer('target_view_id') ?: null);
+
+        $copy = $column->replicate(['key', 'board_id', 'board_view_id', 'position']);
+        $copy->board_id = $target_item->id;
+        $copy->board_view_id = $target_view->id;
+        $copy->key = $this->uniqueKeyForView($column->key, $target_view->id, $column->scope);
+        $copy->label = "{$column->label} copy";
+        $copy->position = $this->nextPosition($target_view, $column->scope);
+        $copy->save();
+
+        return response()->json([
+            'message' => 'Column duplicated to the other board successfully.',
             'column' => new BoardColumnResource($copy),
         ], 201);
     }
@@ -292,14 +333,24 @@ class BoardColumnController extends Controller
      */
     private function uniqueKeyFor(BoardColumn $original): string
     {
-        $base = Str::limit($original->key, 90, '');
+        return $this->uniqueKeyForView($original->key, $original->board_view_id, $original->scope);
+    }
+
+    /**
+     * Shared by `uniqueKeyFor()` (same-board duplicate) and
+     * `duplicateToAnotherBoard()` (cross-board duplicate), which only differ
+     * in which tab's key sequence the copy must stay unique within.
+     */
+    private function uniqueKeyForView(string $original_key, int $board_view_id, string $scope): string
+    {
+        $base = Str::limit($original_key, 90, '');
         $n = 1;
 
         do {
             $candidate = $n === 1 ? "{$base}_copy" : "{$base}_copy_{$n}";
             $n++;
-        } while (BoardColumn::where('board_view_id', $original->board_view_id)
-            ->where('scope', $original->scope)
+        } while (BoardColumn::where('board_view_id', $board_view_id)
+            ->where('scope', $scope)
             ->where('key', $candidate)
             ->exists());
 

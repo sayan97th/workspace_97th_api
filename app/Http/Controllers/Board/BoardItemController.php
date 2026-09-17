@@ -149,6 +149,8 @@ class BoardItemController extends Controller
             $this->syncValues($item, $board_item, $validated['values'], $request->user());
         }
 
+        $this->automation_service->handleItemCreated($board_item, $request->user());
+
         return response()->json([
             'message' => 'Item created successfully.',
             'item' => new BoardItemResource($board_item->fresh('values')),
