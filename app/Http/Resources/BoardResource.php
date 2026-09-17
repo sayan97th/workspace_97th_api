@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Models\BoardDiscussionView;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\BoardEditGate;
 use App\Support\BoardManagementGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -41,6 +42,10 @@ class BoardResource extends JsonResource
             // (Settings, Permissions, Archive board, Delete board, Duplicate
             // board) render enabled — see BoardManagementGate.
             'can_manage' => $request->user() ? BoardManagementGate::allows($this->resource, $request->user()) : false,
+            // Drives whether the Table view renders read-only (a workspace
+            // `viewer`, e.g. a board-invited guest, can open and browse but
+            // never edit) — see BoardEditGate.
+            'can_edit' => $request->user() ? BoardEditGate::allows($this->resource, $request->user()) : false,
         ]);
     }
 

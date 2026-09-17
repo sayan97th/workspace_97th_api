@@ -7,6 +7,7 @@ use App\Http\Requests\Board\BulkBoardItemsRequest;
 use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
 use App\Http\Requests\Board\BulkSetColumnValueRequest;
 use App\Http\Requests\Board\ReorderBoardItemsRequest;
+use App\Http\Requests\Board\SetBoardItemRecurrenceRequest;
 use App\Http\Requests\Board\StoreBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemParentRequest;
 use App\Http\Requests\Board\UpdateBoardItemRequest;
@@ -15,6 +16,7 @@ use App\Http\Resources\BoardItemDetailResource;
 use App\Http\Resources\BoardItemResource;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
+use App\Models\BoardItemRecurrence;
 use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
@@ -26,6 +28,7 @@ use App\Services\Board\MirrorColumnResolver;
 use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -71,7 +74,7 @@ class BoardItemController extends Controller
             ->where('is_archived', false)
             ->whereNull('parent_id')
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
-            ->with(['values', 'childrenRecursive'])
+            ->with(['values', 'childrenRecursive', 'recurrence'])
             ->withCount([
                 'comments',
                 'commentAttachments',
@@ -121,6 +124,8 @@ class BoardItemController extends Controller
      */
     public function store(StoreBoardItemRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $validated = $request->validated();
         $parent_id = $validated['parent_id'] ?? null;
 
@@ -169,6 +174,7 @@ class BoardItemController extends Controller
     public function update(UpdateBoardItemRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
+        BoardEditGate::authorize($item, $request->user());
 
         $validated = $request->validated();
         $board_item->fill($validated)->save();
@@ -196,6 +202,7 @@ class BoardItemController extends Controller
     public function updateParent(UpdateBoardItemParentRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
+        BoardEditGate::authorize($item, $request->user());
 
         $validated = $request->validated();
         $parent_id = $validated['parent_id'] ?? null;
@@ -224,6 +231,58 @@ class BoardItemController extends Controller
     }
 
     /**
+     * PATCH /api/boards/{item}/items/{board_item}/recurrence
+     *
+     * Row menu's "Set recurring..." popover — schedules `board_item` to
+     * auto-recreate itself (see {@see \App\Services\Board\RecurringItemService}),
+     * starting one interval from today (today's own row already exists, so
+     * the first *recreation* is the next cycle, not this one).
+     */
+    public function setRecurrence(SetBoardItemRecurrenceRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        BoardEditGate::authorize($item, $request->user());
+
+        $validated = $request->validated();
+        $today = Carbon::today();
+        $next_run_date = match ($validated['frequency']) {
+            BoardItemRecurrence::FREQUENCY_WEEKLY => $today->copy()->addWeeks($validated['interval_count']),
+            BoardItemRecurrence::FREQUENCY_MONTHLY => $today->copy()->addMonthsNoOverflow($validated['interval_count']),
+            default => $today->copy()->addDays($validated['interval_count']),
+        };
+
+        $recurrence = BoardItemRecurrence::updateOrCreate(
+            ['board_item_id' => $board_item->id],
+            [
+                'frequency' => $validated['frequency'],
+                'interval_count' => $validated['interval_count'],
+                'next_run_date' => $next_run_date->toDateString(),
+                'is_enabled' => true,
+            ]
+        );
+
+        return response()->json([
+            'message' => 'Item set to recur successfully.',
+            'recurrence' => ['frequency' => $recurrence->frequency, 'interval_count' => $recurrence->interval_count],
+        ]);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/items/{board_item}/recurrence
+     *
+     * Row menu's "Stop recurring" action.
+     */
+    public function clearRecurrence(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        BoardEditGate::authorize($item, $request->user());
+
+        BoardItemRecurrence::where('board_item_id', $board_item->id)->delete();
+
+        return response()->json(['message' => 'Item is no longer recurring.']);
+    }
+
+    /**
      * PATCH /api/boards/{item}/items/{board_item}/values
      *
      * Inline cell edits — accepts a `{column_id: value}` map.
@@ -231,6 +290,7 @@ class BoardItemController extends Controller
     public function updateValues(UpdateBoardItemValuesRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
+        BoardEditGate::authorize($item, $request->user());
 
         $this->syncValues($item, $board_item, $request->validated()['values'], $request->user());
 
@@ -243,9 +303,10 @@ class BoardItemController extends Controller
     /**
      * DELETE /api/boards/{item}/items/{board_item}
      */
-    public function destroy(WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
+        BoardEditGate::authorize($item, $request->user());
 
         $this->deleteSubtree($board_item);
 
@@ -267,6 +328,8 @@ class BoardItemController extends Controller
      */
     public function bulkDuplicate(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $originals = $item->items()->with(['values', 'childrenRecursive'])->whereIn('id', $request->validated()['item_ids'])->get();
         $with_subitems = $request->boolean('with_subitems', true);
 
@@ -296,6 +359,8 @@ class BoardItemController extends Controller
      */
     public function bulkMove(BulkMoveBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $validated = $request->validated();
         $group_id = (int) $validated['group_id'];
 
@@ -326,6 +391,8 @@ class BoardItemController extends Controller
      */
     public function bulkSetValue(BulkSetColumnValueRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $validated = $request->validated();
         $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
 
@@ -356,6 +423,8 @@ class BoardItemController extends Controller
      */
     public function reorder(ReorderBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $validated = $request->validated();
         $touched_ids = [];
 
@@ -408,6 +477,8 @@ class BoardItemController extends Controller
      */
     public function bulkArchive(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $item->items()->whereIn('id', $request->validated()['item_ids'])->update(['is_archived' => true]);
 
         return response()->json([

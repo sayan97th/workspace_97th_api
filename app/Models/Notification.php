@@ -59,6 +59,14 @@ class Notification extends Model
     public const TYPE_AUTOMATION = 'automations_notify';
 
     /**
+     * Sent by {@see \App\Services\Board\DueDateReminderService} to every
+     * person assigned in a People column on an item whose Date column has a
+     * reminder configured and is due today. No `actor_id` (system-generated,
+     * like {@see self::TYPE_TEST}).
+     */
+    public const TYPE_DUE_DATE_REMINDER = 'due_date_reminder';
+
+    /**
      * System-generated notification with no `actor_id`, used to verify the
      * websocket connection is delivering real-time events end to end.
      */

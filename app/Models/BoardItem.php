@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 
@@ -133,6 +134,17 @@ class BoardItem extends Model
     public function values(): HasMany
     {
         return $this->hasMany(BoardItemValue::class, 'item_id');
+    }
+
+    /**
+     * This item's recurring schedule, if the row menu's "Set recurring..."
+     * action has one configured — see {@see BoardItemRecurrence}.
+     *
+     * @return HasOne<BoardItemRecurrence, $this>
+     */
+    public function recurrence(): HasOne
+    {
+        return $this->hasOne(BoardItemRecurrence::class, 'board_item_id');
     }
 
     /**

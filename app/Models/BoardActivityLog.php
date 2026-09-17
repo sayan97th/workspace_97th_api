@@ -53,6 +53,9 @@ class BoardActivityLog extends Model
     /** A {@see BoardAutomation} rule fired and ran its action against an item. */
     public const ACTION_AUTOMATION_RAN = 'automation_ran';
 
+    /** A {@see \App\Models\BoardItemRecurrence} fired and recreated its item — see {@see \App\Services\Board\RecurringItemService}. */
+    public const ACTION_ITEM_RECURRED = 'item_recurred';
+
     /**
      * @return BelongsTo<WorkspaceNavigationItem, $this>
      */

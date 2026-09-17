@@ -47,6 +47,13 @@ class BoardItemResource extends JsonResource
             'children' => $this->relationLoaded('childrenRecursive')
                 ? self::collection($this->childrenRecursive)
                 : [],
+            // The Row menu's "Set recurring..." schedule, when this item has
+            // one — only `index()`/`show()` eager-load `recurrence`; every
+            // other action (store/update/updateValues) resolves this to null
+            // rather than a real lookup, same convention as `children` above.
+            'recurrence' => $this->relationLoaded('recurrence') && $this->recurrence
+                ? ['frequency' => $this->recurrence->frequency, 'interval_count' => $this->recurrence->interval_count]
+                : null,
             // Only `index()` eager-loads the `comments`/`commentAttachments` counts
             // (the board table's row chat icon and the Kanban card's attachment
             // count); other actions that return this resource (store/update/

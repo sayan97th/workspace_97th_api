@@ -15,3 +15,7 @@ Schedule::command('horizon:snapshot')->everyFiveMinutes();
 Schedule::command('feed:publish-scheduled')->everyMinute();
 
 Schedule::command('automations:run-date-triggers')->dailyAt('08:00');
+
+Schedule::command('board:send-due-date-reminders')->dailyAt('08:00');
+
+Schedule::command('items:run-recurrences')->dailyAt('06:00');

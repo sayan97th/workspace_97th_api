@@ -21,6 +21,7 @@ enum NotificationPreferenceKey: string
     case AgentFailures = 'agent_failures';
     case AutomationsNotify = 'automations_notify';
     case AutomationFailures = 'automation_failures';
+    case DueDateReminder = 'due_date_reminder';
     case PlatformApi = 'platform_api';
     case RequestsAccess = 'requests_access';
     case RequestsInstall = 'requests_install';

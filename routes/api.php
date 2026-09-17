@@ -336,6 +336,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{board_item}', [BoardItemController::class, 'update']);
             Route::patch('{board_item}/values', [BoardItemController::class, 'updateValues']);
             Route::patch('{board_item}/parent', [BoardItemController::class, 'updateParent']);
+            Route::patch('{board_item}/recurrence', [BoardItemController::class, 'setRecurrence']);
+            Route::delete('{board_item}/recurrence', [BoardItemController::class, 'clearRecurrence']);
             Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
 
             Route::prefix('{board_item}/comments')->group(function () {

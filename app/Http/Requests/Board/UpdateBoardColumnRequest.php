@@ -71,6 +71,12 @@ class UpdateBoardColumnRequest extends FormRequest
             'config.validation.min' => ['sometimes', 'nullable', 'numeric'],
             'config.validation.max' => ['sometimes', 'nullable', 'numeric'],
             'config.validation.pattern' => ['sometimes', 'nullable', 'string', 'max:500'],
+            // Number columns only: which aggregation the Table view's group summary footer shows for this column. Defaults to "sum" when unset.
+            'config.aggregation' => ['sometimes', 'nullable', 'string', Rule::in(['sum', 'avg', 'min', 'max', 'count'])],
+            // Date columns only: notifies everyone assigned in a People column on the same item once the date is this many days away — see DueDateReminderService.
+            'config.reminder' => ['sometimes', 'nullable', 'array'],
+            'config.reminder.enabled' => ['sometimes', 'boolean'],
+            'config.reminder.days_before' => ['sometimes', 'integer', 'min:0', 'max:365'],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];
