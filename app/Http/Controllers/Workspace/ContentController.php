@@ -69,7 +69,14 @@ class ContentController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $workspace_ids = $user->workspaces()->pluck('workspaces.id');
+        // Every workspace, not just the ones `$user` has a `workspace_user`
+        // row for — {@see WorkspaceController::index()} shows the same full
+        // directory to every signed-in user (a `workspace_user` row only
+        // tracks the viewer's own role/recency there, it isn't an access
+        // gate), so this listing has to match or it silently drops boards
+        // the viewer can otherwise open, e.g. the Connect-board column's own
+        // "link to another board" picker.
+        $workspace_ids = Workspace::query()->pluck('id');
         $per_page = max(1, min((int) $request->integer('per_page', self::DEFAULT_PER_PAGE), self::MAX_PER_PAGE));
 
         $query = WorkspaceNavigationItem::query()
@@ -108,7 +115,8 @@ class ContentController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $workspace_ids = $user->workspaces()->pluck('workspaces.id');
+        // See `index()`'s own comment on why this isn't `$user->workspaces()`.
+        $workspace_ids = Workspace::query()->pluck('id');
 
         $counts = WorkspaceNavigationItem::query()
             ->whereIn('workspace_id', $workspace_ids)
