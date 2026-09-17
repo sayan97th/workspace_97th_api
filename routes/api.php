@@ -35,6 +35,7 @@ use App\Http\Controllers\Board\BoardItemCellFileController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
+use App\Http\Controllers\Board\BoardTagController;
 use App\Http\Controllers\Board\BoardTrashController;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
@@ -316,6 +317,16 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{group}/move', [BoardGroupController::class, 'move']);
             Route::post('{group}/duplicate', [BoardGroupController::class, 'duplicate']);
             Route::delete('{group}', [BoardGroupController::class, 'destroy']);
+        });
+
+        // The Tags column's board-wide option list — shared across every
+        // `tags`-type column on this board, unlike Status/Dropdown's own
+        // per-column `config.options`. See `BoardTag`'s own doc comment.
+        Route::prefix('tags')->group(function () {
+            Route::get('/', [BoardTagController::class, 'index']);
+            Route::post('/', [BoardTagController::class, 'store']);
+            Route::patch('{tag}', [BoardTagController::class, 'update']);
+            Route::delete('{tag}', [BoardTagController::class, 'destroy']);
         });
 
         Route::prefix('items')->group(function () {

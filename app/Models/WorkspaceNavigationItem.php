@@ -222,6 +222,17 @@ class WorkspaceNavigationItem extends Model
     }
 
     /**
+     * This board's shared Tags option list — see {@link BoardTag}'s own doc
+     * comment for why this is board-wide rather than per-tab/per-column.
+     *
+     * @return HasMany<BoardTag, $this>
+     */
+    public function tags(): HasMany
+    {
+        return $this->hasMany(BoardTag::class, 'board_id')->orderBy('position');
+    }
+
+    /**
      * This board's saved views ("tabs"), ordered for display.
      *
      * @return HasMany<BoardView, $this>
