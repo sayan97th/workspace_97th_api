@@ -9,11 +9,14 @@ use Illuminate\Validation\ValidationException;
 
 /**
  * Gates whether a user may edit a board's content (cells, rows, groups,
- * columns), as opposed to just opening and browsing it. Allowed for the
- * board's own creator, a workspace owner/member, or a user holding one of
- * {@see PRIVILEGED_GLOBAL_ROLES}; denied for a workspace `viewer` (a board
- * guest invited through {@see \App\Http\Controllers\Auth\BoardInvitationController}
- * gets exactly this role) and for anyone with no workspace membership at all.
+ * columns), as opposed to just opening and browsing it. Permissive by
+ * default (matching this app's existing authorization posture for board
+ * items, which has no other per-board membership check today), denied only
+ * for a workspace `viewer` — a board guest invited through
+ * {@see \App\Http\Controllers\Auth\BoardInvitationController} gets exactly
+ * this role. The board's own creator and a user holding one of
+ * {@see PRIVILEGED_GLOBAL_ROLES} always pass, even if their workspace role
+ * happens to be `viewer` too.
  *
  * Deliberately does not grant access through {@see \App\Models\BoardCollaborator}
  * alone: a board-invited guest is added to `board_collaborators` *and* given
@@ -33,9 +36,9 @@ class BoardEditGate
     private const PRIVILEGED_GLOBAL_ROLES = ['super_admin', 'admin'];
 
     /**
-     * Workspace membership roles that may edit a board's content.
+     * The one workspace membership role denied edit access.
      */
-    private const EDITABLE_WORKSPACE_ROLES = ['owner', 'member'];
+    private const READ_ONLY_WORKSPACE_ROLE = 'viewer';
 
     /**
      * Whether `$user` may edit `$item`'s content.
@@ -55,7 +58,7 @@ class BoardEditGate
             ->where('user_id', $user->id)
             ->first();
 
-        return in_array($membership->role ?? null, self::EDITABLE_WORKSPACE_ROLES, true);
+        return ($membership->role ?? null) !== self::READ_ONLY_WORKSPACE_ROLE;
     }
 
     /**

@@ -26,6 +26,7 @@ use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\MirrorColumnResolver;
 use App\Services\Notification\NotificationService;
+use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -497,6 +498,8 @@ class BoardItemController extends Controller
      */
     public function bulkDestroy(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $items = $item->items()->whereIn('id', $request->validated()['item_ids'])->get();
 
         foreach ($items as $board_item) {
