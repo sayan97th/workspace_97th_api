@@ -35,6 +35,7 @@ use App\Http\Controllers\Board\BoardItemCellFileController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
+use App\Http\Controllers\Board\BoardNotificationMuteController;
 use App\Http\Controllers\Board\BoardTagController;
 use App\Http\Controllers\Board\BoardTrashController;
 use App\Http\Controllers\Board\BoardViewController;
@@ -44,6 +45,7 @@ use App\Http\Controllers\BrandingController as PublicBrandingController;
 use App\Http\Controllers\BroadcastAuthController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
+use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
@@ -127,7 +129,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::prefix('notifications')->group(function () {
         Route::get('/', [NotificationController::class, 'index']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
+        Route::patch('read-all', [NotificationController::class, 'markAllAsRead']);
         Route::patch('{notification}/read', [NotificationController::class, 'markAsRead']);
+        Route::delete('{notification}', [NotificationController::class, 'dismiss']);
     });
 
     // Update Feed — real-time (Reverb) + REST-readable stream of comment
@@ -137,11 +141,22 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('boards', [FeedUpdateController::class, 'boards']);
         Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
         Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
+        Route::post('updates/{id}/pin', [FeedUpdateController::class, 'togglePin']);
         Route::post('updates/{id}/like', [FeedUpdateController::class, 'toggleLike']);
         Route::post('updates/{id}/reply', [FeedUpdateController::class, 'reply']);
         Route::post('updates/{id}/seen', [FeedUpdateController::class, 'markSeen']);
         Route::post('updates/{id}/schedule', [FeedUpdateController::class, 'schedule']);
     });
+
+    // Per-board notification muting — checked by `NotificationService::notify()`
+    // ahead of the recipient's own per-type preferences.
+    Route::get('boards/muted', [BoardNotificationMuteController::class, 'index']);
+    Route::post('boards/{item}/mute', [BoardNotificationMuteController::class, 'store']);
+    Route::delete('boards/{item}/mute', [BoardNotificationMuteController::class, 'destroy']);
+
+    // Generic inline-image upload for content pasted/dropped directly into a
+    // rich text editor (comment/update composers) — not a comment attachment.
+    Route::post('uploads/inline-images', [InlineUploadController::class, 'store']);
 
     // Profile — available to any authenticated user
     Route::prefix('profile')->group(function () {
@@ -359,6 +374,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('{comment}/like', [BoardItemCommentController::class, 'toggleLike']);
                 Route::post('{comment}/reactions', [BoardItemCommentController::class, 'toggleReaction']);
                 Route::post('{comment}/seen', [BoardItemCommentController::class, 'toggleSeen']);
+                Route::post('{comment}/pin', [BoardItemCommentController::class, 'togglePin']);
             });
 
             Route::prefix('{board_item}/checklist-items')->group(function () {
@@ -411,6 +427,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{comment}/like', [BoardCommentController::class, 'toggleLike']);
             Route::post('{comment}/reactions', [BoardCommentController::class, 'toggleReaction']);
             Route::post('{comment}/seen', [BoardCommentController::class, 'toggleSeen']);
+            Route::post('{comment}/pin', [BoardCommentController::class, 'togglePin']);
         });
     });
 

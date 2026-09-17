@@ -20,6 +20,7 @@ class NotificationController extends Controller
     public function index(Request $request): JsonResponse
     {
         $notifications = $request->user()->notifications()
+            ->whereNull('dismissed_at')
             ->with(['actor', 'board'])
             ->orderByDesc('created_at')
             ->limit(50)
@@ -39,7 +40,7 @@ class NotificationController extends Controller
     {
         return response()->json([
             'data' => [
-                'unread_count' => $request->user()->notifications()->unread()->count(),
+                'unread_count' => $request->user()->notifications()->unread()->whereNull('dismissed_at')->count(),
             ],
         ]);
     }
@@ -59,5 +60,37 @@ class NotificationController extends Controller
                 'is_unread' => false,
             ],
         ]);
+    }
+
+    /**
+     * PATCH /api/notifications/read-all
+     *
+     * Marks every one of the current user's unread, non-dismissed
+     * notifications as read — the bell drawer's "Mark all as read".
+     */
+    public function markAllAsRead(Request $request): JsonResponse
+    {
+        $request->user()->notifications()
+            ->unread()
+            ->whereNull('dismissed_at')
+            ->update(['is_read' => true, 'read_at' => now()]);
+
+        return response()->json(['message' => 'All notifications marked as read.']);
+    }
+
+    /**
+     * DELETE /api/notifications/{notification}
+     *
+     * Soft-dismisses a single notification (the bell drawer's per-item "×")
+     * — it stops showing up in {@see index()}/{@see unreadCount()} without
+     * being hard-deleted.
+     */
+    public function dismiss(Request $request, Notification $notification): JsonResponse
+    {
+        abort_if($notification->user_id !== $request->user()->id, 403);
+
+        $notification->update(['dismissed_at' => now()]);
+
+        return response()->json(['message' => 'Notification dismissed.']);
     }
 }

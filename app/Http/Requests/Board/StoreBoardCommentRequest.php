@@ -36,6 +36,10 @@ class StoreBoardCommentRequest extends FormRequest
             ],
             'mentioned_user_ids' => ['sometimes', 'array'],
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
+            // People explicitly flagged via the composer's "Notify" action —
+            // distinct from `mentioned_user_ids` (never shown inline in the body).
+            'notified_user_ids' => ['sometimes', 'array'],
+            'notified_user_ids.*' => ['integer', 'exists:users,id'],
             'attachments' => ['sometimes', 'array'],
             'attachments.*' => [
                 'file',

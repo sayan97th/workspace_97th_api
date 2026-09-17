@@ -58,7 +58,7 @@ class FeedUpdateController extends Controller
         }
 
         $data = $item_comments->concat($board_comments)
-            ->sortByDesc('created_at')
+            ->sortBy([['pinned', 'desc'], ['created_at', 'desc']])
             ->take(50)
             ->map(fn ($comment) => new FeedUpdateResource($comment))
             ->values();
@@ -166,6 +166,20 @@ class FeedUpdateController extends Controller
 
         $bookmark = $comment->bookmarks()->where('user_id', $user_id)->first();
         $bookmark ? $bookmark->delete() : $comment->bookmarks()->create(['user_id' => $user_id]);
+
+        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+    }
+
+    /**
+     * POST /api/feed/updates/{id}/pin
+     *
+     * Toggles the pinned state shared with the comment/board discussion
+     * threads — a pinned update sorts ahead of the rest of the feed.
+     */
+    public function togglePin(Request $request, string $id): JsonResponse
+    {
+        $comment = $this->resolveComment($id);
+        $comment->update(['pinned' => ! $comment->pinned]);
 
         return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
     }

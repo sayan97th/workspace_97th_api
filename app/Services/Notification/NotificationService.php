@@ -7,6 +7,7 @@ use App\Jobs\SendEmailJob;
 use App\Mail\Notifications\AssignedNotificationEmail;
 use App\Mail\Notifications\NotificationEmail;
 use App\Models\BoardItem;
+use App\Models\BoardNotificationMute;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -25,7 +26,9 @@ class NotificationService
      * `notifications.{user_id}` private channel, and queues an email for it,
      * each gated by `$recipient`'s own `notification_preferences` for this
      * `$type` (the `_app` and `_email` channel keys). No-ops entirely when
-     * `$actor` is notifying themselves.
+     * `$actor` is notifying themselves, or when `$recipient` has muted `$board`
+     * (see {@see BoardNotificationMute}) — checked ahead of the per-type gate,
+     * since muting a board is meant to silence every notification type for it.
      *
      * `$actor` is nullable to support system-generated notifications (e.g.
      * the websocket test broadcast); those never send email, since there's
@@ -47,6 +50,10 @@ class NotificationService
         ?BoardItem $board_item = null,
     ): ?Notification {
         if ($actor !== null && $recipient->id === $actor->id) {
+            return null;
+        }
+
+        if ($board !== null && BoardNotificationMute::where('user_id', $recipient->id)->where('board_id', $board->id)->exists()) {
             return null;
         }
 

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\BoardCommentAttachment;
+use App\Models\Notification;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -35,7 +36,7 @@ test('a comment can be posted with mentions and an attachment', function () {
     );
 
     $response->assertCreated()
-        ->assertJsonPath('comment.body', 'Please take a look @'.$mentioned->full_name)
+        ->assertJsonPath('comment.body', '<p>Please take a look @'.$mentioned->full_name.'</p>')
         ->assertJsonPath('comment.author.id', $user->id)
         ->assertJsonCount(1, 'comment.mentioned_user_ids')
         ->assertJsonCount(1, 'comment.attachments')
@@ -95,7 +96,7 @@ test('a reply can be posted under a top-level comment and is nested one level', 
     $index_response->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonCount(1, 'data.0.replies')
-        ->assertJsonPath('data.0.replies.0.body', 'Replying here');
+        ->assertJsonPath('data.0.replies.0.body', '<p>Replying here</p>');
 });
 
 test('replying to a reply is rejected', function () {
@@ -226,10 +227,10 @@ test('a comment can only be edited by its author', function () {
     );
 
     $response->assertOk()
-        ->assertJsonPath('comment.body', 'Edited update')
+        ->assertJsonPath('comment.body', '<p>Edited update</p>')
         ->assertJsonPath('comment.is_edited', true);
 
-    $this->assertDatabaseHas('board_comments', ['id' => $comment->id, 'body' => 'Edited update']);
+    $this->assertDatabaseHas('board_comments', ['id' => $comment->id, 'body' => '<p>Edited update</p>']);
 });
 
 test('editing a comment requires a non-empty body', function () {
@@ -294,4 +295,46 @@ test('a comment from another board is not reachable through this board', functio
     $this->actingAs($user, 'api')
         ->patchJson("/api/boards/{$board->id}/comments/{$comment->id}", ['body' => 'Hijacked'])
         ->assertNotFound();
+});
+
+test('an update can be pinned and unpinned', function () {
+    $board = createCommentTestBoard();
+    $author = User::factory()->create();
+    $comment = $board->comments()->create(['user_id' => $author->id, 'body' => 'Heads up']);
+
+    $this->actingAs($author, 'api')
+        ->postJson("/api/boards/{$board->id}/comments/{$comment->id}/pin")
+        ->assertOk()
+        ->assertJsonPath('comment.pinned', true);
+
+    $this->assertDatabaseHas('board_comments', ['id' => $comment->id, 'pinned' => true]);
+
+    $this->actingAs($author, 'api')
+        ->postJson("/api/boards/{$board->id}/comments/{$comment->id}/pin")
+        ->assertOk()
+        ->assertJsonPath('comment.pinned', false);
+});
+
+test('notifying someone directly on an update creates a Notification::TYPE_NOTIFIED row without mentioning them', function () {
+    $board = createCommentTestBoard();
+    $actor = User::factory()->create();
+    $notified = User::factory()->create();
+
+    $this->actingAs($actor, 'api')->post(
+        "/api/boards/{$board->id}/comments",
+        [
+            'body' => 'Please review this',
+            'notified_user_ids' => [$notified->id],
+        ],
+        ['Accept' => 'application/json']
+    )->assertCreated()
+        ->assertJsonCount(1, 'comment.notified_user_ids')
+        ->assertJsonCount(0, 'comment.mentioned_user_ids');
+
+    $this->assertDatabaseHas('board_comment_notifies', ['user_id' => $notified->id]);
+    $this->assertDatabaseHas('notifications', [
+        'user_id' => $notified->id,
+        'actor_id' => $actor->id,
+        'type' => Notification::TYPE_NOTIFIED,
+    ]);
 });

@@ -11,6 +11,7 @@ use App\Models\BoardComment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\CommentThreadActionsService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
@@ -18,6 +19,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Mews\Purifier\Facades\Purifier;
 
 /**
  * The board-wide discussion feed shown by `BoardDiscussionDrawer` on the
@@ -30,6 +32,7 @@ class BoardCommentController extends Controller
     public function __construct(
         private readonly NotificationService $notification_service,
         private readonly FeedService $feed_service,
+        private readonly CommentThreadActionsService $comment_actions,
     ) {}
 
     /**
@@ -48,7 +51,7 @@ class BoardCommentController extends Controller
             ->whereNull('parent_id')
             ->visibleNow()
             ->with($this->eagerLoads())
-            ->orderByDesc('created_at')
+            ->pinnedFirst()
             ->get();
 
         if ($user_id = $request->user()?->id) {
@@ -76,7 +79,7 @@ class BoardCommentController extends Controller
         $comment = $item->comments()->create([
             'parent_id' => $validated['parent_id'] ?? null,
             'user_id' => $request->user()?->id,
-            'body' => $validated['body'] ?? '',
+            'body' => Purifier::clean($validated['body'] ?? ''),
         ]);
 
         $mentioned_user_ids = collect($validated['mentioned_user_ids'] ?? [])->unique();
@@ -88,6 +91,18 @@ class BoardCommentController extends Controller
 
         if ($actor = $request->user()) {
             $this->notifyCommentCreated($item, $comment, $mentioned_user_ids, $actor);
+
+            $notified_user_ids = collect($validated['notified_user_ids'] ?? []);
+            if ($notified_user_ids->isNotEmpty()) {
+                $this->comment_actions->notifyDirect(
+                    comment: $comment,
+                    notified_user_ids: $notified_user_ids,
+                    actor: $actor,
+                    board: $item,
+                    link: "/boards/{$item->id}",
+                    action_target: sprintf('on the Board "%s"', $item->label),
+                );
+            }
         }
 
         $this->feed_service->broadcastUpdate(
@@ -130,10 +145,28 @@ class BoardCommentController extends Controller
         $this->ensureCommentBelongsToBoard($item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $comment->update(['body' => $request->validated('body'), 'edited_at' => now()]);
+        $comment->update(['body' => Purifier::clean($request->validated('body')), 'edited_at' => now()]);
 
         return response()->json([
             'message' => 'Update edited successfully.',
+            'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/comments/{comment}/pin
+     *
+     * Toggles whether the comment (or reply) is pinned — pinned updates sort
+     * ahead of the rest of the thread and the Update Feed.
+     */
+    public function togglePin(Request $request, WorkspaceNavigationItem $item, BoardComment $comment): JsonResponse
+    {
+        $this->ensureCommentBelongsToBoard($item, $comment);
+
+        $pinned = $this->comment_actions->togglePin($comment);
+
+        return response()->json([
+            'message' => $pinned ? 'Update pinned successfully.' : 'Update unpinned successfully.',
             'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
         ]);
     }
@@ -276,7 +309,7 @@ class BoardCommentController extends Controller
      */
     private function eagerLoads(): array
     {
-        $own = ['author', 'likes', 'reactions.user', 'views', 'mentions', 'attachments'];
+        $own = ['author', 'likes', 'reactions.user', 'views.user', 'mentions', 'notifiedUsers', 'attachments'];
 
         return [
             ...$own,

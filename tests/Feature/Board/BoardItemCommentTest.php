@@ -4,6 +4,7 @@ use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemCommentAttachment;
 use App\Models\BoardItemCommentReaction;
+use App\Models\Notification;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
@@ -40,7 +41,7 @@ test('a comment can be posted with mentions and an attachment', function () {
     );
 
     $response->assertCreated()
-        ->assertJsonPath('comment.body', 'Please take a look @'.$mentioned->full_name)
+        ->assertJsonPath('comment.body', '<p>Please take a look @'.$mentioned->full_name.'</p>')
         ->assertJsonPath('comment.author.id', $user->id)
         ->assertJsonCount(1, 'comment.mentioned_user_ids')
         ->assertJsonCount(1, 'comment.attachments')
@@ -101,7 +102,7 @@ test('a reply can be posted under a top-level comment and is nested one level', 
     $index_response->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonCount(1, 'data.0.replies')
-        ->assertJsonPath('data.0.replies.0.body', 'Replying here');
+        ->assertJsonPath('data.0.replies.0.body', '<p>Replying here</p>');
 });
 
 test('replying to a reply is rejected', function () {
@@ -262,10 +263,10 @@ test('a comment can only be edited by its author', function () {
     );
 
     $response->assertOk()
-        ->assertJsonPath('comment.body', 'Edited update')
+        ->assertJsonPath('comment.body', '<p>Edited update</p>')
         ->assertJsonPath('comment.is_edited', true);
 
-    $this->assertDatabaseHas('board_item_comments', ['id' => $comment->id, 'body' => 'Edited update']);
+    $this->assertDatabaseHas('board_item_comments', ['id' => $comment->id, 'body' => '<p>Edited update</p>']);
 });
 
 test('editing a comment requires a non-empty body', function () {
@@ -340,4 +341,58 @@ test('deleting a comment whose attachment file is already missing does not fail'
         ->assertOk();
 
     $this->assertSoftDeleted('board_item_comments', ['id' => $comment->id]);
+});
+
+test('a comment can be pinned and unpinned', function () {
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $comment = $item->comments()->create(['user_id' => $author->id, 'body' => 'Heads up']);
+
+    $this->actingAs($author, 'api')
+        ->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/pin")
+        ->assertOk()
+        ->assertJsonPath('comment.pinned', true);
+
+    $this->assertDatabaseHas('board_item_comments', ['id' => $comment->id, 'pinned' => true]);
+
+    $this->actingAs($author, 'api')
+        ->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/pin")
+        ->assertOk()
+        ->assertJsonPath('comment.pinned', false);
+});
+
+test('pinned comments are returned ahead of newer unpinned ones', function () {
+    $item = createCommentTestItem();
+    $author = User::factory()->create();
+    $older = $item->comments()->create(['user_id' => $author->id, 'body' => 'Older', 'pinned' => true]);
+    $item->comments()->create(['user_id' => $author->id, 'body' => 'Newer']);
+
+    $this->actingAs($author, 'api')
+        ->getJson("/api/boards/{$item->board_id}/items/{$item->id}/comments")
+        ->assertOk()
+        ->assertJsonPath('data.0.id', $older->id);
+});
+
+test('notifying someone directly on a comment creates a Notification::TYPE_NOTIFIED row without mentioning them', function () {
+    $item = createCommentTestItem();
+    $actor = User::factory()->create();
+    $notified = User::factory()->create();
+
+    $this->actingAs($actor, 'api')->post(
+        "/api/boards/{$item->board_id}/items/{$item->id}/comments",
+        [
+            'body' => 'Please review this',
+            'notified_user_ids' => [$notified->id],
+        ],
+        ['Accept' => 'application/json']
+    )->assertCreated()
+        ->assertJsonCount(1, 'comment.notified_user_ids')
+        ->assertJsonCount(0, 'comment.mentioned_user_ids');
+
+    $this->assertDatabaseHas('board_item_comment_notifies', ['user_id' => $notified->id]);
+    $this->assertDatabaseHas('notifications', [
+        'user_id' => $notified->id,
+        'actor_id' => $actor->id,
+        'type' => Notification::TYPE_NOTIFIED,
+    ]);
 });

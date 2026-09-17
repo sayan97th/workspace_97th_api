@@ -240,6 +240,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
+     * Boards this user has muted notifications for.
+     *
+     * @return HasMany<BoardNotificationMute, $this>
+     */
+    public function boardNotificationMutes(): HasMany
+    {
+        return $this->hasMany(BoardNotificationMute::class);
+    }
+
+    /**
      * Send the password reset notification.
      *
      * Overrides the framework default (which fires the stock

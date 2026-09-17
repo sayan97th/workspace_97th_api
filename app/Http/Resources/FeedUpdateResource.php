@@ -84,6 +84,7 @@ class FeedUpdateResource extends JsonResource
             'is_mentioned' => $viewer_id !== null && $comment->mentions->contains('user_id', $viewer_id),
             'is_bookmarked' => $viewer_id !== null && $comment->bookmarks->contains('user_id', $viewer_id),
             'mentioned_user_ids' => $comment->mentions->pluck('user_id')->values(),
+            'pinned' => $comment->pinned,
         ];
     }
 

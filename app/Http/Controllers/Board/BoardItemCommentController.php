@@ -12,6 +12,7 @@ use App\Models\BoardItemComment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\CommentThreadActionsService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Http\JsonResponse;
@@ -19,12 +20,14 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Mews\Purifier\Facades\Purifier;
 
 class BoardItemCommentController extends Controller
 {
     public function __construct(
         private readonly NotificationService $notification_service,
         private readonly FeedService $feed_service,
+        private readonly CommentThreadActionsService $comment_actions,
     ) {}
 
     /**
@@ -41,7 +44,7 @@ class BoardItemCommentController extends Controller
             ->whereNull('parent_id')
             ->visibleNow()
             ->with($this->eagerLoads())
-            ->orderByDesc('created_at')
+            ->pinnedFirst()
             ->get();
 
         return response()->json([
@@ -63,7 +66,7 @@ class BoardItemCommentController extends Controller
         $comment = $board_item->comments()->create([
             'parent_id' => $validated['parent_id'] ?? null,
             'user_id' => $request->user()?->id,
-            'body' => $validated['body'] ?? '',
+            'body' => Purifier::clean($validated['body'] ?? ''),
         ]);
 
         $mentioned_user_ids = collect($validated['mentioned_user_ids'] ?? [])->unique();
@@ -75,6 +78,19 @@ class BoardItemCommentController extends Controller
 
         if ($actor = $request->user()) {
             $this->notifyCommentCreated($item, $board_item, $comment, $mentioned_user_ids, $actor);
+
+            $notified_user_ids = collect($validated['notified_user_ids'] ?? []);
+            if ($notified_user_ids->isNotEmpty()) {
+                $this->comment_actions->notifyDirect(
+                    comment: $comment,
+                    notified_user_ids: $notified_user_ids,
+                    actor: $actor,
+                    board: $item,
+                    link: "/boards/{$item->id}/pulses/{$board_item->id}",
+                    action_target: sprintf('on "%s"', $board_item->name),
+                    board_item: $board_item,
+                );
+            }
         }
 
         $this->feed_service->broadcastUpdate(
@@ -118,10 +134,29 @@ class BoardItemCommentController extends Controller
         $this->ensureCommentBelongsToItem($board_item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $comment->update(['body' => $request->validated('body'), 'edited_at' => now()]);
+        $comment->update(['body' => Purifier::clean($request->validated('body')), 'edited_at' => now()]);
 
         return response()->json([
             'message' => 'Comment updated successfully.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/items/{board_item}/comments/{comment}/pin
+     *
+     * Toggles whether the comment (or reply) is pinned — pinned updates sort
+     * ahead of the rest of the thread and the Update Feed.
+     */
+    public function togglePin(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+
+        $pinned = $this->comment_actions->togglePin($comment);
+
+        return response()->json([
+            'message' => $pinned ? 'Comment pinned successfully.' : 'Comment unpinned successfully.',
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
         ]);
     }
@@ -268,7 +303,7 @@ class BoardItemCommentController extends Controller
      */
     private function eagerLoads(): array
     {
-        $own = ['author', 'likes', 'reactions.user', 'views', 'mentions', 'attachments'];
+        $own = ['author', 'likes', 'reactions.user', 'views.user', 'mentions', 'notifiedUsers', 'attachments'];
 
         return [
             ...$own,

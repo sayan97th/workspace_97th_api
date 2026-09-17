@@ -22,6 +22,7 @@ class NotificationResource extends JsonResource
     private const CATEGORY_MAP = [
         Notification::TYPE_MENTIONED => 'mentioned',
         Notification::TYPE_ASSIGNED => 'assigned',
+        Notification::TYPE_NOTIFIED => 'assigned',
     ];
 
     /**

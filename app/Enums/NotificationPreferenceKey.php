@@ -15,6 +15,7 @@ enum NotificationPreferenceKey: string
     case RepliedThread = 'replied_thread';
     case RepliedUpdate = 'replied_update';
     case Reactions = 'reactions';
+    case Notified = 'notified';
     case Assigned = 'assigned';
     case Invitations = 'invitations';
     case TemplateChanges = 'template_changes';

@@ -39,6 +39,16 @@ class BoardItemCommentResource extends JsonResource
             'liked_by_me' => $this->likes->contains('user_id', $current_user_id),
             'view_count' => $this->views->count(),
             'seen_by_me' => $this->views->contains('user_id', $current_user_id),
+            'seen_by' => $this->views
+                ->filter(fn ($view) => $view->user !== null)
+                ->map(fn ($view) => [
+                    'id' => $view->user->id,
+                    'full_name' => $view->user->full_name,
+                    'profile_photo_url' => $view->user->profile_photo_url,
+                ])
+                ->values(),
+            'pinned' => $this->pinned,
+            'notified_user_ids' => $this->notifiedUsers->pluck('user_id')->values(),
             'reactions' => $this->reactions
                 ->groupBy('emoji')
                 ->map(fn ($group, $emoji) => [

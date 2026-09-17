@@ -27,6 +27,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $link
  * @property bool $is_read
  * @property Carbon|null $read_at
+ * @property Carbon|null $dismissed_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read User $user
@@ -34,7 +35,7 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem|null $board
  * @property-read BoardItem|null $boardItem
  */
-#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at'])]
+#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at'])]
 class Notification extends Model
 {
     use HasFactory;
@@ -48,6 +49,13 @@ class Notification extends Model
     public const TYPE_REPLIED_UPDATE = 'replied_update';
 
     public const TYPE_REACTIONS = 'reactions';
+
+    /**
+     * Sent by the comment composer's "Notify" action — a direct call-out to
+     * someone without `@mentioning` them inline, see
+     * {@see \App\Services\Board\CommentThreadActionsService::notifyDirect()}.
+     */
+    public const TYPE_NOTIFIED = 'notified';
 
     /**
      * Sent by a {@see BoardAutomation}'s `notify_person` action.
@@ -80,6 +88,7 @@ class Notification extends Model
         return [
             'is_read' => 'boolean',
             'read_at' => 'datetime',
+            'dismissed_at' => 'datetime',
         ];
     }
 
