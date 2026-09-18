@@ -23,7 +23,7 @@ return new class extends Migration
             $table->date('ran_on');
             $table->timestamps();
 
-            $table->unique(['column_id', 'board_item_id', 'ran_on']);
+            $table->unique(['column_id', 'board_item_id', 'ran_on'], 'board_due_date_reminder_runs_unique');
         });
     }
 
