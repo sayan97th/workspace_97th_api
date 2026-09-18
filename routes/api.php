@@ -52,6 +52,7 @@ use App\Http\Controllers\Profile\NotificationPreferenceController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
+use App\Http\Controllers\Profile\SidebarPreferenceController;
 use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Controllers\Profile\WorkingStatusController;
 use App\Http\Controllers\Workspace\BoardController;
@@ -170,6 +171,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::patch('working-status', [WorkingStatusController::class, 'update']);
         Route::patch('notifications', [NotificationPreferenceController::class, 'update']);
         Route::patch('locale', [LocalePreferenceController::class, 'update']);
+        Route::patch('sidebar', [SidebarPreferenceController::class, 'update']);
 
         Route::get('sessions', [UserSessionController::class, 'index']);
         Route::delete('sessions/{session}', [UserSessionController::class, 'destroy']);

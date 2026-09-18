@@ -51,6 +51,10 @@ class ProfileResource extends JsonResource
             'date_format' => $this->date_format,
             'first_day_of_week' => $this->first_day_of_week,
 
+            // Null until the viewer has dragged the sidebar's resize handle at least
+            // once, `AppSidebar` falls back to its own default width until then.
+            'sidebar_width' => $this->sidebar_width,
+
             // Lets the frontend switcher restore this workspace on load instead
             // of always defaulting to the home workspace.
             'last_active_workspace_id' => $this->last_active_workspace_id,

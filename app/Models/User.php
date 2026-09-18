@@ -50,6 +50,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string $time_format
  * @property string $date_format
  * @property string $first_day_of_week
+ * @property int|null $sidebar_width
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
@@ -76,7 +77,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
     'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'last_active_workspace_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
     'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
     'notification_preferences', 'desktop_notifications_enabled',
-    'language', 'time_format', 'date_format', 'first_day_of_week',
+    'language', 'time_format', 'date_format', 'first_day_of_week', 'sidebar_width',
 ])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 #[Appends(['full_name', 'profile_photo_url'])]
