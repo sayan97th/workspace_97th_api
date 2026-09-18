@@ -36,7 +36,7 @@ test('a comment can be posted with mentions and an attachment', function () {
     );
 
     $response->assertCreated()
-        ->assertJsonPath('comment.body', '<p>Please take a look @'.$mentioned->full_name.'</p>')
+        ->assertJsonPath('comment.body', 'Please take a look @'.$mentioned->full_name)
         ->assertJsonPath('comment.author.id', $user->id)
         ->assertJsonCount(1, 'comment.mentioned_user_ids')
         ->assertJsonCount(1, 'comment.attachments')
@@ -96,7 +96,7 @@ test('a reply can be posted under a top-level comment and is nested one level', 
     $index_response->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonCount(1, 'data.0.replies')
-        ->assertJsonPath('data.0.replies.0.body', '<p>Replying here</p>');
+        ->assertJsonPath('data.0.replies.0.body', 'Replying here');
 });
 
 test('replying to a reply is rejected', function () {
@@ -227,10 +227,10 @@ test('a comment can only be edited by its author', function () {
     );
 
     $response->assertOk()
-        ->assertJsonPath('comment.body', '<p>Edited update</p>')
+        ->assertJsonPath('comment.body', 'Edited update')
         ->assertJsonPath('comment.is_edited', true);
 
-    $this->assertDatabaseHas('board_comments', ['id' => $comment->id, 'body' => '<p>Edited update</p>']);
+    $this->assertDatabaseHas('board_comments', ['id' => $comment->id, 'body' => 'Edited update']);
 });
 
 test('editing a comment requires a non-empty body', function () {

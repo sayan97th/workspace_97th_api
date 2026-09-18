@@ -20,7 +20,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Mews\Purifier\Facades\Purifier;
 
 class BoardItemCommentController extends Controller
 {
@@ -66,7 +65,7 @@ class BoardItemCommentController extends Controller
         $comment = $board_item->comments()->create([
             'parent_id' => $validated['parent_id'] ?? null,
             'user_id' => $request->user()?->id,
-            'body' => Purifier::clean($validated['body'] ?? ''),
+            'body' => trim($validated['body'] ?? ''),
         ]);
 
         $mentioned_user_ids = collect($validated['mentioned_user_ids'] ?? [])->unique();
@@ -134,7 +133,7 @@ class BoardItemCommentController extends Controller
         $this->ensureCommentBelongsToItem($board_item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $comment->update(['body' => Purifier::clean($request->validated('body')), 'edited_at' => now()]);
+        $comment->update(['body' => trim($request->validated('body')), 'edited_at' => now()]);
 
         return response()->json([
             'message' => 'Comment updated successfully.',
