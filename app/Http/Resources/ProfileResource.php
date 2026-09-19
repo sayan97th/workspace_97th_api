@@ -45,6 +45,10 @@ class ProfileResource extends JsonResource
 
             'notification_preferences' => $this->notification_preferences ?? [],
             'desktop_notifications_enabled' => $this->desktop_notifications_enabled,
+            'quiet_hours_enabled' => (bool) $this->quiet_hours_enabled,
+            'quiet_hours_start' => $this->quiet_hours_start ?? '22:00',
+            'quiet_hours_end' => $this->quiet_hours_end ?? '07:00',
+            'email_digest_frequency' => $this->email_digest_frequency ?? 'off',
 
             'language' => $this->language,
             'time_format' => $this->time_format,

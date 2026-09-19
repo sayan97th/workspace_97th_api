@@ -14,6 +14,7 @@ use App\Services\Notification\NotificationService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -27,43 +28,60 @@ use Illuminate\Support\Collection;
  */
 class FeedUpdateController extends Controller
 {
+    private const PAGE_SIZE = 20;
+
+    private const MAX_PAGE_SIZE = 50;
+
+    /** Pinned updates are always shown first, so the first page loads at most this many. */
+    private const MAX_PINNED = 50;
+
+    /** Tie-break order between the two comment tables when two rows share a `created_at`. */
+    private const KIND_RANK = ['ic' => 2, 'bc' => 1];
+
     public function __construct(
         private readonly NotificationService $notification_service,
         private readonly FeedService $feed_service,
     ) {}
 
     /**
-     * GET /api/feed/updates?tab=all|mentioned|bookmarked|account|scheduled&board_id=
+     * GET /api/feed/updates?tab=all|mentioned|bookmarked|account|scheduled&board_id=&cursor=&limit=
      *
-     * Newest 50 updates (comments + replies, item- and board-level merged)
-     * matching the tab, newest first. Mirrors `NotificationController::index()`'s
-     * flat `limit(50)` — no cursor pagination, same simplicity tradeoff.
+     * One cursor-paginated page of updates (comments + replies, item- and
+     * board-level merged) matching the tab, newest first. The first page also
+     * carries every pinned update ahead of the newest ones, later pages hold
+     * only unpinned updates older than the cursor, so paging never repeats a
+     * pinned card. The scheduled tab is small and never paginated.
      */
     public function index(Request $request): JsonResponse
     {
-        $tab = (string) $request->query('tab', 'all');
+        $validated = $request->validate([
+            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account,scheduled'],
+            'board_id' => ['sometimes', 'integer'],
+            'cursor' => ['sometimes', 'nullable', 'string', 'max:200'],
+            'limit' => ['sometimes', 'integer', 'min:1', 'max:'.self::MAX_PAGE_SIZE],
+        ]);
+
+        $tab = $validated['tab'] ?? 'all';
         $board_id = $request->integer('board_id') ?: null;
         $user = $request->user();
 
         if ($tab === 'scheduled') {
-            $item_comments = BoardItemComment::query()->scheduledBy($user->id)
-                ->when($board_id, fn (Builder $q) => $q->whereHas('item.board', fn (Builder $bq) => $bq->where('id', $board_id)))
-                ->with($this->itemLoads())->get();
-            $board_comments = BoardComment::query()->scheduledBy($user->id)
-                ->when($board_id, fn (Builder $q) => $q->whereHas('board', fn (Builder $bq) => $bq->where('id', $board_id)))
-                ->with($this->boardLoads())->get();
-        } else {
-            $item_comments = $this->scopedQuery(BoardItemComment::class, $user, $tab, $board_id)->with($this->itemLoads())->get();
-            $board_comments = $this->scopedQuery(BoardComment::class, $user, $tab, $board_id)->with($this->boardLoads())->get();
+            return $this->respondWithPage($this->scheduledUpdates($user, $board_id), null);
         }
 
-        $data = $item_comments->concat($board_comments)
-            ->sortBy([['pinned', 'desc'], ['created_at', 'desc']])
-            ->take(50)
-            ->map(fn ($comment) => new FeedUpdateResource($comment))
-            ->values();
+        $limit = $validated['limit'] ?? self::PAGE_SIZE;
+        $cursor = $this->decodeCursor($validated['cursor'] ?? null);
 
-        return response()->json(['data' => $data]);
+        $pinned = $cursor === null ? $this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED) : collect();
+        $rows = $this->fetchUpdates($user, $tab, $board_id, false, $cursor, $limit + 1);
+
+        $has_more = $rows->count() > $limit;
+        $rows = $rows->take($limit);
+
+        return $this->respondWithPage(
+            $pinned->concat($rows),
+            $has_more && $rows->isNotEmpty() ? $this->encodeCursor($rows->last()) : null,
+        );
     }
 
     /**
@@ -123,6 +141,30 @@ class FeedUpdateController extends Controller
         ]]);
 
         return response()->json(['data' => $all_boards_row->concat($rows)]);
+    }
+
+    /**
+     * GET /api/feed/boards/{board}/people
+     *
+     * The workspace members that can be `@mentioned` in a reply to an update
+     * on `{board}`, for the feed card's reply composer (the item drawer gets
+     * the same roster from its board's own people list).
+     */
+    public function people(Request $request, WorkspaceNavigationItem $board): JsonResponse
+    {
+        abort_unless($request->user()->workspaces()->where('workspaces.id', $board->workspace_id)->exists(), 403);
+
+        $people = $board->workspace->users()
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->get()
+            ->map(fn (User $person) => [
+                'id' => $person->id,
+                'name' => $person->full_name,
+                'avatar_url' => $person->profile_photo_url,
+            ]);
+
+        return response()->json(['data' => $people]);
     }
 
     /**
@@ -223,7 +265,7 @@ class FeedUpdateController extends Controller
         $comment = $this->resolveComment($id);
         $validated = $request->validate([
             'body' => ['required', 'string', 'max:5000'],
-            'mentioned_user_ids' => ['sometimes', 'array'],
+            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
         ]);
 
@@ -246,7 +288,7 @@ class FeedUpdateController extends Controller
         $comment = $this->resolveComment($id);
         $validated = $request->validate([
             'body' => ['required', 'string', 'max:5000'],
-            'mentioned_user_ids' => ['sometimes', 'array'],
+            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
             'scheduled_at' => ['required', 'date', 'after:now'],
         ]);
@@ -254,6 +296,135 @@ class FeedUpdateController extends Controller
         $reply = $this->createReply($comment, $validated, $validated['scheduled_at']);
 
         return response()->json(['data' => new FeedUpdateResource($this->refreshed($reply))], 201);
+    }
+
+    /**
+     * @param  Collection<int, BoardItemComment|BoardComment>  $comments
+     */
+    private function respondWithPage(Collection $comments, ?string $next_cursor): JsonResponse
+    {
+        return response()->json([
+            'data' => $comments->map(fn ($comment) => new FeedUpdateResource($comment))->values(),
+            'meta' => ['next_cursor' => $next_cursor, 'has_more' => $next_cursor !== null],
+        ]);
+    }
+
+    /**
+     * Every update the viewer scheduled for later, soonest first, from both
+     * comment tables.
+     *
+     * @return Collection<int, BoardItemComment|BoardComment>
+     */
+    private function scheduledUpdates(User $user, ?int $board_id): Collection
+    {
+        $item_comments = BoardItemComment::query()->scheduledBy($user->id)
+            ->when($board_id, fn (Builder $q) => $q->whereHas('item.board', fn (Builder $bq) => $bq->where('id', $board_id)))
+            ->with($this->itemLoads())->get();
+        $board_comments = BoardComment::query()->scheduledBy($user->id)
+            ->when($board_id, fn (Builder $q) => $q->whereHas('board', fn (Builder $bq) => $bq->where('id', $board_id)))
+            ->with($this->boardLoads())->get();
+
+        return $item_comments->concat($board_comments)->sortByDesc('created_at')->values();
+    }
+
+    /**
+     * The next `$take` updates of the requested tab from both comment tables,
+     * merged and ordered newest first (`created_at`, then table, then id, the
+     * same order {@see decodeCursor()} resumes from).
+     *
+     * @param  array{timestamp: int, kind: string, id: int}|null  $cursor
+     * @return Collection<int, BoardItemComment|BoardComment>
+     */
+    private function fetchUpdates(User $user, string $tab, ?int $board_id, bool $pinned, ?array $cursor, int $take): Collection
+    {
+        $merged = collect();
+
+        foreach (['ic' => BoardItemComment::class, 'bc' => BoardComment::class] as $kind => $model_class) {
+            $rows = $this->scopedQuery($model_class, $user, $tab, $board_id)
+                ->where('pinned', $pinned)
+                ->when($cursor, fn (Builder $q) => $this->applyCursor($q, $kind, $cursor))
+                ->with($kind === 'ic' ? $this->itemLoads() : $this->boardLoads())
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->limit($take)
+                ->get();
+
+            $merged = $merged->concat($rows);
+        }
+
+        return $merged
+            ->sort(fn ($a, $b) => $this->sortKey($b) <=> $this->sortKey($a))
+            ->take($take)
+            ->values();
+    }
+
+    /**
+     * Keeps only the rows that sort after `$cursor` in the (created_at, table,
+     * id) order, so a page boundary never skips or repeats a row even when two
+     * updates share the same second.
+     *
+     * @param  Builder<BoardItemComment>|Builder<BoardComment>  $query
+     * @param  array{timestamp: int, kind: string, id: int}  $cursor
+     * @return Builder<BoardItemComment>|Builder<BoardComment>
+     */
+    private function applyCursor(Builder $query, string $kind, array $cursor): Builder
+    {
+        $cursor_time = Carbon::createFromTimestamp($cursor['timestamp'], config('app.timezone'));
+        $rank = self::KIND_RANK[$kind];
+        $cursor_rank = self::KIND_RANK[$cursor['kind']];
+
+        return $query->where(function (Builder $q) use ($cursor_time, $rank, $cursor_rank, $cursor) {
+            $q->where('created_at', '<', $cursor_time);
+
+            if ($rank < $cursor_rank) {
+                $q->orWhere('created_at', $cursor_time);
+            } elseif ($rank === $cursor_rank) {
+                $q->orWhere(fn (Builder $tie) => $tie->where('created_at', $cursor_time)->where('id', '<', $cursor['id']));
+            }
+        });
+    }
+
+    /**
+     * @return array{0: int, 1: int, 2: int}
+     */
+    private function sortKey(BoardItemComment|BoardComment $comment): array
+    {
+        $kind = $comment instanceof BoardItemComment ? 'ic' : 'bc';
+
+        return [$comment->created_at?->getTimestamp() ?? 0, self::KIND_RANK[$kind], $comment->id];
+    }
+
+    private function encodeCursor(BoardItemComment|BoardComment $comment): string
+    {
+        return rtrim(strtr(base64_encode(json_encode([
+            'timestamp' => $comment->created_at?->getTimestamp() ?? 0,
+            'kind' => $comment instanceof BoardItemComment ? 'ic' : 'bc',
+            'id' => $comment->id,
+        ], JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+    }
+
+    /**
+     * @return array{timestamp: int, kind: string, id: int}|null
+     */
+    private function decodeCursor(?string $cursor): ?array
+    {
+        if ($cursor === null || $cursor === '') {
+            return null;
+        }
+
+        $decoded = json_decode((string) base64_decode(strtr($cursor, '-_', '+/'), true), true);
+
+        abort_unless(
+            is_array($decoded)
+                && isset($decoded['timestamp'], $decoded['id'], $decoded['kind'])
+                && is_int($decoded['timestamp'])
+                && is_int($decoded['id'])
+                && isset(self::KIND_RANK[$decoded['kind']]),
+            422,
+            'The feed cursor is invalid.'
+        );
+
+        return $decoded;
     }
 
     /**
@@ -327,7 +498,7 @@ class FeedUpdateController extends Controller
      */
     private function itemLoads(): array
     {
-        return ['author', 'mentions', 'bookmarks', 'views', 'item.board.parent'];
+        return ['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent'];
     }
 
     /**
@@ -335,7 +506,7 @@ class FeedUpdateController extends Controller
      */
     private function boardLoads(): array
     {
-        return ['author', 'mentions', 'bookmarks', 'views', 'board.parent'];
+        return ['author', 'mentions.user', 'bookmarks', 'views', 'board.parent'];
     }
 
     /**

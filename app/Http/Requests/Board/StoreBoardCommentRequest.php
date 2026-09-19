@@ -34,7 +34,7 @@ class StoreBoardCommentRequest extends FormRequest
                     fn ($query) => $query->where('board_id', $board_id)->whereNull('parent_id')
                 ),
             ],
-            'mentioned_user_ids' => ['sometimes', 'array'],
+            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
             // People explicitly flagged via the composer's "Notify" action —
             // distinct from `mentioned_user_ids` (never shown inline in the body).

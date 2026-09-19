@@ -16,7 +16,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `renderMentionText()`, the same helper board comment threads already use,
  * so this resource does not re-implement segment parsing.
  *
- * Expects `author`, `mentions`, `bookmarks`, `views` and (for
+ * Expects `author`, `mentions.user`, `bookmarks`, `views` and (for
  * `BoardItemComment`) `item.board.parent` — or (for `BoardComment`)
  * `board.parent` — eager-loaded by the caller. Reads directly off the
  * underlying model (rather than through `JsonResource`'s magic `$this->`
@@ -67,6 +67,7 @@ class FeedUpdateResource extends JsonResource
             'actor' => [
                 'id' => $comment->author?->id,
                 'name' => $comment->author !== null ? $comment->author->full_name : __('Deleted user'),
+                'avatar_url' => $comment->author?->profile_photo_url,
             ],
             'body' => $comment->body,
             'created_at' => $comment->created_at,
@@ -84,6 +85,15 @@ class FeedUpdateResource extends JsonResource
             'is_mentioned' => $viewer_id !== null && $comment->mentions->contains('user_id', $viewer_id),
             'is_bookmarked' => $viewer_id !== null && $comment->bookmarks->contains('user_id', $viewer_id),
             'mentioned_user_ids' => $comment->mentions->pluck('user_id')->values(),
+            // Names for the hover cards over each `@mention` in the body.
+            'mentions' => $comment->mentions
+                ->filter(fn ($mention) => $mention->user !== null)
+                ->map(fn ($mention) => [
+                    'id' => $mention->user_id,
+                    'name' => $mention->user->full_name,
+                    'avatar_url' => $mention->user->profile_photo_url,
+                ])
+                ->values(),
             'pinned' => $comment->pinned,
         ];
     }

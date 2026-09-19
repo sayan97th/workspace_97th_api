@@ -105,7 +105,7 @@ class BoardCommentController extends Controller
         }
 
         $this->feed_service->broadcastUpdate(
-            $comment->fresh(['author', 'mentions', 'bookmarks', 'views', 'board.parent']),
+            $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'board.parent']),
             $item,
             $comment->parent?->author,
         );

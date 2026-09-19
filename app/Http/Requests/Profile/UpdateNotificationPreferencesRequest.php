@@ -2,9 +2,11 @@
 
 namespace App\Http\Requests\Profile;
 
+use App\Enums\EmailDigestFrequency;
 use App\Enums\NotificationPreferenceKey;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateNotificationPreferencesRequest extends FormRequest
 {
@@ -30,6 +32,10 @@ class UpdateNotificationPreferencesRequest extends FormRequest
             ],
             'preferences.*' => ['boolean'],
             'desktop_notifications_enabled' => ['sometimes', 'boolean'],
+            'quiet_hours_enabled' => ['sometimes', 'boolean'],
+            'quiet_hours_start' => ['sometimes', 'date_format:H:i'],
+            'quiet_hours_end' => ['sometimes', 'date_format:H:i'],
+            'email_digest_frequency' => ['sometimes', Rule::enum(EmailDigestFrequency::class)],
         ];
     }
 }

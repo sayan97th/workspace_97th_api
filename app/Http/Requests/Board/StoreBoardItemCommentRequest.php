@@ -34,7 +34,9 @@ class StoreBoardItemCommentRequest extends FormRequest
                     fn ($query) => $query->where('item_id', $item_id)->whereNull('parent_id')
                 ),
             ],
-            'mentioned_user_ids' => ['sometimes', 'array'],
+            // Capped so a group mention such as `@Everyone` (expanded to its members' ids by the
+            // client) can't fan out into an unbounded number of notifications.
+            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
             // People explicitly flagged via the composer's "Notify" action —
             // distinct from `mentioned_user_ids` (never shown inline in the body).

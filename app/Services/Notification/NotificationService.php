@@ -33,6 +33,9 @@ class NotificationService
      * (see {@see BoardNotificationMute}) — checked ahead of the per-type gate,
      * since muting a board is meant to silence every notification type for it.
      *
+     * While the recipient's quiet hours are active ({@see User::isInQuietHours()})
+     * only the in-app notification is created, no email or Slack message goes out.
+     *
      * A Slack direct message is sent as a third channel, gated by the recipient's
      * `<type>_slack` preference and by whether they linked their Slack account, see
      * {@see SlackNotifier::deliverNotification()}.
@@ -84,6 +87,13 @@ class NotificationService
 
         broadcast(new NewNotification($notification));
 
+        // Do Not Disturb keeps the notification in the bell, but stops every
+        // channel that would interrupt the recipient (email, Slack, and the
+        // toast/desktop push the websocket payload's `is_silenced` flag gates).
+        if ($recipient->isInQuietHours()) {
+            return $notification;
+        }
+
         if ($actor !== null && ($preferences["{$type}_email"] ?? true) !== false) {
             $notification->load(['boardItem.group.boardView', 'boardItem.board.workspace']);
 
@@ -97,5 +107,31 @@ class NotificationService
         $this->slack_notifier->deliverNotification($notification, $recipient);
 
         return $notification;
+    }
+
+    /**
+     * Brings back every snoozed notification whose time has come: clears the
+     * snooze, flags it unread again and broadcasts it like a fresh one, so an
+     * open bell shows it right away. Run every minute by
+     * `notifications:wake-snoozed` (see routes/console.php). It keeps its
+     * original `created_at`, so after a reload it sits where it always did in
+     * the list, only the live push and the unread dot resurface it.
+     */
+    public function wakeSnoozed(): int
+    {
+        $due = Notification::query()
+            ->whereNull('dismissed_at')
+            ->whereNotNull('snoozed_until')
+            ->where('snoozed_until', '<=', now())
+            ->with(['actor', 'board', 'user'])
+            ->get();
+
+        foreach ($due as $notification) {
+            $notification->update(['snoozed_until' => null, 'is_read' => false, 'read_at' => null]);
+
+            broadcast(new NewNotification($notification));
+        }
+
+        return $due->count();
     }
 }

@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Services\Board\CommentThreadActionsService;
+use App\Services\Board\DueDateReminderService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -28,6 +30,7 @@ use Illuminate\Support\Carbon;
  * @property bool $is_read
  * @property Carbon|null $read_at
  * @property Carbon|null $dismissed_at
+ * @property Carbon|null $snoozed_until
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read User $user
@@ -35,7 +38,7 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem|null $board
  * @property-read BoardItem|null $boardItem
  */
-#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at'])]
+#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until'])]
 class Notification extends Model
 {
     use HasFactory;
@@ -53,7 +56,7 @@ class Notification extends Model
     /**
      * Sent by the comment composer's "Notify" action — a direct call-out to
      * someone without `@mentioning` them inline, see
-     * {@see \App\Services\Board\CommentThreadActionsService::notifyDirect()}.
+     * {@see CommentThreadActionsService::notifyDirect()}.
      */
     public const TYPE_NOTIFIED = 'notified';
 
@@ -67,7 +70,7 @@ class Notification extends Model
     public const TYPE_AUTOMATION = 'automations_notify';
 
     /**
-     * Sent by {@see \App\Services\Board\DueDateReminderService} to every
+     * Sent by {@see DueDateReminderService} to every
      * person assigned in a People column on an item whose Date column has a
      * reminder configured and is due today. No `actor_id` (system-generated,
      * like {@see self::TYPE_TEST}).
@@ -81,6 +84,20 @@ class Notification extends Model
     public const TYPE_TEST = 'test';
 
     /**
+     * The bell drawer's filter tabs and the notification types each one
+     * groups. A type missing here (automations, due dates, tests) only shows
+     * up under "All", and reports the `subscribed` category.
+     *
+     * @var array<string, array<int, string>>
+     */
+    public const CATEGORY_TYPES = [
+        'mentioned' => [self::TYPE_MENTIONED],
+        'assigned' => [self::TYPE_ASSIGNED, self::TYPE_NOTIFIED],
+        'replies' => [self::TYPE_REPLIED_THREAD, self::TYPE_REPLIED_UPDATE],
+        'reactions' => [self::TYPE_REACTIONS],
+    ];
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
@@ -89,6 +106,7 @@ class Notification extends Model
             'is_read' => 'boolean',
             'read_at' => 'datetime',
             'dismissed_at' => 'datetime',
+            'snoozed_until' => 'datetime',
         ];
     }
 
@@ -144,8 +162,64 @@ class Notification extends Model
         return $query->where('is_read', false);
     }
 
+    /**
+     * Notifications the bell should list: not dismissed, and not snoozed
+     * (a snooze that has already elapsed no longer hides the row).
+     *
+     * @param  Builder<Notification>  $query
+     * @return Builder<Notification>
+     */
+    public function scopeVisible(Builder $query): Builder
+    {
+        return $query
+            ->whereNull('dismissed_at')
+            ->where(fn (Builder $inner) => $inner->whereNull('snoozed_until')->orWhere('snoozed_until', '<=', now()));
+    }
+
+    /**
+     * Keeps only the notification types that belong to a filter tab, see
+     * {@see self::CATEGORY_TYPES}. An unknown category leaves the query untouched.
+     *
+     * @param  Builder<Notification>  $query
+     * @return Builder<Notification>
+     */
+    public function scopeInCategory(Builder $query, string $category): Builder
+    {
+        return isset(self::CATEGORY_TYPES[$category])
+            ? $query->whereIn('type', self::CATEGORY_TYPES[$category])
+            : $query;
+    }
+
+    /**
+     * The filter tab a stored `type` reports, `subscribed` when it has none.
+     */
+    public static function categoryOf(string $type): string
+    {
+        foreach (self::CATEGORY_TYPES as $category => $types) {
+            if (in_array($type, $types, true)) {
+                return $category;
+            }
+        }
+
+        return 'subscribed';
+    }
+
     public function markAsRead(): void
     {
         $this->update(['is_read' => true, 'read_at' => now()]);
+    }
+
+    public function markAsUnread(): void
+    {
+        $this->update(['is_read' => false, 'read_at' => null]);
+    }
+
+    /**
+     * Hides the notification until `$until`, when `notifications:wake-snoozed`
+     * brings it back as unread.
+     */
+    public function snoozeUntil(Carbon $until): void
+    {
+        $this->update(['snoozed_until' => $until]);
     }
 }

@@ -51,6 +51,7 @@ use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
 use App\Http\Controllers\Integration\SlackOAuthCallbackController;
 use App\Http\Controllers\Notification\NotificationController;
+use App\Http\Controllers\People\PersonCardController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
 use App\Http\Controllers\Profile\PasswordController;
@@ -143,17 +144,26 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Notifications — real-time (Reverb) + REST-readable notification feed.
     Route::prefix('notifications')->group(function () {
         Route::get('/', [NotificationController::class, 'index']);
+        Route::get('filters', [NotificationController::class, 'filters']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
         Route::patch('read-all', [NotificationController::class, 'markAllAsRead']);
         Route::patch('{notification}/read', [NotificationController::class, 'markAsRead']);
+        Route::patch('{notification}/unread', [NotificationController::class, 'markAsUnread']);
+        Route::patch('{notification}/snooze', [NotificationController::class, 'snooze']);
+        Route::delete('{notification}/snooze', [NotificationController::class, 'unsnooze']);
         Route::delete('{notification}', [NotificationController::class, 'dismiss']);
     });
+
+    // Profile card shown when hovering a mention or avatar, limited to people
+    // who share a workspace with the viewer.
+    Route::get('people/{user}/card', [PersonCardController::class, 'show']);
 
     // Update Feed — real-time (Reverb) + REST-readable stream of comment
     // "updates" (item- and board-level) the current user has visibility on.
     Route::prefix('feed')->group(function () {
         Route::get('updates', [FeedUpdateController::class, 'index']);
         Route::get('boards', [FeedUpdateController::class, 'boards']);
+        Route::get('boards/{board}/people', [FeedUpdateController::class, 'people']);
         Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
         Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
         Route::post('updates/{id}/pin', [FeedUpdateController::class, 'togglePin']);

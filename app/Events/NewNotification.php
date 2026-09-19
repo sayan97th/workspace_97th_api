@@ -41,10 +41,16 @@ class NewNotification implements ShouldBroadcast
      * byte-identical to the REST `GET /api/notifications` payload, letting
      * the frontend handle both with a single mapper function.
      *
+     * Adds `is_silenced`, true while the recipient's quiet hours are active, so
+     * the client still lists the notification but skips the toast and desktop push.
+     *
      * @return array<string, mixed>
      */
     public function broadcastWith(): array
     {
-        return (new NotificationResource($this->notification))->resolve();
+        return [
+            ...(new NotificationResource($this->notification))->resolve(),
+            'is_silenced' => $this->notification->user->isInQuietHours(),
+        ];
     }
 }

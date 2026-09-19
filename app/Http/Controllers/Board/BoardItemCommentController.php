@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Board;
 
+use App\Events\ItemCommentPosted;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\StoreBoardItemCommentRequest;
 use App\Http\Requests\Board\ToggleBoardItemCommentReactionRequest;
@@ -96,8 +97,10 @@ class BoardItemCommentController extends Controller
 
         $this->automation_service->handleUpdatePosted($board_item, $comment, $request->user());
 
+        broadcast(new ItemCommentPosted($comment))->toOthers();
+
         $this->feed_service->broadcastUpdate(
-            $comment->fresh(['author', 'mentions', 'bookmarks', 'views', 'item.board.parent']),
+            $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent']),
             $item,
             $comment->parent?->author,
         );

@@ -12,26 +12,13 @@ use Illuminate\Http\Resources\Json\JsonResource;
 class NotificationResource extends JsonResource
 {
     /**
-     * Maps a stored notification `type` to the tab category the frontend's
-     * `NotificationsPanel` already understands ("mentioned" | "assigned" |
-     * "subscribed"). Reply/reaction types fall under "subscribed" so they
-     * only show up in "All", not a dedicated tab.
-     *
-     * @var array<string, string>
-     */
-    private const CATEGORY_MAP = [
-        Notification::TYPE_MENTIONED => 'mentioned',
-        Notification::TYPE_ASSIGNED => 'assigned',
-        Notification::TYPE_NOTIFIED => 'assigned',
-    ];
-
-    /**
      * @return array<string, mixed>
      */
     public function toArray(Request $request): array
     {
         return [
             'id' => (string) $this->id,
+            'type' => $this->type,
             // `actor`/`board` are always eager-loaded by both callers (the
             // controller's index() and NotificationService::notify()), so we
             // read them directly rather than through whenLoaded(): that helper
@@ -41,6 +28,7 @@ class NotificationResource extends JsonResource
             'actor' => [
                 'name' => $this->actor?->full_name ?? 'Deleted user',
                 'id' => $this->actor?->id,
+                'avatar_url' => $this->actor?->profile_photo_url,
             ],
             'action_label' => $this->action_label,
             'action_target' => $this->action_target,
@@ -49,8 +37,11 @@ class NotificationResource extends JsonResource
                 'name' => $this->board->label,
             ] : null,
             'link' => $this->link,
+            // Notifications of the same type on the same thread share this key,
+            // which is how the drawer collapses "3 people replied" into one card.
+            'group_key' => $this->link !== null ? "{$this->type}|{$this->link}" : "single|{$this->id}",
             'is_unread' => ! $this->is_read,
-            'category' => self::CATEGORY_MAP[$this->type] ?? 'subscribed',
+            'category' => Notification::categoryOf($this->type),
             'created_at' => $this->created_at,
         ];
     }

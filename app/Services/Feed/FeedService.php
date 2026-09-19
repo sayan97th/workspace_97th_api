@@ -83,7 +83,7 @@ class FeedService
             $comment->update(['scheduled_at' => null]);
 
             $this->broadcastUpdate(
-                $comment->fresh(['author', 'mentions', 'bookmarks', 'views', 'item.board.parent']),
+                $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent']),
                 $comment->item->board,
                 $comment->parent?->author,
             );
@@ -104,7 +104,7 @@ class FeedService
             $comment->update(['scheduled_at' => null]);
 
             $this->broadcastUpdate(
-                $comment->fresh(['author', 'mentions', 'bookmarks', 'views', 'board.parent']),
+                $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'board.parent']),
                 $comment->board,
                 $comment->parent?->author,
             );
