@@ -59,6 +59,7 @@ use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Profile\SidebarPreferenceController;
 use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Controllers\Profile\WorkingStatusController;
+use App\Http\Controllers\Search\GlobalSearchController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceAvatarController;
@@ -134,6 +135,10 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Account branding (logo, email header) — readable by any authenticated user, not just
     // staff, since the top bar shows it for everyone. Managed at `/admin/account-settings/*`.
     Route::get('branding', [PublicBrandingController::class, 'show']);
+
+    // Top bar "Search for anything..." box, a typeahead so it is throttled more loosely than
+    // most endpoints, the frontend already debounces and cancels stale requests.
+    Route::get('search', GlobalSearchController::class)->middleware('throttle:120,1');
 
     // Notifications — real-time (Reverb) + REST-readable notification feed.
     Route::prefix('notifications')->group(function () {
