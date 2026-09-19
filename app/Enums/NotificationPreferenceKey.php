@@ -43,7 +43,8 @@ enum NotificationPreferenceKey: string
     }
 
     /**
-     * Get every valid `<key>_<channel>` preference map entry, e.g. `mentioned_app`.
+     * Get every valid `<key>_<channel>` preference map entry, e.g. `mentioned_app`,
+     * `mentioned_email` or `mentioned_slack`.
      *
      * @return array<string>
      */
@@ -53,6 +54,7 @@ enum NotificationPreferenceKey: string
         foreach (self::cases() as $key) {
             $keys[] = "{$key->value}_app";
             $keys[] = "{$key->value}_email";
+            $keys[] = "{$key->value}_slack";
         }
 
         return $keys;

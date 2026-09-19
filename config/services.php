@@ -40,6 +40,11 @@ return [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
+        // Credentials of the Slack app that the "Add to Slack" install and the per-user
+        // "Connect my Slack" flows both authorize against, see App\Services\Slack\SlackService.
+        'client_id' => env('SLACK_CLIENT_ID'),
+        'client_secret' => env('SLACK_CLIENT_SECRET'),
+        'redirect' => env('SLACK_REDIRECT_URI', rtrim((string) env('APP_URL', 'http://localhost:8000'), '/').'/api/integrations/slack/callback'),
     ],
 
     'google' => [

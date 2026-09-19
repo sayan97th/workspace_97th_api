@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Console\Commands\Board\RunDueDateAutomationsCommand;
+use App\Services\Board\BoardAutomationService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +17,11 @@ use Illuminate\Support\Carbon;
  * "when an item/subitem is created on this tab, run `action_type`" (no
  * watched column at all — `trigger_column_id`/`trigger_value` are both null).
  * No AI involved: every rule is a fixed, user-configured condition/action pair.
+ *
+ * Communication actions ({@see self::ACTION_SEND_EMAIL}, {@see self::ACTION_SLACK_NOTIFY_CHANNEL},
+ * {@see self::ACTION_SLACK_NOTIFY_PERSON}) reach people outside the app. They accept an optional
+ * `action_params.message`, a template that may use the tokens listed on
+ * {@see BoardAutomationService::renderMessage()}.
  *
  * @property int $id
  * @property int $board_id
@@ -56,11 +62,26 @@ class BoardAutomation extends Model
     /** Fires once a `people` column gains a newly-assigned person — `trigger_value` is a specific user id to watch for, or null for "anyone". */
     public const TRIGGER_PERSON_ASSIGNED = 'person_assigned';
 
+    /** Fires once any value written to a column of any type differs from what was stored, `trigger_column_id` is required and `trigger_value` is null. */
+    public const TRIGGER_COLUMN_CHANGED = 'column_changed';
+
+    /** Fires once a new update (comment, not a reply) is posted on an item of this tab, no `trigger_column_id`/`trigger_value`. */
+    public const TRIGGER_UPDATE_POSTED = 'update_posted';
+
     /** Moves the item to `action_params.target_group_id`. */
     public const ACTION_MOVE_TO_GROUP = 'move_to_group';
 
     /** Notifies `action_params.notify_user_id`, or whoever `action_params.notify_from_people_column_id` currently holds. */
     public const ACTION_NOTIFY_PERSON = 'notify_person';
+
+    /** Emails `action_params.notify_user_id`, or everyone `action_params.notify_from_people_column_id` currently holds, with an optional `subject` and `message`. */
+    public const ACTION_SEND_EMAIL = 'send_email';
+
+    /** Posts `action_params.message` to the Slack channel `action_params.slack_channel_id`. */
+    public const ACTION_SLACK_NOTIFY_CHANNEL = 'slack_notify_channel';
+
+    /** Sends `action_params.message` as a Slack direct message to the same recipients {@see self::ACTION_SEND_EMAIL} resolves. */
+    public const ACTION_SLACK_NOTIFY_PERSON = 'slack_notify_person';
 
     /** Archives (soft-deletes) the item. */
     public const ACTION_ARCHIVE_ITEM = 'archive_item';
@@ -70,6 +91,26 @@ class BoardAutomation extends Model
 
     /** Creates a new item named `action_params.item_name` (or "New item") in `action_params.target_group_id`. */
     public const ACTION_CREATE_ITEM = 'create_item';
+
+    /**
+     * Every action that talks to someone outside the app.
+     *
+     * @return array<int, string>
+     */
+    public static function communicationActions(): array
+    {
+        return [self::ACTION_SEND_EMAIL, self::ACTION_SLACK_NOTIFY_CHANNEL, self::ACTION_SLACK_NOTIFY_PERSON];
+    }
+
+    /**
+     * Every action that needs a connected Slack workspace to do anything.
+     *
+     * @return array<int, string>
+     */
+    public static function slackActions(): array
+    {
+        return [self::ACTION_SLACK_NOTIFY_CHANNEL, self::ACTION_SLACK_NOTIFY_PERSON];
+    }
 
     /**
      * The board (navigation leaf) this automation belongs to.

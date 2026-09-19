@@ -50,6 +50,9 @@ class BoardActivityLog extends Model
 
     public const ACTION_ITEM_DELETED = 'item_deleted';
 
+    /** An item was moved into or out of this board through the item drawer's "Move to board" action. */
+    public const ACTION_ITEM_MOVED = 'item_moved';
+
     /** A {@see BoardAutomation} rule fired and ran its action against an item. */
     public const ACTION_AUTOMATION_RAN = 'automation_ran';
 

@@ -533,7 +533,7 @@ class BoardItemController extends Controller
         $valid_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
             ->where('scope', $scope)
             ->whereIn('id', array_map('intval', array_keys($values)))
-            ->get(['id', 'type', 'config'])
+            ->get(['id', 'type', 'config', 'label'])
             ->keyBy('id');
 
         foreach ($values as $column_id => $value) {

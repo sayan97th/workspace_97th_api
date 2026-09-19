@@ -12,6 +12,7 @@ use App\Models\BoardItemComment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\CommentThreadActionsService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
@@ -27,6 +28,7 @@ class BoardItemCommentController extends Controller
         private readonly NotificationService $notification_service,
         private readonly FeedService $feed_service,
         private readonly CommentThreadActionsService $comment_actions,
+        private readonly BoardAutomationService $automation_service,
     ) {}
 
     /**
@@ -91,6 +93,8 @@ class BoardItemCommentController extends Controller
                 );
             }
         }
+
+        $this->automation_service->handleUpdatePosted($board_item, $comment, $request->user());
 
         $this->feed_service->broadcastUpdate(
             $comment->fresh(['author', 'mentions', 'bookmarks', 'views', 'item.board.parent']),

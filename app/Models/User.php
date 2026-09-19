@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -72,6 +73,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, AccountTeam> $accountTeams
  * @property-read Collection<int, UserSession> $sessions
  * @property-read Department|null $department
+ * @property-read SlackUserLink|null $slackLink
  */
 #[Fillable([
     'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'last_active_workspace_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
@@ -206,6 +208,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     {
         return $this->belongsToMany(AccountTeam::class, 'account_team_user')
             ->withTimestamps();
+    }
+
+    /**
+     * This user's own Slack account link, present once they have used "Connect my Slack".
+     *
+     * @return HasOne<SlackUserLink, $this>
+     */
+    public function slackLink(): HasOne
+    {
+        return $this->hasOne(SlackUserLink::class);
     }
 
     /**

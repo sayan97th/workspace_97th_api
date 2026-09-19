@@ -35,6 +35,8 @@ use App\Http\Controllers\Board\BoardItemCellFileController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
+use App\Http\Controllers\Board\BoardItemMoveController;
+use App\Http\Controllers\Board\BoardItemUpdatesExportController;
 use App\Http\Controllers\Board\BoardNotificationMuteController;
 use App\Http\Controllers\Board\BoardTagController;
 use App\Http\Controllers\Board\BoardTrashController;
@@ -46,6 +48,8 @@ use App\Http\Controllers\BroadcastAuthController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\InlineUploadController;
+use App\Http\Controllers\Integration\SlackIntegrationController;
+use App\Http\Controllers\Integration\SlackOAuthCallbackController;
 use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
@@ -115,6 +119,11 @@ Route::prefix('auth')->group(function () {
     });
 });
 
+// ─── Slack OAuth callback ───────────────────────────────────────────────────
+// Public, the browser arrives from Slack with no JWT. Who it acts for comes from the
+// single use `state` value issued when the flow started, see `SlackService::consumeState()`.
+Route::get('integrations/slack/callback', SlackOAuthCallbackController::class);
+
 // ─── Authenticated routes ───────────────────────────────────────────────────
 Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
 
@@ -147,6 +156,21 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('updates/{id}/reply', [FeedUpdateController::class, 'reply']);
         Route::post('updates/{id}/seen', [FeedUpdateController::class, 'markSeen']);
         Route::post('updates/{id}/schedule', [FeedUpdateController::class, 'schedule']);
+    });
+
+    // Slack integration, an administrator installs the app into the Slack workspace, then
+    // every member links their own Slack account to receive notifications as direct messages.
+    Route::prefix('integrations/slack')->group(function () {
+        Route::get('/', [SlackIntegrationController::class, 'show']);
+        Route::get('channels', [SlackIntegrationController::class, 'channels']);
+        Route::post('link-url', [SlackIntegrationController::class, 'linkUrl']);
+        Route::delete('link', [SlackIntegrationController::class, 'unlink']);
+        Route::post('link/test', [SlackIntegrationController::class, 'sendTest'])->middleware('throttle:6,1');
+
+        Route::middleware('role:super_admin,admin')->group(function () {
+            Route::post('install-url', [SlackIntegrationController::class, 'installUrl']);
+            Route::delete('/', [SlackIntegrationController::class, 'destroy']);
+        });
     });
 
     // Per-board notification muting — checked by `NotificationService::notify()`
@@ -346,6 +370,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('{tag}', [BoardTagController::class, 'destroy']);
         });
 
+        // Boards (and their tables) an item can be moved into from its drawer.
+        Route::get('move-targets', [BoardItemMoveController::class, 'targets']);
+
         Route::prefix('items')->group(function () {
             Route::get('/', [BoardItemController::class, 'index']);
             Route::post('/', [BoardItemController::class, 'store']);
@@ -366,6 +393,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{board_item}/parent', [BoardItemController::class, 'updateParent']);
             Route::patch('{board_item}/recurrence', [BoardItemController::class, 'setRecurrence']);
             Route::delete('{board_item}/recurrence', [BoardItemController::class, 'clearRecurrence']);
+            Route::patch('{board_item}/board', [BoardItemMoveController::class, 'store']);
+            Route::get('{board_item}/updates/export', [BoardItemUpdatesExportController::class, 'export']);
             Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
 
             Route::prefix('{board_item}/comments')->group(function () {

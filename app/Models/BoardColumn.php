@@ -132,6 +132,14 @@ class BoardColumn extends Model
     public const TYPE_CHECKLIST = 'checklist';
 
     /**
+     * Column types whose value is computed rather than written by a user, so no edit can ever
+     * "change" them and they are not offered to a `column_changed` automation.
+     *
+     * @var array<int, string>
+     */
+    public const READ_ONLY_TYPES = [self::TYPE_FORMULA, self::TYPE_MIRROR, self::TYPE_AUTO_NUMBER];
+
+    /**
      * The board (navigation leaf) this column belongs to.
      *
      * @return BelongsTo<WorkspaceNavigationItem, $this>

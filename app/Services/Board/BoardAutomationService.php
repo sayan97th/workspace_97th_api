@@ -2,18 +2,25 @@
 
 namespace App\Services\Board;
 
+use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
+use App\Jobs\SendEmailJob;
+use App\Mail\Automations\AutomationEmail;
 use App\Models\BoardActivityLog;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationRun;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
+use App\Models\BoardItemComment;
 use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
+use App\Services\Slack\SlackNotifier;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Runs the rule-based (no AI) automation recipes a board tab can define, see
@@ -30,26 +37,60 @@ use Illuminate\Support\Facades\DB;
  * - "When an item/subitem is created, run `action_type`" —
  *   {@see handleItemCreated()}, called synchronously from
  *   {@see BoardItemController::store()}.
+ * - "When an update is posted on an item, run `action_type`" —
+ *   {@see handleUpdatePosted()}, called synchronously from
+ *   {@see BoardItemCommentController::store()}.
+ *
+ * Any trigger can be paired with a communication action (email, Slack channel, Slack
+ * direct message), whose message is a template filled in by {@see renderMessage()}.
  */
 class BoardAutomationService
 {
-    public function __construct(private readonly NotificationService $notification_service, private readonly BoardActivityLogger $activity_logger) {}
+    public function __construct(
+        private readonly NotificationService $notification_service,
+        private readonly BoardActivityLogger $activity_logger,
+        private readonly SlackNotifier $slack_notifier,
+    ) {}
 
     /**
-     * Reacts to one column's value having just changed on `$item` — a no-op
-     * for every column that isn't a `status`/`label`/`people` kind, or that
-     * no `status_changed`/`person_assigned` automation watches.
+     * Reacts to one column's value having just changed on `$item`. Status/label and
+     * people columns first run their own specialised triggers, then every column type
+     * runs the generic `column_changed` trigger, a no-op wherever no automation watches it.
      */
     public function handleValueChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
     {
         if (in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL], true)) {
             $this->handleStatusChanged($item, $column, $old_value, $new_value, $actor);
+        } elseif ($column->type === BoardColumn::TYPE_PEOPLE) {
+            $this->handlePersonAssigned($item, $column, $old_value, $new_value, $actor);
+        }
 
+        $this->handleColumnChanged($item, $column, $old_value, $new_value, $actor);
+    }
+
+    /**
+     * Fires every enabled `column_changed` automation watching `$column` once the value
+     * it holds is different from what was stored before this write.
+     */
+    private function handleColumnChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
+        if ($this->valuesAreEqual($old_value, $new_value)) {
             return;
         }
 
-        if ($column->type === BoardColumn::TYPE_PEOPLE) {
-            $this->handlePersonAssigned($item, $column, $old_value, $new_value, $actor);
+        $automations = BoardAutomation::query()
+            ->where('board_view_id', $item->group->board_view_id)
+            ->where('is_enabled', true)
+            ->where('trigger_type', BoardAutomation::TRIGGER_COLUMN_CHANGED)
+            ->where('trigger_column_id', $column->id)
+            ->get();
+
+        foreach ($automations as $automation) {
+            $this->executeAction($automation, $item, $actor, [
+                'column' => $column,
+                'old_value' => $old_value,
+                'new_value' => $new_value,
+            ]);
         }
     }
 
@@ -76,7 +117,11 @@ class BoardAutomationService
                 continue;
             }
 
-            $this->executeAction($automation, $item, $actor);
+            $this->executeAction($automation, $item, $actor, [
+                'column' => $column,
+                'old_value' => $old_value,
+                'new_value' => $new_value,
+            ]);
         }
     }
 
@@ -108,7 +153,11 @@ class BoardAutomationService
             $matches = $watched_user_id === null || in_array((string) $watched_user_id, array_map('strval', $newly_added_ids), true);
 
             if ($matches) {
-                $this->executeAction($automation, $item, $actor);
+                $this->executeAction($automation, $item, $actor, [
+                    'column' => $column,
+                    'old_value' => $old_value,
+                    'new_value' => $new_value,
+                ]);
             }
         }
     }
@@ -130,6 +179,26 @@ class BoardAutomationService
 
         foreach ($automations as $automation) {
             $this->executeAction($automation, $item, $actor);
+        }
+    }
+
+    /**
+     * Reacts to a top-level update having just been posted on `$item`, replies do not count.
+     */
+    public function handleUpdatePosted(BoardItem $item, BoardItemComment $comment, ?User $actor): void
+    {
+        if ($comment->parent_id !== null) {
+            return;
+        }
+
+        $automations = BoardAutomation::query()
+            ->where('board_view_id', $item->group->board_view_id)
+            ->where('is_enabled', true)
+            ->where('trigger_type', BoardAutomation::TRIGGER_UPDATE_POSTED)
+            ->get();
+
+        foreach ($automations as $automation) {
+            $this->executeAction($automation, $item, $actor, ['update_text' => (string) $comment->body]);
         }
     }
 
@@ -170,7 +239,10 @@ class BoardAutomationService
                     continue;
                 }
 
-                $this->executeAction($automation, $item, null);
+                $this->executeAction($automation, $item, null, [
+                    'column' => $automation->triggerColumn,
+                    'new_value' => $today,
+                ]);
 
                 BoardAutomationRun::create([
                     'automation_id' => $automation->id,
@@ -188,10 +260,22 @@ class BoardAutomationService
      * Runs one automation's configured action against one item, then logs it
      * through {@see BoardActivityLogger} the same way every other board
      * mutation does.
+     *
+     * `$context` carries whatever the trigger knows about what just happened
+     * (`column`, `old_value`, `new_value`, `update_text`), used to fill in the
+     * message of a communication action.
+     *
+     * @param  array<string, mixed>  $context
      */
-    private function executeAction(BoardAutomation $automation, BoardItem $item, ?User $actor): void
+    private function executeAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context = []): void
     {
         $automation_label = $automation->name ?: 'Automation';
+
+        if (in_array($automation->action_type, BoardAutomation::communicationActions(), true)) {
+            $this->executeCommunicationAction($automation, $item, $actor, $context);
+
+            return;
+        }
 
         if ($automation->action_type === BoardAutomation::ACTION_MOVE_TO_GROUP) {
             $target_group_id = (int) ($automation->action_params['target_group_id'] ?? 0);
@@ -304,6 +388,175 @@ class BoardAutomationService
                 ['item_id' => $item->id]
             );
         }
+    }
+
+    /**
+     * Delivers one email, Slack channel post or Slack direct message. Failures that are
+     * the recipient's or the workspace's setup (nobody to notify, Slack not connected,
+     * a member who never linked Slack) are written to the board's activity log instead of
+     * being thrown, since they must not break the change that triggered the automation.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function executeCommunicationAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context): void
+    {
+        $automation_label = $automation->name ?: 'Automation';
+        $message = $this->renderMessage($automation, $item, $actor, $context);
+        $link = "/boards/{$item->board_id}/pulses/{$item->id}";
+        $board_label = $item->board->label;
+        $outcomes = [];
+
+        if ($automation->action_type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL) {
+            $channel_id = (string) ($automation->action_params['slack_channel_id'] ?? '');
+            $channel_name = (string) ($automation->action_params['slack_channel_name'] ?? $channel_id);
+
+            $was_sent = $channel_id !== '' && $this->slack_notifier->notifyChannel($channel_id, $message, $link, $board_label);
+            $outcomes[] = $was_sent ? "posted to Slack channel #{$channel_name}" : 'could not post to Slack because Slack is not connected';
+        } else {
+            $recipients = $this->resolveRecipients($automation, $item);
+
+            if ($recipients->isEmpty()) {
+                $outcomes[] = 'found nobody to notify';
+            }
+
+            foreach ($recipients as $recipient) {
+                if ($automation->action_type === BoardAutomation::ACTION_SEND_EMAIL) {
+                    SendEmailJob::dispatch(
+                        new AutomationEmail($this->renderSubject($automation, $item), $message, $board_label, $link),
+                        $recipient->email,
+                    );
+                    $outcomes[] = "emailed {$recipient->full_name}";
+
+                    continue;
+                }
+
+                $outcomes[] = $this->slack_notifier->notifyUser($recipient, $message, $link, $board_label)
+                    ? "sent a Slack message to {$recipient->full_name}"
+                    : "could not reach {$recipient->full_name} on Slack because they have not connected their Slack account";
+            }
+        }
+
+        $this->activity_logger->log(
+            $item->board,
+            $actor,
+            BoardActivityLog::ACTION_AUTOMATION_RAN,
+            "Automation \"{$automation_label}\" ".implode(', ', $outcomes),
+            ['item_id' => $item->id]
+        );
+    }
+
+    /**
+     * Fills in the automation's `action_params.message` template, or a default sentence
+     * for its trigger when none was written. Supported tokens: `{item_name}`, `{board_name}`,
+     * `{actor_name}`, `{column_name}`, `{old_value}`, `{new_value}` and `{update_text}`.
+     * An unknown token is left as typed rather than dropped.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    public function renderMessage(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context = []): string
+    {
+        $template = trim((string) ($automation->action_params['message'] ?? ''));
+        if ($template === '') {
+            $template = $this->defaultMessageTemplate($automation->trigger_type);
+        }
+
+        $column = $context['column'] ?? null;
+
+        return strtr($template, [
+            '{item_name}' => $item->name,
+            '{board_name}' => $item->board->label,
+            '{actor_name}' => $actor?->full_name ?: 'Someone',
+            '{column_name}' => $column instanceof BoardColumn ? $this->columnLabel($column) : 'a column',
+            '{old_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['old_value'] ?? null) : '',
+            '{new_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['new_value'] ?? null) : '',
+            '{update_text}' => Str::limit(trim((string) ($context['update_text'] ?? '')), 300),
+        ]);
+    }
+
+    /**
+     * `$column` may have been loaded with a partial `select()`, so a missing label is
+     * read from the database instead of being rendered as empty text.
+     */
+    private function columnLabel(BoardColumn $column): string
+    {
+        return (string) ($column->getAttribute('label') ?? BoardColumn::whereKey($column->id)->value('label') ?? 'a column');
+    }
+
+    private function renderSubject(BoardAutomation $automation, BoardItem $item): string
+    {
+        $subject = trim((string) ($automation->action_params['subject'] ?? ''));
+
+        return $subject !== '' ? strtr($subject, ['{item_name}' => $item->name, '{board_name}' => $item->board->label]) : "Update on \"{$item->name}\"";
+    }
+
+    private function defaultMessageTemplate(string $trigger_type): string
+    {
+        return match ($trigger_type) {
+            BoardAutomation::TRIGGER_STATUS_CHANGED, BoardAutomation::TRIGGER_COLUMN_CHANGED => '{column_name} changed to "{new_value}" on "{item_name}".',
+            BoardAutomation::TRIGGER_DATE_ARRIVED => 'The date in {column_name} has arrived on "{item_name}".',
+            BoardAutomation::TRIGGER_ITEM_CREATED => 'A new item "{item_name}" was created on {board_name}.',
+            BoardAutomation::TRIGGER_SUBITEM_CREATED => 'A new subitem "{item_name}" was created on {board_name}.',
+            BoardAutomation::TRIGGER_PERSON_ASSIGNED => '{new_value} was assigned to "{item_name}".',
+            BoardAutomation::TRIGGER_UPDATE_POSTED => '{actor_name} posted an update on "{item_name}": {update_text}',
+            default => 'An automation ran on "{item_name}".',
+        };
+    }
+
+    /**
+     * A human readable version of a raw stored value: a status/label option id becomes
+     * its label, a people value becomes names, other arrays are joined with commas.
+     */
+    private function displayValue(BoardColumn $column, mixed $value): string
+    {
+        if ($value === null || $value === '' || $value === []) {
+            return '';
+        }
+
+        if (in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL], true)) {
+            foreach ($column->config['options'] ?? [] as $option) {
+                if ((string) ($option['id'] ?? '') === (string) $value) {
+                    return (string) ($option['label'] ?? $value);
+                }
+            }
+        }
+
+        if ($column->type === BoardColumn::TYPE_PEOPLE && is_array($value)) {
+            return User::whereIn('id', $value)->get()->map(fn (User $user) => $user->full_name)->implode(', ');
+        }
+
+        return is_array($value) ? collect($value)->flatten()->implode(', ') : (string) $value;
+    }
+
+    /**
+     * Treats null, an empty string and an empty array as the same "no value".
+     */
+    private function valuesAreEqual(mixed $old_value, mixed $new_value): bool
+    {
+        $normalize = fn (mixed $value) => ($value === null || $value === '' || $value === []) ? null : $value;
+
+        return json_encode($normalize($old_value)) === json_encode($normalize($new_value));
+    }
+
+    /**
+     * Everyone a communication action should reach: a fixed `notify_user_id`, or every
+     * person `notify_from_people_column_id` currently holds. Deactivated accounts are skipped.
+     *
+     * @return Collection<int, User>
+     */
+    private function resolveRecipients(BoardAutomation $automation, BoardItem $item): Collection
+    {
+        if ($user_id = $automation->action_params['notify_user_id'] ?? null) {
+            return User::whereKey($user_id)->where('is_active', true)->get();
+        }
+
+        if ($people_column_id = $automation->action_params['notify_from_people_column_id'] ?? null) {
+            $value = BoardItemValue::where('item_id', $item->id)->where('column_id', $people_column_id)->first();
+            $person_ids = is_array($value?->value) ? $value->value : [];
+
+            return $person_ids ? User::whereIn('id', $person_ids)->where('is_active', true)->get() : new Collection;
+        }
+
+        return new Collection;
     }
 
     /**

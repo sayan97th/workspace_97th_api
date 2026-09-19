@@ -11,6 +11,7 @@ use App\Models\BoardNotificationMute;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Slack\SlackNotifier;
 
 /**
  * Single entry point for creating and delivering notifications, both in-app
@@ -21,6 +22,8 @@ use App\Models\WorkspaceNavigationItem;
  */
 class NotificationService
 {
+    public function __construct(private readonly SlackNotifier $slack_notifier) {}
+
     /**
      * Creates a notification for `$recipient`, broadcasts it over the
      * `notifications.{user_id}` private channel, and queues an email for it,
@@ -29,6 +32,10 @@ class NotificationService
      * `$actor` is notifying themselves, or when `$recipient` has muted `$board`
      * (see {@see BoardNotificationMute}) — checked ahead of the per-type gate,
      * since muting a board is meant to silence every notification type for it.
+     *
+     * A Slack direct message is sent as a third channel, gated by the recipient's
+     * `<type>_slack` preference and by whether they linked their Slack account, see
+     * {@see SlackNotifier::deliverNotification()}.
      *
      * `$actor` is nullable to support system-generated notifications (e.g.
      * the websocket test broadcast); those never send email, since there's
@@ -86,6 +93,8 @@ class NotificationService
 
             SendEmailJob::dispatch($mailable, $recipient->email);
         }
+
+        $this->slack_notifier->deliverNotification($notification, $recipient);
 
         return $notification;
     }

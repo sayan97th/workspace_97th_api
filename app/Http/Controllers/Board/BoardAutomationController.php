@@ -51,7 +51,7 @@ class BoardAutomationController extends Controller
             'name' => $validated['name'] ?? null,
             'is_enabled' => $validated['is_enabled'] ?? true,
             'trigger_type' => $validated['trigger_type'],
-            'trigger_column_id' => $validated['trigger_column_id'],
+            'trigger_column_id' => $validated['trigger_column_id'] ?? null,
             'trigger_value' => $validated['trigger_value'] ?? null,
             'action_type' => $validated['action_type'],
             'action_params' => $validated['action_params'] ?? [],
