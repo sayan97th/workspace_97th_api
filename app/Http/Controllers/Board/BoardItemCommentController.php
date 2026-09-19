@@ -15,9 +15,12 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
+use App\Services\Board\CommentAssignmentService;
 use App\Services\Board\CommentThreadActionsService;
+use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
+use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -31,6 +34,8 @@ class BoardItemCommentController extends Controller
         private readonly FeedService $feed_service,
         private readonly CommentThreadActionsService $comment_actions,
         private readonly BoardAutomationService $automation_service,
+        private readonly CommentAssignmentService $assignment_service,
+        private readonly ScheduledCommentService $scheduled_comments,
     ) {}
 
     /**
@@ -66,10 +71,22 @@ class BoardItemCommentController extends Controller
         $this->ensureItemBelongsToBoard($item, $board_item);
         $validated = $request->validated();
 
+        $scheduled_at = $validated['scheduled_at'] ?? null;
+        $assign_user_ids = collect($validated['assign_user_ids'] ?? [])->map(fn ($user_id) => (int) $user_id)->unique()->values();
+        $assign_due_date = $validated['assign_due_date'] ?? null;
+        $is_assigning = $assign_user_ids->isNotEmpty() || $assign_due_date !== null;
+
+        // Checked before anything is created, so a comment that cannot become a task is not posted half done.
+        if ($is_assigning) {
+            BoardEditGate::authorize($item, $request->user());
+            $this->assignment_service->resolveColumns($board_item, $assign_user_ids->isNotEmpty(), $assign_due_date !== null);
+        }
+
         $comment = $board_item->comments()->create([
             'parent_id' => $validated['parent_id'] ?? null,
             'user_id' => $request->user()?->id,
             'body' => trim($validated['body'] ?? ''),
+            'scheduled_at' => $scheduled_at,
         ]);
 
         $mentioned_user_ids = collect($validated['mentioned_user_ids'] ?? [])->unique();
@@ -79,32 +96,45 @@ class BoardItemCommentController extends Controller
             );
         }
 
-        if ($actor = $request->user()) {
-            $this->notifyCommentCreated($item, $board_item, $comment, $mentioned_user_ids, $actor);
+        $actor = $request->user();
+        $notified_user_ids = collect($validated['notified_user_ids'] ?? []);
 
-            $notified_user_ids = collect($validated['notified_user_ids'] ?? []);
-            if ($notified_user_ids->isNotEmpty()) {
-                $this->comment_actions->notifyDirect(
-                    comment: $comment,
-                    notified_user_ids: $notified_user_ids,
-                    actor: $actor,
-                    board: $item,
-                    link: "/boards/{$item->id}/pulses/{$board_item->id}",
-                    action_target: sprintf('on "%s"', $board_item->name),
-                    board_item: $board_item,
-                );
+        if ($scheduled_at !== null) {
+            // Nothing is sent yet, ScheduledCommentService notifies and broadcasts once it goes live.
+            if ($actor) {
+                $this->comment_actions->recordNotified($comment, $notified_user_ids, $actor);
             }
+        } else {
+            if ($actor) {
+                $this->notifyCommentCreated($item, $board_item, $comment, $mentioned_user_ids, $actor);
+
+                if ($notified_user_ids->isNotEmpty()) {
+                    $this->comment_actions->notifyDirect(
+                        comment: $comment,
+                        notified_user_ids: $notified_user_ids,
+                        actor: $actor,
+                        board: $item,
+                        link: "/boards/{$item->id}/pulses/{$board_item->id}",
+                        action_target: sprintf('on "%s"', $board_item->name),
+                        board_item: $board_item,
+                    );
+                }
+
+                if ($is_assigning) {
+                    $this->assignment_service->assign($item, $board_item, $assign_user_ids, $assign_due_date, $actor);
+                }
+            }
+
+            $this->automation_service->handleUpdatePosted($board_item, $comment, $request->user());
+
+            broadcast(new ItemCommentPosted($comment))->toOthers();
+
+            $this->feed_service->broadcastUpdate(
+                $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent']),
+                $item,
+                $comment->parent?->author,
+            );
         }
-
-        $this->automation_service->handleUpdatePosted($board_item, $comment, $request->user());
-
-        broadcast(new ItemCommentPosted($comment))->toOthers();
-
-        $this->feed_service->broadcastUpdate(
-            $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent']),
-            $item,
-            $comment->parent?->author,
-        );
 
         foreach ($request->file('attachments', []) as $file) {
             $extension = $file->getClientOriginalExtension();
@@ -168,13 +198,15 @@ class BoardItemCommentController extends Controller
     /**
      * POST /api/boards/{item}/items/{board_item}/comments/{comment}/pin
      *
-     * Toggles whether the comment (or reply) is pinned — pinned updates sort
-     * ahead of the rest of the thread and the Update Feed.
+     * Toggles whether the comment (or reply) is pinned, pinned updates sort
+     * ahead of the rest of the thread and the Update Feed. Only people who can
+     * edit the board may pin or unpin.
      */
     public function togglePin(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
         $this->ensureCommentBelongsToItem($board_item, $comment);
+        BoardEditGate::authorize($item, $request->user());
 
         $pinned = $this->comment_actions->togglePin($comment);
 
@@ -281,6 +313,77 @@ class BoardItemCommentController extends Controller
     }
 
     /**
+     * POST /api/boards/{item}/items/{board_item}/comments/{comment}/bookmark
+     *
+     * Toggles the current user's bookmark on the comment or reply, the same
+     * bookmark the Update Feed's "Bookmarked" tab lists.
+     */
+    public function toggleBookmark(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+        $user_id = $request->user()?->id;
+
+        $bookmark = $comment->bookmarks()->where('user_id', $user_id)->first();
+        $bookmark ? $bookmark->delete() : $comment->bookmarks()->create(['user_id' => $user_id]);
+
+        return response()->json([
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * GET /api/boards/{item}/items/{board_item}/comments/scheduled
+     *
+     * The current user's own comments and replies on this item that are still
+     * waiting on a future `scheduled_at`, soonest first.
+     */
+    public function scheduled(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+
+        $comments = $board_item->comments()
+            ->scheduledBy($request->user()->id)
+            ->with($this->eagerLoads(false))
+            ->orderBy('scheduled_at')
+            ->get();
+
+        return response()->json([
+            'data' => BoardItemCommentResource::collection($comments),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/{board_item}/comments/{comment}/schedule
+     *
+     * Moves a scheduled comment to a new time, or sends it right now when
+     * `scheduled_at` is null. Author-only, and only while it is still scheduled.
+     * Cancelling a schedule is the normal DELETE.
+     */
+    public function updateSchedule(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+        abort_if($comment->scheduled_at === null || $comment->scheduled_at->isPast(), 422, 'This comment is not scheduled.');
+
+        $validated = $request->validate([
+            'scheduled_at' => ['present', 'nullable', 'date', 'after:now'],
+        ]);
+
+        if ($validated['scheduled_at'] === null) {
+            $this->scheduled_comments->publish($comment);
+        } else {
+            $comment->update(['scheduled_at' => $validated['scheduled_at']]);
+        }
+
+        return response()->json([
+            'message' => $validated['scheduled_at'] === null ? 'Comment sent.' : 'Comment rescheduled.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads(false))),
+        ]);
+    }
+
+    /**
      * Notifies the parent comment's author (on a reply) and every mentioned
      * user (on a mention), skipping self-notifications, via
      * {@see NotificationService}.
@@ -320,18 +423,17 @@ class BoardItemCommentController extends Controller
 
     /**
      * Relations every {@link BoardItemCommentResource} needs eager-loaded,
-     * one level deep into replies.
+     * one level deep into replies unless `$with_replies` is off.
      *
      * @return array<int, string>
      */
-    private function eagerLoads(): array
+    private function eagerLoads(bool $with_replies = true): array
     {
-        $own = ['author', 'likes', 'reactions.user', 'views.user', 'mentions', 'notifiedUsers', 'attachments'];
+        $own = ['author', 'likes', 'reactions.user', 'views.user', 'bookmarks', 'mentions', 'notifiedUsers', 'attachments'];
 
-        return [
-            ...$own,
-            ...array_map(fn ($relation) => "replies.{$relation}", $own),
-        ];
+        return $with_replies
+            ? [...$own, ...array_map(fn ($relation) => "replies.{$relation}", $own)]
+            : $own;
     }
 
     /**

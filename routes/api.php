@@ -148,12 +148,15 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('/', [NotificationController::class, 'index']);
         Route::get('filters', [NotificationController::class, 'filters']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
+        Route::get('summary', [NotificationController::class, 'summary']);
         Route::patch('read-all', [NotificationController::class, 'markAllAsRead']);
         Route::post('bulk', [NotificationController::class, 'bulk']);
         Route::patch('{notification}/read', [NotificationController::class, 'markAsRead']);
         Route::patch('{notification}/unread', [NotificationController::class, 'markAsUnread']);
         Route::patch('{notification}/snooze', [NotificationController::class, 'snooze']);
         Route::delete('{notification}/snooze', [NotificationController::class, 'unsnooze']);
+        Route::patch('{notification}/save', [NotificationController::class, 'save']);
+        Route::delete('{notification}/save', [NotificationController::class, 'unsave']);
         Route::delete('{notification}', [NotificationController::class, 'dismiss']);
     });
 
@@ -179,6 +182,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('saved-views', [FeedUpdateController::class, 'savedViews']);
         Route::post('saved-views', [FeedUpdateController::class, 'storeSavedView']);
         Route::delete('saved-views/{saved_view}', [FeedUpdateController::class, 'destroySavedView']);
+        Route::get('follows', [FeedUpdateController::class, 'follows']);
+        Route::post('follows', [FeedUpdateController::class, 'follow']);
+        Route::delete('follows/{type}/{id}', [FeedUpdateController::class, 'unfollow'])->whereIn('type', ['board', 'item'])->whereNumber('id');
         Route::post('updates/read-all', [FeedUpdateController::class, 'markAllSeen']);
         Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
         Route::post('updates/{id}/pin', [FeedUpdateController::class, 'togglePin']);
@@ -431,12 +437,15 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::prefix('{board_item}/comments')->group(function () {
                 Route::get('/', [BoardItemCommentController::class, 'index']);
                 Route::post('/', [BoardItemCommentController::class, 'store']);
+                Route::get('scheduled', [BoardItemCommentController::class, 'scheduled']);
                 Route::patch('{comment}', [BoardItemCommentController::class, 'update']);
                 Route::delete('{comment}', [BoardItemCommentController::class, 'destroy']);
                 Route::post('{comment}/like', [BoardItemCommentController::class, 'toggleLike']);
                 Route::post('{comment}/reactions', [BoardItemCommentController::class, 'toggleReaction']);
                 Route::post('{comment}/seen', [BoardItemCommentController::class, 'toggleSeen']);
                 Route::post('{comment}/pin', [BoardItemCommentController::class, 'togglePin']);
+                Route::post('{comment}/bookmark', [BoardItemCommentController::class, 'toggleBookmark']);
+                Route::patch('{comment}/schedule', [BoardItemCommentController::class, 'updateSchedule']);
                 Route::get('{comment}/revisions', [BoardItemCommentController::class, 'revisions']);
             });
 
@@ -485,12 +494,15 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::prefix('comments')->group(function () {
             Route::get('/', [BoardCommentController::class, 'index']);
             Route::post('/', [BoardCommentController::class, 'store']);
+            Route::get('scheduled', [BoardCommentController::class, 'scheduled']);
             Route::patch('{comment}', [BoardCommentController::class, 'update']);
             Route::delete('{comment}', [BoardCommentController::class, 'destroy']);
             Route::post('{comment}/like', [BoardCommentController::class, 'toggleLike']);
             Route::post('{comment}/reactions', [BoardCommentController::class, 'toggleReaction']);
             Route::post('{comment}/seen', [BoardCommentController::class, 'toggleSeen']);
             Route::post('{comment}/pin', [BoardCommentController::class, 'togglePin']);
+            Route::post('{comment}/bookmark', [BoardCommentController::class, 'toggleBookmark']);
+            Route::patch('{comment}/schedule', [BoardCommentController::class, 'updateSchedule']);
             Route::get('{comment}/revisions', [BoardCommentController::class, 'revisions']);
         });
     });

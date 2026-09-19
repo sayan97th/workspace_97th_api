@@ -42,6 +42,13 @@ class StoreBoardItemCommentRequest extends FormRequest
             // distinct from `mentioned_user_ids` (never shown inline in the body).
             'notified_user_ids' => ['sometimes', 'array'],
             'notified_user_ids.*' => ['integer', 'exists:users,id'],
+            // Held back and published by `feed:publish-scheduled` once due, see ScheduledCommentService.
+            'scheduled_at' => ['sometimes', 'nullable', 'date', 'after:now'],
+            // The composer's "Assign" action, a comment turned into a task. Not combinable with a
+            // schedule, since the assignment happens the moment the comment is posted.
+            'assign_user_ids' => ['sometimes', 'array', 'max:20', 'prohibits:scheduled_at'],
+            'assign_user_ids.*' => ['integer', 'exists:users,id'],
+            'assign_due_date' => ['sometimes', 'nullable', 'date_format:Y-m-d', 'prohibits:scheduled_at'],
             'attachments' => ['sometimes', 'array'],
             'attachments.*' => [
                 'file',

@@ -3,7 +3,9 @@
 namespace App\Http\Resources;
 
 use App\Models\BoardComment;
+use App\Models\BoardItemActivity;
 use App\Models\BoardItemComment;
+use App\Models\FeedFollow;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\Request;
@@ -27,6 +29,12 @@ class FeedUpdateResource extends JsonResource
 {
     private ?User $viewer = null;
 
+    /** @var array{items: array<int, int>, boards: array<int, int>}|null Ids the viewer follows, injected by the caller to avoid one query per card. */
+    private ?array $follows = null;
+
+    /** @var array{total: int, entries: array<int, array<string, mixed>>}|null */
+    private ?array $activity = null;
+
     /** Typed mirror of {@see JsonResource::$resource} — that property is untyped, so every read here goes through this one instead. */
     private readonly BoardItemComment|BoardComment $comment;
 
@@ -47,6 +55,61 @@ class FeedUpdateResource extends JsonResource
         $this->viewer = $viewer;
 
         return $this;
+    }
+
+    /**
+     * Supplies the board and item ids the viewer follows, so `is_following_*`
+     * need no query of their own. Without it they are looked up per card.
+     *
+     * @param  array<int, int>  $item_ids
+     * @param  array<int, int>  $board_ids
+     */
+    public function withFollows(array $item_ids, array $board_ids): self
+    {
+        $this->follows = ['items' => $item_ids, 'boards' => $board_ids];
+
+        return $this;
+    }
+
+    /**
+     * Supplies the item changes shown under a top-level item update, see
+     * {@see activityPayload()}.
+     *
+     * @param  array{total: int, entries: array<int, array<string, mixed>>}  $activity
+     */
+    public function withActivity(array $activity): self
+    {
+        $this->activity = $activity;
+
+        return $this;
+    }
+
+    /**
+     * The JSON shape of the item changes behind one update.
+     *
+     * @param  array{total: int, entries: iterable<int, BoardItemActivity>}  $bundle
+     * @return array{total: int, entries: array<int, array<string, mixed>>}
+     */
+    public static function activityPayload(array $bundle): array
+    {
+        $entries = [];
+        foreach ($bundle['entries'] as $entry) {
+            $entries[] = [
+                'id' => $entry->id,
+                'actor' => $entry->user !== null ? [
+                    'id' => $entry->user->id,
+                    'name' => $entry->user->full_name,
+                    'avatar_url' => $entry->user->profile_photo_url,
+                ] : null,
+                'column_label' => $entry->column_label,
+                'column_type' => $entry->column_type,
+                'old_display' => $entry->old_display,
+                'new_display' => $entry->new_display,
+                'created_at' => $entry->created_at,
+            ];
+        }
+
+        return ['total' => $bundle['total'], 'entries' => $entries];
     }
 
     /**
@@ -97,7 +160,28 @@ class FeedUpdateResource extends JsonResource
                 ])
                 ->values(),
             'pinned' => $comment->pinned,
+            'is_following_item' => $item !== null && in_array($item['id'], $this->followedIds($viewer_id)['items'], true),
+            'is_following_board' => in_array($board->id, $this->followedIds($viewer_id)['boards'], true),
+            'activity' => $this->activity['entries'] ?? [],
+            'activity_total' => $this->activity['total'] ?? 0,
         ];
+    }
+
+    /**
+     * @return array{items: array<int, int>, boards: array<int, int>}
+     */
+    private function followedIds(?int $viewer_id): array
+    {
+        if ($this->follows === null) {
+            $rows = $viewer_id === null ? collect() : FeedFollow::where('user_id', $viewer_id)->get(['target_type', 'target_id']);
+
+            $this->follows = [
+                'items' => $rows->where('target_type', FeedFollow::TYPE_ITEM)->pluck('target_id')->map(fn ($id) => (int) $id)->values()->all(),
+                'boards' => $rows->where('target_type', FeedFollow::TYPE_BOARD)->pluck('target_id')->map(fn ($id) => (int) $id)->values()->all(),
+            ];
+        }
+
+        return $this->follows;
     }
 
     /**
@@ -110,7 +194,7 @@ class FeedUpdateResource extends JsonResource
         return [
             $board,
             ['id' => $comment->item->id, 'name' => $comment->item->name],
-            "/boards/{$board->id}/pulses/{$comment->item->id}",
+            "/boards/{$board->id}/pulses/{$comment->item->id}?comment={$comment->id}",
         ];
     }
 
@@ -121,6 +205,6 @@ class FeedUpdateResource extends JsonResource
     {
         $board = $comment->board;
 
-        return [$board, null, "/boards/{$board->id}"];
+        return [$board, null, "/boards/{$board->id}?update={$comment->id}"];
     }
 }

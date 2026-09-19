@@ -3,10 +3,13 @@
 namespace App\Services\Feed;
 
 use App\Events\NewFeedUpdate;
+use App\Http\Resources\FeedUpdateResource;
 use App\Models\BoardComment;
 use App\Models\BoardItemComment;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardItemActivityService;
+use App\Services\Board\ScheduledCommentService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Collection;
 
@@ -19,6 +22,8 @@ use Illuminate\Support\Collection;
  */
 class FeedService
 {
+    public function __construct(private readonly BoardItemActivityService $activity_service) {}
+
     /**
      * Everyone who should receive this update live: every member of the
      * board's workspace (so the "All account" tab stays live for everyone),
@@ -46,70 +51,20 @@ class FeedService
     /**
      * Broadcasts `$comment` to every resolved recipient's private
      * `feed.{user_id}` channel. Called right after a comment/reply is
-     * created, and again (from {@see publishDue()}) once a scheduled one
-     * becomes due.
+     * created, and again (from {@see ScheduledCommentService::publish()}) once a
+     * scheduled one goes live.
      */
     public function broadcastUpdate(BoardItemComment|BoardComment $comment, WorkspaceNavigationItem $board, ?User $thread_author = null): void
     {
         $recipients = $this->resolveRecipients($board, $comment->mentions->pluck('user_id'), $thread_author);
 
+        // The item changes behind a top-level item update are the same for every recipient.
+        $activity = $comment instanceof BoardItemComment && isset(($bundle = $this->activity_service->forUpdates(collect([$comment])))[$comment->id])
+            ? FeedUpdateResource::activityPayload($bundle[$comment->id])
+            : null;
+
         foreach ($recipients as $recipient) {
-            broadcast(new NewFeedUpdate($comment, $recipient));
+            broadcast(new NewFeedUpdate($comment, $recipient, $activity));
         }
-    }
-
-    /**
-     * Publishes every comment/reply (item- and board-level) whose
-     * `scheduled_at` has come due: clears `scheduled_at` — so from here on
-     * it behaves like a normal comment (visible in its thread, never
-     * reprocessed by this method) — and broadcasts it to the feed exactly
-     * like a freshly-posted update. Run every minute by the
-     * `feed:publish-scheduled` command (see routes/console.php).
-     */
-    public function publishDue(): int
-    {
-        return $this->publishDueItemComments() + $this->publishDueBoardComments();
-    }
-
-    private function publishDueItemComments(): int
-    {
-        $due = BoardItemComment::query()
-            ->whereNotNull('scheduled_at')
-            ->where('scheduled_at', '<=', now())
-            ->with(['parent.author'])
-            ->get();
-
-        foreach ($due as $comment) {
-            $comment->update(['scheduled_at' => null]);
-
-            $this->broadcastUpdate(
-                $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent']),
-                $comment->item->board,
-                $comment->parent?->author,
-            );
-        }
-
-        return $due->count();
-    }
-
-    private function publishDueBoardComments(): int
-    {
-        $due = BoardComment::query()
-            ->whereNotNull('scheduled_at')
-            ->where('scheduled_at', '<=', now())
-            ->with(['parent.author'])
-            ->get();
-
-        foreach ($due as $comment) {
-            $comment->update(['scheduled_at' => null]);
-
-            $this->broadcastUpdate(
-                $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'board.parent']),
-                $comment->board,
-                $comment->parent?->author,
-            );
-        }
-
-        return $due->count();
     }
 }

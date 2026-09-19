@@ -29,7 +29,7 @@ use Illuminate\Support\Str;
  * - "When `trigger_column_id` changes to `trigger_value`, run `action_type`" —
  *   {@see handleValueChanged()}, called synchronously from the same choke
  *   point every column-value write already goes through,
- *   {@see BoardItemController::syncValues()}. Covers `status_changed`,
+ *   {@see BoardItemValueService::sync()}. Covers `status_changed`,
  *   `person_assigned`.
  * - "When `trigger_column_id`'s date arrives, run `action_type`" —
  *   {@see runDueDateTriggers()}, called once daily by the scheduled

@@ -47,7 +47,7 @@ use Illuminate\Support\Carbon;
 ])]
 class BoardAutomation extends Model
 {
-    /** Fires once a `status`/`label` column's value changes to `trigger_value` — checked synchronously from `BoardItemController::syncValues()`. */
+    /** Fires once a `status`/`label` column's value changes to `trigger_value`, checked synchronously from `BoardItemValueService::sync()`. */
     public const TRIGGER_STATUS_CHANGED = 'status_changed';
 
     /** Fires once a `date` column's stored date equals today — checked once daily by the scheduled `automations:run-date-triggers` command. */

@@ -18,14 +18,13 @@ use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
 use App\Models\BoardItemValue;
-use App\Models\Notification;
-use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemFilterService;
+use App\Services\Board\BoardItemValueService;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\MirrorColumnResolver;
-use App\Services\Notification\NotificationService;
+use App\Services\Board\RecurringItemService;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -38,9 +37,9 @@ class BoardItemController extends Controller
     public function __construct(
         private readonly BoardItemFilterService $filter_service,
         private readonly BoardViewResolver $view_resolver,
-        private readonly NotificationService $notification_service,
         private readonly MirrorColumnResolver $mirror_resolver,
         private readonly BoardAutomationService $automation_service,
+        private readonly BoardItemValueService $value_service,
     ) {}
 
     /**
@@ -152,7 +151,7 @@ class BoardItemController extends Controller
         $this->assignAutoNumberValues($board_item, $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM);
 
         if (! empty($validated['values'])) {
-            $this->syncValues($item, $board_item, $validated['values'], $request->user());
+            $this->value_service->sync($item, $board_item, $validated['values'], $request->user(), false);
         }
 
         $this->automation_service->handleItemCreated($board_item, $request->user());
@@ -235,7 +234,7 @@ class BoardItemController extends Controller
      * PATCH /api/boards/{item}/items/{board_item}/recurrence
      *
      * Row menu's "Set recurring..." popover — schedules `board_item` to
-     * auto-recreate itself (see {@see \App\Services\Board\RecurringItemService}),
+     * auto-recreate itself (see {@see RecurringItemService}),
      * starting one interval from today (today's own row already exists, so
      * the first *recreation* is the next cycle, not this one).
      */
@@ -293,7 +292,7 @@ class BoardItemController extends Controller
         $this->ensureItemBelongsToBoard($item, $board_item);
         BoardEditGate::authorize($item, $request->user());
 
-        $this->syncValues($item, $board_item, $request->validated()['values'], $request->user());
+        $this->value_service->sync($item, $board_item, $request->validated()['values'], $request->user());
 
         return response()->json([
             'message' => 'Item updated successfully.',
@@ -385,7 +384,7 @@ class BoardItemController extends Controller
      * PATCH /api/boards/{item}/items/values
      *
      * Selection action bar's "Edit column" bulk action — applies one column's
-     * value to every given item in one request, reusing `syncValues()` per
+     * value to every given item in one request, reusing `BoardItemValueService::sync()` per
      * item so this gets the exact same behavior a single inline cell edit
      * gets for free (the People-column "assigned you" notification, silently
      * skipping a column id that doesn't belong to this item's own tab).
@@ -398,7 +397,7 @@ class BoardItemController extends Controller
         $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
 
         foreach ($items as $board_item) {
-            $this->syncValues($item, $board_item, [$validated['column_id'] => $validated['value']], $request->user());
+            $this->value_service->sync($item, $board_item, [$validated['column_id'] => $validated['value']], $request->user());
         }
 
         return response()->json([
@@ -509,87 +508,6 @@ class BoardItemController extends Controller
         return response()->json([
             'message' => 'Items deleted successfully.',
         ]);
-    }
-
-    /**
-     * Upserts one {@link BoardItemValue} per entry in `$values`, silently
-     * skipping any column id that doesn't belong to this item's own tab
-     * (columns are per-tab, so a column from a different tab of the same
-     * board is rejected too, not just columns from other boards).
-     *
-     * When `$actor` is given, newly-added people on a people-type column
-     * trigger an "Assigned you" notification, see {@see notifyNewlyAssignedPeople()}.
-     *
-     * @param  array<string, mixed>  $values
-     */
-    private function syncValues(WorkspaceNavigationItem $item, BoardItem $board_item, array $values, ?User $actor = null): void
-    {
-        // A subitem may only be assigned values for subitem-scoped columns,
-        // and a root item only for item-scoped ones — the two column sets are
-        // independent, mirroring how monday.com's subitems carry their own
-        // separate columns rather than reusing the parent item's.
-        $scope = $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
-
-        $valid_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
-            ->where('scope', $scope)
-            ->whereIn('id', array_map('intval', array_keys($values)))
-            ->get(['id', 'type', 'config', 'label'])
-            ->keyBy('id');
-
-        foreach ($values as $column_id => $value) {
-            $column = $valid_columns->get((int) $column_id);
-            if (! $column) {
-                continue;
-            }
-
-            if ($actor && $column->type === BoardColumn::TYPE_PEOPLE) {
-                $this->notifyNewlyAssignedPeople($item, $board_item, $column, $value, $actor);
-            }
-
-            $old_value = BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->first()?->value;
-
-            $board_item->values()->updateOrCreate(
-                ['column_id' => $column->id],
-                ['value' => $value]
-            );
-
-            $this->automation_service->handleValueChanged($board_item, $column, $old_value, $value, $actor);
-        }
-    }
-
-    /**
-     * Notifies every person newly added to a people-type column value
-     * (comparing against the currently-stored value), skipping self-assignment.
-     * No-ops entirely when the column's own `config.notify_on_assignment` has
-     * been switched off (see the People cell picker's bottom toggle,
-     * persisted per-column via `BoardColumnController::update()`), which
-     * takes precedence over — and is checked before ever touching — each
-     * recipient's own personal notification preferences.
-     */
-    private function notifyNewlyAssignedPeople(WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, mixed $new_value, User $actor): void
-    {
-        if (($column->config['notify_on_assignment'] ?? true) === false) {
-            return;
-        }
-
-        $existing_value = BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->first();
-        $existing_ids = is_array($existing_value?->value) ? $existing_value->value : [];
-        $new_ids = is_array($new_value) ? $new_value : [];
-
-        foreach (array_diff($new_ids, $existing_ids) as $newly_added_id) {
-            if ($person = User::find($newly_added_id)) {
-                $this->notification_service->notify(
-                    recipient: $person,
-                    actor: $actor,
-                    type: Notification::TYPE_ASSIGNED,
-                    board: $item,
-                    action_label: 'Assigned you',
-                    action_target: sprintf('to "%s" on the Board "%s"', $board_item->name, $item->label),
-                    link: "/boards/{$item->id}/pulses/{$board_item->id}",
-                    board_item: $board_item,
-                );
-            }
-        }
     }
 
     /**

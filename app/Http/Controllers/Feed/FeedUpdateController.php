@@ -5,13 +5,18 @@ namespace App\Http\Controllers\Feed;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\FeedUpdateResource;
 use App\Models\BoardComment;
+use App\Models\BoardItem;
 use App\Models\BoardItemComment;
+use App\Models\FeedFollow;
 use App\Models\FeedSavedView;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardItemActivityService;
+use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
+use App\Support\BoardEditGate;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -47,16 +52,20 @@ class FeedUpdateController extends Controller
         'unread' => ['sometimes', 'boolean'],
     ];
 
+    /** Every tab the feed can list, see {@see index()}. */
+    private const TABS = 'all,mentioned,bookmarked,account,following,pinned,scheduled';
+
     /** Tie-break order between the two comment tables when two rows share a `created_at`. */
     private const KIND_RANK = ['ic' => 2, 'bc' => 1];
 
     public function __construct(
         private readonly NotificationService $notification_service,
         private readonly FeedService $feed_service,
+        private readonly BoardItemActivityService $activity_service,
     ) {}
 
     /**
-     * GET /api/feed/updates?tab=all|mentioned|bookmarked|account|scheduled&board_id=&cursor=&limit=
+     * GET /api/feed/updates?tab=all|mentioned|bookmarked|account|following|pinned|scheduled&board_id=&cursor=&limit=
      *   &q=&author_id=&kind=updates|replies&from=&to=&unread=
      *
      * The optional filters narrow the tab's updates: `q` searches the body and
@@ -68,12 +77,14 @@ class FeedUpdateController extends Controller
      * board-level merged) matching the tab, newest first. The first page also
      * carries every pinned update ahead of the newest ones, later pages hold
      * only unpinned updates older than the cursor, so paging never repeats a
-     * pinned card. The scheduled tab is small and never paginated.
+     * pinned card. The scheduled and pinned tabs are small and never paginated,
+     * `pinned` lists every pinned update in the viewer's workspaces and
+     * `following` the updates on the boards and items the viewer follows.
      */
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account,scheduled'],
+            'tab' => ['sometimes', 'string', 'in:'.self::TABS],
             'board_id' => ['sometimes', 'integer'],
             'cursor' => ['sometimes', 'nullable', 'string', 'max:200'],
             'limit' => ['sometimes', 'integer', 'min:1', 'max:'.self::MAX_PAGE_SIZE],
@@ -87,6 +98,10 @@ class FeedUpdateController extends Controller
 
         if ($tab === 'scheduled') {
             return $this->respondWithPage($this->scheduledUpdates($user, $board_id), null);
+        }
+
+        if ($tab === 'pinned') {
+            return $this->respondWithPage($this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED, $filters), null);
         }
 
         $limit = $validated['limit'] ?? self::PAGE_SIZE;
@@ -244,7 +259,7 @@ class FeedUpdateController extends Controller
     public function markAllSeen(Request $request): JsonResponse
     {
         $request->validate([
-            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account'],
+            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account,following,pinned'],
             'board_id' => ['sometimes', 'nullable', 'integer'],
             ...self::FILTER_RULES,
         ]);
@@ -310,7 +325,7 @@ class FeedUpdateController extends Controller
     {
         $request->validate([
             'name' => ['required', 'string', 'max:60'],
-            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account,scheduled'],
+            'tab' => ['sometimes', 'string', 'in:'.self::TABS],
             'board_id' => ['sometimes', 'nullable', 'integer'],
             ...self::FILTER_RULES,
         ]);
@@ -346,6 +361,75 @@ class FeedUpdateController extends Controller
     }
 
     /**
+     * GET /api/feed/follows
+     *
+     * The boards and items the viewer follows, for the Following tab's header.
+     */
+    public function follows(Request $request): JsonResponse
+    {
+        $follows = $this->followIds($request->user());
+
+        $boards = WorkspaceNavigationItem::query()
+            ->whereIn('id', $follows['boards'])
+            ->orderBy('label')
+            ->get(['id', 'label'])
+            ->map(fn (WorkspaceNavigationItem $board) => ['id' => $board->id, 'name' => $board->label])
+            ->values();
+
+        $items = BoardItem::query()
+            ->whereIn('id', $follows['items'])
+            ->with('board:id,label')
+            ->orderBy('name')
+            ->get(['id', 'name', 'board_id'])
+            ->map(fn (BoardItem $item) => [
+                'id' => $item->id,
+                'name' => $item->name,
+                'board_id' => $item->board_id,
+                'board_name' => $item->board?->label,
+            ])
+            ->values();
+
+        return response()->json(['data' => ['boards' => $boards, 'items' => $items]]);
+    }
+
+    /**
+     * POST /api/feed/follows  {type: board|item, id}
+     *
+     * Follows a board or an item the viewer can reach. Following twice is a no-op.
+     */
+    public function follow(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'type' => ['required', 'string', 'in:board,item'],
+            'id' => ['required', 'integer'],
+        ]);
+
+        $user = $request->user();
+        $board = $validated['type'] === FeedFollow::TYPE_BOARD
+            ? WorkspaceNavigationItem::findOrFail($validated['id'])
+            : BoardItem::findOrFail($validated['id'])->board;
+
+        abort_unless($board !== null && $user->workspaces()->where('workspaces.id', $board->workspace_id)->exists(), 403);
+
+        $user->feedFollows()->firstOrCreate([
+            'target_type' => $validated['type'],
+            'target_id' => $validated['id'],
+        ]);
+
+        return response()->json(['data' => ['type' => $validated['type'], 'id' => (int) $validated['id'], 'following' => true]], 201);
+    }
+
+    /**
+     * DELETE /api/feed/follows/{type}/{id}
+     */
+    public function unfollow(Request $request, string $type, int $id): JsonResponse
+    {
+        $request->user()->feedFollows()->where('target_type', $type)->where('target_id', $id)->delete();
+
+        return response()->json(['data' => ['type' => $type, 'id' => $id, 'following' => false]]);
+    }
+
+    /**
      * POST /api/feed/updates/{id}/bookmark
      */
     public function toggleBookmark(Request $request, string $id): JsonResponse
@@ -363,11 +447,13 @@ class FeedUpdateController extends Controller
      * POST /api/feed/updates/{id}/pin
      *
      * Toggles the pinned state shared with the comment/board discussion
-     * threads — a pinned update sorts ahead of the rest of the feed.
+     * threads, a pinned update sorts ahead of the rest of the feed. Only people
+     * who can edit the board may pin or unpin.
      */
     public function togglePin(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
+        BoardEditGate::authorize($this->boardFor($comment), $request->user());
         $comment->update(['pinned' => ! $comment->pinned]);
 
         return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
@@ -428,7 +514,7 @@ class FeedUpdateController extends Controller
      *
      * Same as {@see reply()}, except the reply stays invisible everywhere
      * (`scheduled_at` in the future) until
-     * {@see FeedService::publishDue()} publishes it.
+     * {@see ScheduledCommentService::publishDue()} publishes it.
      */
     public function schedule(Request $request, string $id): JsonResponse
     {
@@ -450,8 +536,17 @@ class FeedUpdateController extends Controller
      */
     private function respondWithPage(Collection $comments, ?string $next_cursor): JsonResponse
     {
+        $follows = $this->followIds(request()->user());
+        $activity = $this->activity_service->forUpdates($comments->filter(fn ($comment) => $comment instanceof BoardItemComment));
+
         return response()->json([
-            'data' => $comments->map(fn ($comment) => new FeedUpdateResource($comment))->values(),
+            'data' => $comments->map(function ($comment) use ($follows, $activity) {
+                $resource = (new FeedUpdateResource($comment))->withFollows($follows['items'], $follows['boards']);
+
+                return $comment instanceof BoardItemComment && isset($activity[$comment->id])
+                    ? $resource->withActivity(FeedUpdateResource::activityPayload($activity[$comment->id]))
+                    : $resource;
+            })->values(),
             'meta' => ['next_cursor' => $next_cursor, 'has_more' => $next_cursor !== null],
         ]);
     }
@@ -606,7 +701,8 @@ class FeedUpdateController extends Controller
         match ($tab) {
             'mentioned' => $query->whereHas('mentions', fn (Builder $q) => $q->where('user_id', $user->id)),
             'bookmarked' => $query->whereHas('bookmarks', fn (Builder $q) => $q->where('user_id', $user->id)),
-            'account' => null,
+            'following' => $this->applyFollowing($query, $is_item, $user),
+            'account', 'pinned' => null,
             default => $query->where($this->allScopeClosure($user)),
         };
 
@@ -618,6 +714,48 @@ class FeedUpdateController extends Controller
         });
 
         return $this->applyFilters($query, $filters, $user);
+    }
+
+    /**
+     * The board and item ids the viewer follows. Read once per request and kept
+     * on the request itself, since a controller instance can outlive a request.
+     *
+     * @return array{boards: array<int, int>, items: array<int, int>}
+     */
+    private function followIds(User $user): array
+    {
+        $request = request();
+
+        if (! $request->attributes->has('feed_follow_ids')) {
+            $rows = $user->feedFollows()->get(['target_type', 'target_id']);
+
+            $request->attributes->set('feed_follow_ids', [
+                'boards' => $rows->where('target_type', FeedFollow::TYPE_BOARD)->pluck('target_id')->map(fn ($id) => (int) $id)->values()->all(),
+                'items' => $rows->where('target_type', FeedFollow::TYPE_ITEM)->pluck('target_id')->map(fn ($id) => (int) $id)->values()->all(),
+            ]);
+        }
+
+        return $request->attributes->get('feed_follow_ids');
+    }
+
+    /**
+     * Keeps the updates on a followed board (its own discussion and every item
+     * on it) or a followed item. Nothing followed means nothing matches.
+     *
+     * @param  Builder<BoardItemComment>|Builder<BoardComment>  $query
+     * @return Builder<BoardItemComment>|Builder<BoardComment>
+     */
+    private function applyFollowing(Builder $query, bool $is_item, User $user): Builder
+    {
+        $follows = $this->followIds($user);
+
+        if ($is_item) {
+            return $query->whereHas('item', fn (Builder $item) => $item->where(fn (Builder $followed) => $followed
+                ->whereIn('board_items.id', $follows['items'])
+                ->orWhereIn('board_items.board_id', $follows['boards'])));
+        }
+
+        return $query->whereIn('board_id', $follows['boards']);
     }
 
     /**

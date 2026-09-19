@@ -31,6 +31,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $read_at
  * @property Carbon|null $dismissed_at
  * @property Carbon|null $snoozed_until
+ * @property Carbon|null $saved_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read User $user
@@ -38,7 +39,7 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem|null $board
  * @property-read BoardItem|null $boardItem
  */
-#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until'])]
+#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until', 'saved_at'])]
 class Notification extends Model
 {
     use HasFactory;
@@ -107,6 +108,7 @@ class Notification extends Model
             'read_at' => 'datetime',
             'dismissed_at' => 'datetime',
             'snoozed_until' => 'datetime',
+            'saved_at' => 'datetime',
         ];
     }
 
@@ -151,6 +153,24 @@ class Notification extends Model
     public function boardItem(): BelongsTo
     {
         return $this->belongsTo(BoardItem::class, 'board_item_id');
+    }
+
+    /**
+     * @param  Builder<Notification>  $query
+     * @return Builder<Notification>
+     */
+    public function scopeSaved(Builder $query): Builder
+    {
+        return $query->whereNotNull('saved_at');
+    }
+
+    /**
+     * @param  Builder<Notification>  $query
+     * @return Builder<Notification>
+     */
+    public function scopeNotSaved(Builder $query): Builder
+    {
+        return $query->whereNull('saved_at');
     }
 
     /**

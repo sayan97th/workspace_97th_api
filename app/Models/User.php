@@ -275,6 +275,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
+     * Boards and items this user follows, see {@see FeedFollow}.
+     *
+     * @return HasMany<FeedFollow, $this>
+     */
+    public function feedFollows(): HasMany
+    {
+        return $this->hasMany(FeedFollow::class);
+    }
+
+    /**
      * The {@see Department} this user is assigned to, if any.
      *
      * @return BelongsTo<Department, $this>

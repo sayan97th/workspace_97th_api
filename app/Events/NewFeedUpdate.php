@@ -27,6 +27,8 @@ class NewFeedUpdate implements ShouldBroadcast
     public function __construct(
         public BoardItemComment|BoardComment $comment,
         public User $recipient,
+        /** @var array{total: int, entries: array<int, array<string, mixed>>}|null The item changes behind a top-level item update, resolved once by the sender. */
+        public ?array $activity = null,
     ) {}
 
     /**
@@ -52,6 +54,8 @@ class NewFeedUpdate implements ShouldBroadcast
      */
     public function broadcastWith(): array
     {
-        return (new FeedUpdateResource($this->comment))->forViewer($this->recipient)->resolve();
+        $resource = (new FeedUpdateResource($this->comment))->forViewer($this->recipient);
+
+        return ($this->activity !== null ? $resource->withActivity($this->activity) : $resource)->resolve();
     }
 }

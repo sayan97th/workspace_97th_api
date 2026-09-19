@@ -40,6 +40,8 @@ class StoreBoardCommentRequest extends FormRequest
             // distinct from `mentioned_user_ids` (never shown inline in the body).
             'notified_user_ids' => ['sometimes', 'array'],
             'notified_user_ids.*' => ['integer', 'exists:users,id'],
+            // Held back and published by `feed:publish-scheduled` once due, see ScheduledCommentService.
+            'scheduled_at' => ['sometimes', 'nullable', 'date', 'after:now'],
             'attachments' => ['sometimes', 'array'],
             'attachments.*' => [
                 'file',

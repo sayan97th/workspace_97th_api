@@ -25,6 +25,9 @@ class NotificationController extends Controller
     /**
      * GET /api/notifications?tab=&board_id=&actor_id=&unread=&q=&cursor=&limit=
      *
+     * `tab=saved` lists the notifications the user saved for later, whatever
+     * their type.
+     *
      * One cursor-paginated page of the current user's notifications, newest
      * first. Every filter of the bell drawer (tab, board, person, unread only,
      * search) is applied here so paging never has to fetch rows it will hide.
@@ -33,7 +36,7 @@ class NotificationController extends Controller
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'tab' => ['sometimes', 'string', 'in:all,'.implode(',', array_keys(Notification::CATEGORY_TYPES))],
+            'tab' => ['sometimes', 'string', 'in:all,saved,'.implode(',', array_keys(Notification::CATEGORY_TYPES))],
             'board_id' => ['sometimes', 'integer'],
             'actor_id' => ['sometimes', 'integer'],
             'unread' => ['sometimes', 'boolean'],
@@ -44,6 +47,7 @@ class NotificationController extends Controller
         $page = $request->user()->notifications()
             ->visible()
             ->inCategory($validated['tab'] ?? 'all')
+            ->when(($validated['tab'] ?? 'all') === 'saved', fn (Builder $query) => $query->saved())
             ->when($validated['board_id'] ?? null, fn (Builder $query, int $board_id) => $query->where('board_id', $board_id))
             ->when($validated['actor_id'] ?? null, fn (Builder $query, int $actor_id) => $query->where('actor_id', $actor_id))
             ->when($request->boolean('unread'), fn (Builder $query) => $query->unread())
@@ -146,13 +150,15 @@ class NotificationController extends Controller
      * PATCH /api/notifications/read-all
      *
      * Marks every one of the current user's unread, visible notifications as
-     * read, the bell drawer's "Mark all as read".
+     * read, the bell drawer's "Mark all as read". Notifications saved for later
+     * are left alone, saving one is how the user keeps it out of a bulk clear.
      */
     public function markAllAsRead(Request $request): JsonResponse
     {
         $request->user()->notifications()
             ->unread()
             ->visible()
+            ->notSaved()
             ->update(['is_read' => true, 'read_at' => now()]);
 
         return response()->json(['message' => 'All notifications marked as read.']);
@@ -161,7 +167,7 @@ class NotificationController extends Controller
     /**
      * POST /api/notifications/bulk
      *
-     * Applies one action (`read`, `unread` or `dismiss`) to several of the
+     * Applies one action (`read`, `unread`, `dismiss`, `save` or `unsave`) to several of the
      * current user's notifications at once, the bell drawer's multi-select
      * toolbar. Ids that are not the caller's are ignored rather than rejected,
      * so a stale selection never fails the whole request. Responds with the ids
@@ -170,7 +176,7 @@ class NotificationController extends Controller
     public function bulk(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'action' => ['required', 'string', 'in:read,unread,dismiss'],
+            'action' => ['required', 'string', 'in:read,unread,dismiss,save,unsave'],
             'ids' => ['required', 'array', 'min:1', 'max:'.self::MAX_BULK_IDS],
             'ids.*' => ['integer'],
         ]);
@@ -184,7 +190,9 @@ class NotificationController extends Controller
         match ($validated['action']) {
             'read' => $notifications->update(['is_read' => true, 'read_at' => now()]),
             'unread' => $notifications->update(['is_read' => false, 'read_at' => null]),
-            'dismiss' => $notifications->update(['dismissed_at' => now()]),
+            'dismiss' => $notifications->update(['dismissed_at' => now(), 'saved_at' => null]),
+            'save' => (clone $notifications)->whereNull('saved_at')->update(['saved_at' => now()]),
+            'unsave' => $notifications->update(['saved_at' => null]),
         };
 
         return response()->json([
@@ -234,6 +242,104 @@ class NotificationController extends Controller
     }
 
     /**
+     * PATCH /api/notifications/{notification}/save
+     *
+     * "Save for later": keeps the notification in the Saved tab, and out of
+     * "Mark all as read", until the user unsaves or dismisses it.
+     */
+    public function save(Request $request, Notification $notification): JsonResponse
+    {
+        abort_if($notification->user_id !== $request->user()->id || $notification->dismissed_at !== null, 403);
+
+        if ($notification->saved_at === null) {
+            $notification->update(['saved_at' => now()]);
+        }
+
+        return response()->json([
+            'data' => [
+                'id' => (string) $notification->id,
+                'is_saved' => true,
+            ],
+        ]);
+    }
+
+    /**
+     * DELETE /api/notifications/{notification}/save
+     */
+    public function unsave(Request $request, Notification $notification): JsonResponse
+    {
+        abort_if($notification->user_id !== $request->user()->id, 403);
+
+        $notification->update(['saved_at' => null]);
+
+        return response()->json([
+            'data' => [
+                'id' => (string) $notification->id,
+                'is_saved' => false,
+            ],
+        ]);
+    }
+
+    /**
+     * GET /api/notifications/summary
+     *
+     * What is waiting for the user, for the summary card at the top of the bell
+     * drawer: unread counts by kind, the people who wrote the most unread
+     * notifications, how many arrived today in the user's own time zone, and how
+     * many are saved or snoozed.
+     */
+    public function summary(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $unread = $user->notifications()->visible()->unread();
+
+        $by_category = [];
+        foreach ((clone $unread)->selectRaw('type, count(*) as total')->groupBy('type')->pluck('total', 'type') as $type => $total) {
+            $category = Notification::categoryOf($type);
+            $by_category[$category] = ($by_category[$category] ?? 0) + (int) $total;
+        }
+
+        $due_reminders = (clone $unread)->where('type', Notification::TYPE_DUE_DATE_REMINDER)->count();
+
+        $top_counts = (clone $unread)
+            ->whereNotNull('actor_id')
+            ->selectRaw('actor_id, count(*) as total')
+            ->groupBy('actor_id')
+            ->orderByDesc('total')
+            ->limit(3)
+            ->pluck('total', 'actor_id');
+
+        $top_actors = User::query()
+            ->whereIn('id', $top_counts->keys())
+            ->get()
+            ->map(fn (User $actor) => [
+                'id' => $actor->id,
+                'name' => $actor->full_name,
+                'avatar_url' => $actor->profile_photo_url,
+                'count' => (int) $top_counts->get($actor->id, 0),
+            ])
+            ->sortByDesc('count')
+            ->values();
+
+        $start_of_today = Carbon::now($user->timezone ?: config('app.timezone'))->startOfDay()->setTimezone(config('app.timezone'));
+
+        return response()->json([
+            'data' => [
+                'unread_count' => (clone $unread)->count(),
+                'mentions' => $by_category['mentioned'] ?? 0,
+                'replies' => $by_category['replies'] ?? 0,
+                'assigned' => $by_category['assigned'] ?? 0,
+                'reactions' => $by_category['reactions'] ?? 0,
+                'due_reminders' => $due_reminders,
+                'today_count' => $user->notifications()->visible()->where('created_at', '>=', $start_of_today)->count(),
+                'saved_count' => $user->notifications()->visible()->saved()->count(),
+                'snoozed_count' => $user->notifications()->whereNull('dismissed_at')->where('snoozed_until', '>', now())->count(),
+                'top_actors' => $top_actors,
+            ],
+        ]);
+    }
+
+    /**
      * DELETE /api/notifications/{notification}
      *
      * Soft-dismisses a single notification (the bell drawer's per-item "×")
@@ -244,7 +350,7 @@ class NotificationController extends Controller
     {
         abort_if($notification->user_id !== $request->user()->id, 403);
 
-        $notification->update(['dismissed_at' => now()]);
+        $notification->update(['dismissed_at' => now(), 'saved_at' => null]);
 
         return response()->json(['message' => 'Notification dismissed.']);
     }

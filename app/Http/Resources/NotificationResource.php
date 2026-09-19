@@ -41,6 +41,7 @@ class NotificationResource extends JsonResource
             // which is how the drawer collapses "3 people replied" into one card.
             'group_key' => $this->link !== null ? "{$this->type}|{$this->link}" : "single|{$this->id}",
             'is_unread' => ! $this->is_read,
+            'is_saved' => $this->saved_at !== null,
             'category' => Notification::categoryOf($this->type),
             'created_at' => $this->created_at,
         ];

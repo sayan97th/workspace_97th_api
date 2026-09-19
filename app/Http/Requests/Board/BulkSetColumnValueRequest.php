@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests\Board;
 
-use App\Http\Controllers\Board\BoardItemController;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
@@ -13,7 +12,7 @@ use Illuminate\Validation\Rule;
  * items, plus the one column and value applied to every one of them. `value`'s
  * shape is column-kind-dependent, same as {@see UpdateBoardItemValuesRequest},
  * so it's left unvalidated here and resolved per item by
- * {@see BoardItemController::syncValues()}.
+ * {@see BoardItemValueService::sync()}.
  */
 class BulkSetColumnValueRequest extends FormRequest
 {

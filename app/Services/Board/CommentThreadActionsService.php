@@ -62,7 +62,7 @@ class CommentThreadActionsService
 
     /**
      * Records `$notified_user_ids` on `$comment` (deduped, self excluded)
-     * and sends each one a {@see Notification::TYPE_NOTIFIED} notification —
+     * and sends each one a {@see Notification::TYPE_NOTIFIED} notification,
      * the composer's "Notify" action, distinct from `@mentions`: the person
      * is not shown inline in the comment body.
      *
@@ -77,15 +77,45 @@ class CommentThreadActionsService
         string $action_target,
         ?BoardItem $board_item = null,
     ): void {
-        $notified_user_ids = $notified_user_ids->unique()->reject(fn ($user_id) => (int) $user_id === $actor->id);
-        if ($notified_user_ids->isEmpty()) {
-            return;
+        $recorded_ids = $this->recordNotified($comment, $notified_user_ids, $actor);
+
+        $this->sendNotified($recorded_ids, $actor, $board, $link, $action_target, $board_item);
+    }
+
+    /**
+     * Stores who a comment notifies (deduped, the author excluded) without
+     * sending anything yet, so a scheduled comment can keep its "Notify" list
+     * until it goes live. Returns the ids that were stored.
+     *
+     * @param  Collection<int, int>  $notified_user_ids
+     * @return Collection<int, int>
+     */
+    public function recordNotified(BoardItemComment|BoardComment $comment, Collection $notified_user_ids, User $actor): Collection
+    {
+        $notified_user_ids = $notified_user_ids->unique()->reject(fn ($user_id) => (int) $user_id === $actor->id)->values();
+
+        if ($notified_user_ids->isNotEmpty()) {
+            $comment->notifiedUsers()->createMany(
+                $notified_user_ids->map(fn ($user_id) => ['user_id' => $user_id])->all()
+            );
         }
 
-        $comment->notifiedUsers()->createMany(
-            $notified_user_ids->map(fn ($user_id) => ['user_id' => $user_id])->all()
-        );
+        return $notified_user_ids;
+    }
 
+    /**
+     * Sends the "Wants your attention" notification to each id.
+     *
+     * @param  Collection<int, int>  $notified_user_ids
+     */
+    public function sendNotified(
+        Collection $notified_user_ids,
+        User $actor,
+        WorkspaceNavigationItem $board,
+        string $link,
+        string $action_target,
+        ?BoardItem $board_item = null,
+    ): void {
         foreach ($notified_user_ids as $notified_user_id) {
             if ($notified_user = User::find($notified_user_id)) {
                 $this->notification_service->notify(

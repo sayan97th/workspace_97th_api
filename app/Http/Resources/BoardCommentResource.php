@@ -47,8 +47,11 @@ class BoardCommentResource extends JsonResource
                     'id' => $view->user->id,
                     'full_name' => $view->user->full_name,
                     'profile_photo_url' => $view->user->profile_photo_url,
+                    'seen_at' => $view->created_at,
                 ])
                 ->values(),
+            'bookmarked_by_me' => $this->bookmarks->contains('user_id', $current_user_id),
+            'scheduled_at' => $this->scheduled_at,
             'pinned' => $this->pinned,
             'notified_user_ids' => $this->notifiedUsers->pluck('user_id')->values(),
             'reactions' => $this->reactions
