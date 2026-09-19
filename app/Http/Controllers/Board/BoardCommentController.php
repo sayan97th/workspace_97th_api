@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Board;
 
+use App\Events\BoardCommentPosted;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\StoreBoardCommentRequest;
 use App\Http\Requests\Board\ToggleBoardCommentReactionRequest;
 use App\Http\Requests\Board\UpdateBoardCommentRequest;
 use App\Http\Resources\BoardCommentResource;
+use App\Http\Resources\CommentRevisionResource;
 use App\Models\BoardComment;
 use App\Models\Notification;
 use App\Models\User;
@@ -104,6 +106,8 @@ class BoardCommentController extends Controller
             }
         }
 
+        broadcast(new BoardCommentPosted($comment))->toOthers();
+
         $this->feed_service->broadcastUpdate(
             $comment->fresh(['author', 'mentions.user', 'bookmarks', 'views', 'board.parent']),
             $item,
@@ -144,11 +148,26 @@ class BoardCommentController extends Controller
         $this->ensureCommentBelongsToBoard($item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $comment->update(['body' => trim($request->validated('body')), 'edited_at' => now()]);
+        $this->comment_actions->editBody($comment, trim($request->validated('body')), $request->user());
 
         return response()->json([
             'message' => 'Update edited successfully.',
             'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * GET /api/boards/{item}/comments/{comment}/revisions
+     *
+     * The bodies the update had before each edit, newest edit first, for the
+     * "(edited)" marker's history popover.
+     */
+    public function revisions(WorkspaceNavigationItem $item, BoardComment $comment): JsonResponse
+    {
+        $this->ensureCommentBelongsToBoard($item, $comment);
+
+        return response()->json([
+            'data' => CommentRevisionResource::collection($comment->revisions()->with('editor')->get()),
         ]);
     }
 

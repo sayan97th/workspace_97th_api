@@ -8,6 +8,7 @@ use App\Http\Requests\Board\StoreBoardItemCommentRequest;
 use App\Http\Requests\Board\ToggleBoardItemCommentReactionRequest;
 use App\Http\Requests\Board\UpdateBoardItemCommentRequest;
 use App\Http\Resources\BoardItemCommentResource;
+use App\Http\Resources\CommentRevisionResource;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
 use App\Models\Notification;
@@ -140,11 +141,27 @@ class BoardItemCommentController extends Controller
         $this->ensureCommentBelongsToItem($board_item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $comment->update(['body' => trim($request->validated('body')), 'edited_at' => now()]);
+        $this->comment_actions->editBody($comment, trim($request->validated('body')), $request->user());
 
         return response()->json([
             'message' => 'Comment updated successfully.',
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * GET /api/boards/{item}/items/{board_item}/comments/{comment}/revisions
+     *
+     * The bodies the comment had before each edit, newest edit first, for the
+     * "(edited)" marker's history popover.
+     */
+    public function revisions(WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+
+        return response()->json([
+            'data' => CommentRevisionResource::collection($comment->revisions()->with('editor')->get()),
         ]);
     }
 

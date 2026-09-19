@@ -45,12 +45,14 @@ use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
 use App\Http\Controllers\BrandingController as PublicBrandingController;
 use App\Http\Controllers\BroadcastAuthController;
+use App\Http\Controllers\Comment\SavedReplyController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
 use App\Http\Controllers\Integration\SlackOAuthCallbackController;
 use App\Http\Controllers\Notification\NotificationController;
+use App\Http\Controllers\People\MentionTeamController;
 use App\Http\Controllers\People\PersonCardController;
 use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
@@ -147,6 +149,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('filters', [NotificationController::class, 'filters']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
         Route::patch('read-all', [NotificationController::class, 'markAllAsRead']);
+        Route::post('bulk', [NotificationController::class, 'bulk']);
         Route::patch('{notification}/read', [NotificationController::class, 'markAsRead']);
         Route::patch('{notification}/unread', [NotificationController::class, 'markAsUnread']);
         Route::patch('{notification}/snooze', [NotificationController::class, 'snooze']);
@@ -158,6 +161,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // who share a workspace with the viewer.
     Route::get('people/{user}/card', [PersonCardController::class, 'show']);
 
+    // Account teams a board's comment composers can group `@mention`, limited
+    // to each team's members inside the board's workspace.
+    Route::get('people/boards/{board}/teams', [MentionTeamController::class, 'index']);
+
+    // The current user's reusable update and reply templates.
+    Route::apiResource('saved-replies', SavedReplyController::class)->except(['show']);
+
     // Update Feed — real-time (Reverb) + REST-readable stream of comment
     // "updates" (item- and board-level) the current user has visibility on.
     Route::prefix('feed')->group(function () {
@@ -165,11 +175,17 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('boards', [FeedUpdateController::class, 'boards']);
         Route::get('boards/{board}/people', [FeedUpdateController::class, 'people']);
         Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
+        Route::get('filters', [FeedUpdateController::class, 'filters']);
+        Route::get('saved-views', [FeedUpdateController::class, 'savedViews']);
+        Route::post('saved-views', [FeedUpdateController::class, 'storeSavedView']);
+        Route::delete('saved-views/{saved_view}', [FeedUpdateController::class, 'destroySavedView']);
+        Route::post('updates/read-all', [FeedUpdateController::class, 'markAllSeen']);
         Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
         Route::post('updates/{id}/pin', [FeedUpdateController::class, 'togglePin']);
         Route::post('updates/{id}/like', [FeedUpdateController::class, 'toggleLike']);
         Route::post('updates/{id}/reply', [FeedUpdateController::class, 'reply']);
         Route::post('updates/{id}/seen', [FeedUpdateController::class, 'markSeen']);
+        Route::delete('updates/{id}/seen', [FeedUpdateController::class, 'markUnseen']);
         Route::post('updates/{id}/schedule', [FeedUpdateController::class, 'schedule']);
     });
 
@@ -421,6 +437,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('{comment}/reactions', [BoardItemCommentController::class, 'toggleReaction']);
                 Route::post('{comment}/seen', [BoardItemCommentController::class, 'toggleSeen']);
                 Route::post('{comment}/pin', [BoardItemCommentController::class, 'togglePin']);
+                Route::get('{comment}/revisions', [BoardItemCommentController::class, 'revisions']);
             });
 
             Route::prefix('{board_item}/checklist-items')->group(function () {
@@ -474,6 +491,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{comment}/reactions', [BoardCommentController::class, 'toggleReaction']);
             Route::post('{comment}/seen', [BoardCommentController::class, 'toggleSeen']);
             Route::post('{comment}/pin', [BoardCommentController::class, 'togglePin']);
+            Route::get('{comment}/revisions', [BoardCommentController::class, 'revisions']);
         });
     });
 

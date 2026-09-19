@@ -26,7 +26,7 @@ class NotificationPreferenceController extends Controller
             );
         }
 
-        foreach (['desktop_notifications_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end', 'email_digest_frequency'] as $field) {
+        foreach (['desktop_notifications_enabled', 'notification_sound_enabled', 'tab_badge_enabled', 'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end', 'email_digest_frequency'] as $field) {
             if (array_key_exists($field, $validated)) {
                 $updates[$field] = $validated[$field];
             }

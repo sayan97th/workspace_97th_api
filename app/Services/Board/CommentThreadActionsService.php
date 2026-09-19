@@ -2,6 +2,8 @@
 
 namespace App\Services\Board;
 
+use App\Http\Controllers\Board\BoardCommentController;
+use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Models\BoardComment;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
@@ -10,11 +12,12 @@ use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The handful of comment-thread actions shared by
- * {@see \App\Http\Controllers\Board\BoardItemCommentController} and
- * {@see \App\Http\Controllers\Board\BoardCommentController} — kept as a
+ * {@see BoardItemCommentController} and
+ * {@see BoardCommentController}, kept as a
  * small service rather than merging the two (near-identical but still
  * distinct) controllers together.
  */
@@ -32,6 +35,29 @@ class CommentThreadActionsService
         $comment->update(['pinned' => ! $comment->pinned]);
 
         return $comment->pinned;
+    }
+
+    /**
+     * Replaces a comment or reply's body, keeping the body it had until now
+     * as a revision so the "(edited)" marker can show earlier versions. An
+     * edit that leaves the text unchanged is not an edit: no revision, and
+     * `edited_at` stays as it was.
+     */
+    public function editBody(BoardItemComment|BoardComment $comment, string $body, User $editor): void
+    {
+        if ($comment->body === $body) {
+            return;
+        }
+
+        DB::transaction(function () use ($comment, $body, $editor) {
+            $comment->revisions()->create([
+                'edited_by_id' => $editor->id,
+                'body' => $comment->body,
+                'body_written_at' => $comment->edited_at ?? $comment->created_at,
+            ]);
+
+            $comment->update(['body' => $body, 'edited_at' => now()]);
+        });
     }
 
     /**

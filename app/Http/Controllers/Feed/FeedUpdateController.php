@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\FeedUpdateResource;
 use App\Models\BoardComment;
 use App\Models\BoardItemComment;
+use App\Models\FeedSavedView;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -16,6 +17,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The Update Feed opened from the AppTopBar feed button
@@ -35,6 +37,16 @@ class FeedUpdateController extends Controller
     /** Pinned updates are always shown first, so the first page loads at most this many. */
     private const MAX_PINNED = 50;
 
+    /** Validation for the filters shared by the list, "mark all as read" and saved views. */
+    private const FILTER_RULES = [
+        'q' => ['sometimes', 'nullable', 'string', 'max:100'],
+        'author_id' => ['sometimes', 'nullable', 'integer'],
+        'kind' => ['sometimes', 'nullable', 'string', 'in:updates,replies'],
+        'from' => ['sometimes', 'nullable', 'date'],
+        'to' => ['sometimes', 'nullable', 'date', 'after_or_equal:from'],
+        'unread' => ['sometimes', 'boolean'],
+    ];
+
     /** Tie-break order between the two comment tables when two rows share a `created_at`. */
     private const KIND_RANK = ['ic' => 2, 'bc' => 1];
 
@@ -45,6 +57,12 @@ class FeedUpdateController extends Controller
 
     /**
      * GET /api/feed/updates?tab=all|mentioned|bookmarked|account|scheduled&board_id=&cursor=&limit=
+     *   &q=&author_id=&kind=updates|replies&from=&to=&unread=
+     *
+     * The optional filters narrow the tab's updates: `q` searches the body and
+     * the author's name, `kind` keeps top-level updates or replies only,
+     * `from`/`to` bound the day it was posted (in the viewer's time zone) and
+     * `unread` keeps only what the viewer has not seen yet.
      *
      * One cursor-paginated page of updates (comments + replies, item- and
      * board-level merged) matching the tab, newest first. The first page also
@@ -59,11 +77,13 @@ class FeedUpdateController extends Controller
             'board_id' => ['sometimes', 'integer'],
             'cursor' => ['sometimes', 'nullable', 'string', 'max:200'],
             'limit' => ['sometimes', 'integer', 'min:1', 'max:'.self::MAX_PAGE_SIZE],
+            ...self::FILTER_RULES,
         ]);
 
         $tab = $validated['tab'] ?? 'all';
         $board_id = $request->integer('board_id') ?: null;
         $user = $request->user();
+        $filters = $this->readFilters($request);
 
         if ($tab === 'scheduled') {
             return $this->respondWithPage($this->scheduledUpdates($user, $board_id), null);
@@ -72,8 +92,8 @@ class FeedUpdateController extends Controller
         $limit = $validated['limit'] ?? self::PAGE_SIZE;
         $cursor = $this->decodeCursor($validated['cursor'] ?? null);
 
-        $pinned = $cursor === null ? $this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED) : collect();
-        $rows = $this->fetchUpdates($user, $tab, $board_id, false, $cursor, $limit + 1);
+        $pinned = $cursor === null ? $this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED, $filters) : collect();
+        $rows = $this->fetchUpdates($user, $tab, $board_id, false, $cursor, $limit + 1, $filters);
 
         $has_more = $rows->count() > $limit;
         $rows = $rows->take($limit);
@@ -119,16 +139,19 @@ class FeedUpdateController extends Controller
             }
         }
 
+        $unread_by_board = $this->unreadCountsByBoard($user);
+
         $boards = WorkspaceNavigationItem::whereIn('id', array_keys($combined))->get(['id', 'label'])->keyBy('id');
 
         $rows = collect($combined)
-            ->map(function ($count, $board_id) use ($boards) {
+            ->map(function ($count, $board_id) use ($boards, $unread_by_board) {
                 $board = $boards->get($board_id);
 
                 return [
                     'id' => (string) $board_id,
                     'name' => $board !== null ? $board->label : __('Deleted board'),
                     'count' => $count,
+                    'unread_count' => $unread_by_board[$board_id] ?? 0,
                 ];
             })
             ->sortByDesc('count')
@@ -138,6 +161,7 @@ class FeedUpdateController extends Controller
             'id' => 'all-boards',
             'name' => 'All boards in my feed',
             'count' => array_sum($combined),
+            'unread_count' => array_sum($unread_by_board),
         ]]);
 
         return response()->json(['data' => $all_boards_row->concat($rows)]);
@@ -176,26 +200,149 @@ class FeedUpdateController extends Controller
      */
     public function unreadCount(Request $request): JsonResponse
     {
+        return response()->json(['data' => ['unread_count' => $this->countUnread($request->user())]]);
+    }
+
+    /**
+     * GET /api/feed/filters
+     *
+     * The people who wrote the updates in the viewer's feed, so the person
+     * filter only offers authors that can actually match something.
+     */
+    public function filters(Request $request): JsonResponse
+    {
         $user = $request->user();
-        $workspace_ids = $user->workspaces()->pluck('workspaces.id');
-        $count = 0;
 
-        foreach ([BoardItemComment::class, BoardComment::class] as $model_class) {
-            $is_item = $model_class === BoardItemComment::class;
-
-            $count += $model_class::query()
-                ->visibleNow()
-                ->where('user_id', '!=', $user->id)
-                ->where(function (Builder $q) use ($user) {
-                    $q->whereHas('mentions', fn (Builder $mq) => $mq->where('user_id', $user->id))
-                        ->orWhereHas('parent', fn (Builder $pq) => $pq->where('user_id', $user->id));
-                })
-                ->whereHas($is_item ? 'item.board' : 'board', fn (Builder $q) => $q->whereIn('workspace_id', $workspace_ids))
-                ->whereDoesntHave('views', fn (Builder $q) => $q->where('user_id', $user->id))
-                ->count();
+        $author_ids = collect();
+        foreach (['ic' => BoardItemComment::class, 'bc' => BoardComment::class] as $kind => $model_class) {
+            $author_ids = $author_ids->concat(
+                $this->scopedQuery($model_class, $user, 'all', null)
+                    ->whereNotNull('user_id')
+                    ->distinct()
+                    ->pluck('user_id')
+            );
         }
 
-        return response()->json(['data' => ['unread_count' => $count]]);
+        $authors = User::query()
+            ->whereIn('id', $author_ids->unique()->values())
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->get()
+            ->map(fn (User $author) => ['id' => $author->id, 'name' => $author->full_name])
+            ->values();
+
+        return response()->json(['data' => ['authors' => $authors]]);
+    }
+
+    /**
+     * POST /api/feed/updates/read-all?tab=&board_id=&q=&author_id=&kind=&from=&to=
+     *
+     * Marks as seen every unread update the given tab, board and filters
+     * match, the feed's "Mark all as read". Only the viewer's own seen state
+     * changes. Responds with how many were marked and the fresh unread count.
+     */
+    public function markAllSeen(Request $request): JsonResponse
+    {
+        $request->validate([
+            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account'],
+            'board_id' => ['sometimes', 'nullable', 'integer'],
+            ...self::FILTER_RULES,
+        ]);
+
+        $user = $request->user();
+        $tab = $request->input('tab', 'all');
+        $board_id = $request->integer('board_id') ?: null;
+        $filters = [...$this->readFilters($request), 'unread' => true];
+        $marked = 0;
+
+        foreach ([BoardItemComment::class, BoardComment::class] as $model_class) {
+            $view_table = (new ($model_class.'View'))->getTable();
+
+            $this->scopedQuery($model_class, $user, $tab, $board_id, $filters)
+                ->select('id')
+                ->chunkById(500, function ($comments) use ($user, $view_table, &$marked) {
+                    $now = now();
+                    $marked += DB::table($view_table)->insertOrIgnore(
+                        $comments->map(fn ($comment) => [
+                            'comment_id' => $comment->id,
+                            'user_id' => $user->id,
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ])->all()
+                    );
+                });
+        }
+
+        return response()->json(['data' => ['marked_count' => $marked, 'unread_count' => $this->countUnread($user)]]);
+    }
+
+    /**
+     * DELETE /api/feed/updates/{id}/seen
+     *
+     * "Mark as unread": brings the update back as unread for the viewer, so
+     * it can be revisited later. A no-op on the viewer's own posts, which are
+     * never unread.
+     */
+    public function markUnseen(Request $request, string $id): JsonResponse
+    {
+        $comment = $this->resolveComment($id);
+        $comment->views()->where('user_id', $request->user()->id)->delete();
+
+        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+    }
+
+    /**
+     * GET /api/feed/saved-views
+     */
+    public function savedViews(Request $request): JsonResponse
+    {
+        $views = $request->user()->feedSavedViews()->orderBy('id')->get();
+
+        return response()->json(['data' => $views->map(fn (FeedSavedView $view) => $this->savedViewPayload($view))->values()]);
+    }
+
+    /**
+     * POST /api/feed/saved-views
+     *
+     * Saves the given tab, board and filters under a name.
+     */
+    public function storeSavedView(Request $request): JsonResponse
+    {
+        $request->validate([
+            'name' => ['required', 'string', 'max:60'],
+            'tab' => ['sometimes', 'string', 'in:all,mentioned,bookmarked,account,scheduled'],
+            'board_id' => ['sometimes', 'nullable', 'integer'],
+            ...self::FILTER_RULES,
+        ]);
+
+        abort_if(
+            $request->user()->feedSavedViews()->count() >= FeedSavedView::MAX_PER_USER,
+            422,
+            'You can keep up to '.FeedSavedView::MAX_PER_USER.' saved views.'
+        );
+
+        $view = $request->user()->feedSavedViews()->create([
+            'name' => trim($request->string('name')->toString()),
+            'filters' => [
+                'tab' => $request->input('tab', 'all'),
+                'board_id' => $request->integer('board_id') ?: null,
+                ...$this->readFilters($request),
+            ],
+        ]);
+
+        return response()->json(['data' => $this->savedViewPayload($view)], 201);
+    }
+
+    /**
+     * DELETE /api/feed/saved-views/{saved_view}
+     */
+    public function destroySavedView(Request $request, FeedSavedView $saved_view): JsonResponse
+    {
+        abort_if($saved_view->user_id !== $request->user()->id, 403);
+
+        $saved_view->delete();
+
+        return response()->json(['message' => 'Saved view deleted.']);
     }
 
     /**
@@ -333,14 +480,15 @@ class FeedUpdateController extends Controller
      * same order {@see decodeCursor()} resumes from).
      *
      * @param  array{timestamp: int, kind: string, id: int}|null  $cursor
+     * @param  array<string, mixed>  $filters
      * @return Collection<int, BoardItemComment|BoardComment>
      */
-    private function fetchUpdates(User $user, string $tab, ?int $board_id, bool $pinned, ?array $cursor, int $take): Collection
+    private function fetchUpdates(User $user, string $tab, ?int $board_id, bool $pinned, ?array $cursor, int $take, array $filters = []): Collection
     {
         $merged = collect();
 
         foreach (['ic' => BoardItemComment::class, 'bc' => BoardComment::class] as $kind => $model_class) {
-            $rows = $this->scopedQuery($model_class, $user, $tab, $board_id)
+            $rows = $this->scopedQuery($model_class, $user, $tab, $board_id, $filters)
                 ->where('pinned', $pinned)
                 ->when($cursor, fn (Builder $q) => $this->applyCursor($q, $kind, $cursor))
                 ->with($kind === 'ic' ? $this->itemLoads() : $this->boardLoads())
@@ -444,9 +592,10 @@ class FeedUpdateController extends Controller
 
     /**
      * @param  class-string<BoardItemComment>|class-string<BoardComment>  $model_class
+     * @param  array<string, mixed>  $filters
      * @return Builder<BoardItemComment>|Builder<BoardComment>
      */
-    private function scopedQuery(string $model_class, User $user, string $tab, ?int $board_id): Builder
+    private function scopedQuery(string $model_class, User $user, string $tab, ?int $board_id, array $filters = []): Builder
     {
         $is_item = $model_class === BoardItemComment::class;
         $board_relation = $is_item ? 'item.board' : 'board';
@@ -468,7 +617,152 @@ class FeedUpdateController extends Controller
             }
         });
 
+        return $this->applyFilters($query, $filters, $user);
+    }
+
+    /**
+     * Reads the optional feed filters off the request in the shape
+     * {@see applyFilters()} expects, empty values normalized to `null`/`false`.
+     *
+     * @return array{q: string, author_id: int|null, kind: string|null, from: string|null, to: string|null, unread: bool}
+     */
+    private function readFilters(Request $request): array
+    {
+        return [
+            'q' => trim((string) $request->input('q', '')),
+            'author_id' => $request->integer('author_id') ?: null,
+            'kind' => $request->input('kind') ?: null,
+            'from' => $request->input('from') ?: null,
+            'to' => $request->input('to') ?: null,
+            'unread' => $request->boolean('unread'),
+        ];
+    }
+
+    /**
+     * Narrows a feed query by the search text, author, kind (updates or
+     * replies), posted-on day range and unread state. Days are read in the
+     * viewer's own time zone, then converted to the one the rows are stored in.
+     *
+     * @param  Builder<BoardItemComment>|Builder<BoardComment>  $query
+     * @param  array<string, mixed>  $filters
+     * @return Builder<BoardItemComment>|Builder<BoardComment>
+     */
+    private function applyFilters(Builder $query, array $filters, User $user): Builder
+    {
+        $table = $query->getModel()->getTable();
+        $viewer_timezone = $user->timezone ?: config('app.timezone');
+
+        foreach (preg_split('/\s+/', (string) ($filters['q'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $term) {
+            $like = '%'.addcslashes($term, '%_\\').'%';
+
+            $query->where(fn (Builder $inner) => $inner
+                ->where("{$table}.body", 'like', $like)
+                ->orWhereHas('author', fn (Builder $author) => $author
+                    ->where('first_name', 'like', $like)
+                    ->orWhere('last_name', 'like', $like)));
+        }
+
+        if (! empty($filters['author_id'])) {
+            $query->where("{$table}.user_id", $filters['author_id']);
+        }
+
+        if (($filters['kind'] ?? null) === 'updates') {
+            $query->whereNull("{$table}.parent_id");
+        } elseif (($filters['kind'] ?? null) === 'replies') {
+            $query->whereNotNull("{$table}.parent_id");
+        }
+
+        if (! empty($filters['from'])) {
+            $query->where("{$table}.created_at", '>=', Carbon::parse($filters['from'], $viewer_timezone)->startOfDay()->setTimezone(config('app.timezone')));
+        }
+
+        if (! empty($filters['to'])) {
+            $query->where("{$table}.created_at", '<=', Carbon::parse($filters['to'], $viewer_timezone)->endOfDay()->setTimezone(config('app.timezone')));
+        }
+
+        if (! empty($filters['unread'])) {
+            $query->where("{$table}.user_id", '!=', $user->id)
+                ->whereDoesntHave('views', fn (Builder $views) => $views->where('user_id', $user->id));
+        }
+
         return $query;
+    }
+
+    /**
+     * How many updates the viewer has not seen and that concern them (they
+     * were mentioned, or it replies to their own update), over the same reach
+     * as the "all" tab. Own posts are never unread.
+     */
+    private function countUnread(User $user): int
+    {
+        $workspace_ids = $user->workspaces()->pluck('workspaces.id');
+        $count = 0;
+
+        foreach ([BoardItemComment::class, BoardComment::class] as $model_class) {
+            $count += $this->concernedUnreadQuery($model_class, $user, $workspace_ids)->count();
+        }
+
+        return $count;
+    }
+
+    /**
+     * {@see countUnread()} split by board, keyed by board id, for the
+     * sidebar's per-board unread badges.
+     *
+     * @return array<int, int>
+     */
+    private function unreadCountsByBoard(User $user): array
+    {
+        $workspace_ids = $user->workspaces()->pluck('workspaces.id');
+        $counts = [];
+
+        $item_counts = $this->concernedUnreadQuery(BoardItemComment::class, $user, $workspace_ids)
+            ->join('board_items', 'board_item_comments.item_id', '=', 'board_items.id')
+            ->selectRaw('board_items.board_id as feed_board_id, count(*) as feed_count')
+            ->groupBy('feed_board_id')
+            ->pluck('feed_count', 'feed_board_id');
+
+        $board_counts = $this->concernedUnreadQuery(BoardComment::class, $user, $workspace_ids)
+            ->selectRaw('board_id as feed_board_id, count(*) as feed_count')
+            ->groupBy('feed_board_id')
+            ->pluck('feed_count', 'feed_board_id');
+
+        foreach ([$item_counts->all(), $board_counts->all()] as $rows) {
+            foreach ($rows as $board_id => $count) {
+                $counts[$board_id] = ($counts[$board_id] ?? 0) + (int) $count;
+            }
+        }
+
+        return $counts;
+    }
+
+    /**
+     * @param  class-string<BoardItemComment>|class-string<BoardComment>  $model_class
+     * @param  Collection<int, int>  $workspace_ids
+     * @return Builder<BoardItemComment>|Builder<BoardComment>
+     */
+    private function concernedUnreadQuery(string $model_class, User $user, Collection $workspace_ids): Builder
+    {
+        $is_item = $model_class === BoardItemComment::class;
+        $table = (new $model_class)->getTable();
+
+        return $model_class::query()
+            ->visibleNow()
+            ->where("{$table}.user_id", '!=', $user->id)
+            ->where(function (Builder $q) use ($user) {
+                $q->whereHas('mentions', fn (Builder $mq) => $mq->where('user_id', $user->id))
+                    ->orWhereHas('parent', fn (Builder $pq) => $pq->where('user_id', $user->id));
+            })
+            ->whereHas($is_item ? 'item.board' : 'board', fn (Builder $q) => $q->whereIn('workspace_id', $workspace_ids))
+            ->whereDoesntHave('views', fn (Builder $q) => $q->where('user_id', $user->id));
+    }
+
+    /**
+     * @return array{id: int, name: string, filters: array<string, mixed>}
+     */
+    private function savedViewPayload(FeedSavedView $view): array
+    {
+        return ['id' => $view->id, 'name' => $view->name, 'filters' => $view->filters];
     }
 
     /**

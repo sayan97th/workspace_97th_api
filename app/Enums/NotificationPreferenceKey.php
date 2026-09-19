@@ -44,7 +44,7 @@ enum NotificationPreferenceKey: string
 
     /**
      * Get every valid `<key>_<channel>` preference map entry, e.g. `mentioned_app`,
-     * `mentioned_email` or `mentioned_slack`.
+     * `mentioned_email`, `mentioned_slack` or `mentioned_push` (the desktop push).
      *
      * @return array<string>
      */
@@ -55,6 +55,7 @@ enum NotificationPreferenceKey: string
             $keys[] = "{$key->value}_app";
             $keys[] = "{$key->value}_email";
             $keys[] = "{$key->value}_slack";
+            $keys[] = "{$key->value}_push";
         }
 
         return $keys;

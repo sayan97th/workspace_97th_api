@@ -52,6 +52,8 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string $quiet_hours_end
  * @property string $email_digest_frequency
  * @property bool $desktop_notifications_enabled
+ * @property bool $notification_sound_enabled
+ * @property bool $tab_badge_enabled
  * @property string $language
  * @property string $time_format
  * @property string $date_format
@@ -83,7 +85,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
 #[Fillable([
     'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'last_active_workspace_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
     'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
-    'notification_preferences', 'desktop_notifications_enabled',
+    'notification_preferences', 'desktop_notifications_enabled', 'notification_sound_enabled', 'tab_badge_enabled',
     'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end', 'email_digest_frequency',
     'language', 'time_format', 'date_format', 'first_day_of_week', 'sidebar_width',
 ])]
@@ -122,6 +124,8 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
             'hide_online_status' => 'boolean',
             'notification_preferences' => 'array',
             'desktop_notifications_enabled' => 'boolean',
+            'notification_sound_enabled' => 'boolean',
+            'tab_badge_enabled' => 'boolean',
             'quiet_hours_enabled' => 'boolean',
             'excluded_from_home_workspace' => 'boolean',
         ];
@@ -248,6 +252,26 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     public function slackLink(): HasOne
     {
         return $this->hasOne(SlackUserLink::class);
+    }
+
+    /**
+     * The reusable update and reply templates this user saved.
+     *
+     * @return HasMany<SavedReply, $this>
+     */
+    public function savedReplies(): HasMany
+    {
+        return $this->hasMany(SavedReply::class);
+    }
+
+    /**
+     * The Update Feed filter combinations this user saved.
+     *
+     * @return HasMany<FeedSavedView, $this>
+     */
+    public function feedSavedViews(): HasMany
+    {
+        return $this->hasMany(FeedSavedView::class);
     }
 
     /**

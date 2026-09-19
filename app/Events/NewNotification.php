@@ -43,6 +43,8 @@ class NewNotification implements ShouldBroadcast
      *
      * Adds `is_silenced`, true while the recipient's quiet hours are active, so
      * the client still lists the notification but skips the toast and desktop push.
+     * Adds `is_push_muted`, true when the recipient turned off the desktop push
+     * for this notification type, so only that one channel is skipped.
      *
      * @return array<string, mixed>
      */
@@ -51,6 +53,7 @@ class NewNotification implements ShouldBroadcast
         return [
             ...(new NotificationResource($this->notification))->resolve(),
             'is_silenced' => $this->notification->user->isInQuietHours(),
+            'is_push_muted' => (($this->notification->user->notification_preferences ?? [])["{$this->notification->type}_push"] ?? true) === false,
         ];
     }
 }

@@ -78,6 +78,8 @@ class FeedUpdateResource extends JsonResource
             ],
             'item' => $item,
             'link' => $link,
+            // A reply to another update rather than a top-level one, for the feed's "Replies" filter.
+            'is_reply' => $comment->parent_id !== null,
             'view_count' => $comment->views->count(),
             'is_unread' => $viewer_id !== null
                 && $comment->author?->id !== $viewer_id

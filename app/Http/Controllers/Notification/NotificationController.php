@@ -20,6 +20,8 @@ class NotificationController extends Controller
 
     private const MAX_SNOOZE_DAYS = 365;
 
+    private const MAX_BULK_IDS = 100;
+
     /**
      * GET /api/notifications?tab=&board_id=&actor_id=&unread=&q=&cursor=&limit=
      *
@@ -154,6 +156,43 @@ class NotificationController extends Controller
             ->update(['is_read' => true, 'read_at' => now()]);
 
         return response()->json(['message' => 'All notifications marked as read.']);
+    }
+
+    /**
+     * POST /api/notifications/bulk
+     *
+     * Applies one action (`read`, `unread` or `dismiss`) to several of the
+     * current user's notifications at once, the bell drawer's multi-select
+     * toolbar. Ids that are not the caller's are ignored rather than rejected,
+     * so a stale selection never fails the whole request. Responds with the ids
+     * that were changed and the fresh unread count.
+     */
+    public function bulk(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'action' => ['required', 'string', 'in:read,unread,dismiss'],
+            'ids' => ['required', 'array', 'min:1', 'max:'.self::MAX_BULK_IDS],
+            'ids.*' => ['integer'],
+        ]);
+
+        $notifications = $request->user()->notifications()
+            ->whereIn('id', $validated['ids'])
+            ->whereNull('dismissed_at');
+
+        $affected_ids = (clone $notifications)->pluck('id');
+
+        match ($validated['action']) {
+            'read' => $notifications->update(['is_read' => true, 'read_at' => now()]),
+            'unread' => $notifications->update(['is_read' => false, 'read_at' => null]),
+            'dismiss' => $notifications->update(['dismissed_at' => now()]),
+        };
+
+        return response()->json([
+            'data' => [
+                'ids' => $affected_ids->map(fn ($id) => (string) $id)->values(),
+                'unread_count' => $request->user()->notifications()->unread()->visible()->count(),
+            ],
+        ]);
     }
 
     /**

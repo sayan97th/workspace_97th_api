@@ -2,13 +2,33 @@
 
 namespace App\Concerns;
 
+use App\Models\BoardComment;
+use App\Models\BoardCommentAttachment;
+use App\Models\BoardCommentBookmark;
+use App\Models\BoardCommentLike;
+use App\Models\BoardCommentMention;
+use App\Models\BoardCommentNotify;
+use App\Models\BoardCommentReaction;
+use App\Models\BoardCommentRevision;
+use App\Models\BoardCommentView;
+use App\Models\BoardItemComment;
+use App\Models\BoardItemCommentAttachment;
+use App\Models\BoardItemCommentBookmark;
+use App\Models\BoardItemCommentLike;
+use App\Models\BoardItemCommentMention;
+use App\Models\BoardItemCommentNotify;
+use App\Models\BoardItemCommentReaction;
+use App\Models\BoardItemCommentRevision;
+use App\Models\BoardItemCommentView;
+use App\Models\User;
+use App\Services\Board\CommentThreadActionsService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * Shared behavior for {@see \App\Models\BoardItemComment} and
- * {@see \App\Models\BoardComment} — the two comment-thread models are
+ * Shared behavior for {@see BoardItemComment} and
+ * {@see BoardComment}, the two comment-thread models are
  * otherwise near-identical (item-scoped vs board-scoped), so every relation,
  * cast and scope both need lives here once instead of being hand-copied
  * onto each model.
@@ -54,15 +74,15 @@ trait HasCommentThread
     /**
      * The user who wrote this comment.
      *
-     * @return BelongsTo<\App\Models\User, $this>
+     * @return BelongsTo<User, $this>
      */
     public function author(): BelongsTo
     {
-        return $this->belongsTo(\App\Models\User::class, 'user_id');
+        return $this->belongsTo(User::class, 'user_id');
     }
 
     /**
-     * @return HasMany<\App\Models\BoardItemCommentLike|\App\Models\BoardCommentLike, $this>
+     * @return HasMany<BoardItemCommentLike|BoardCommentLike, $this>
      */
     public function likes(): HasMany
     {
@@ -70,7 +90,7 @@ trait HasCommentThread
     }
 
     /**
-     * @return HasMany<\App\Models\BoardItemCommentReaction|\App\Models\BoardCommentReaction, $this>
+     * @return HasMany<BoardItemCommentReaction|BoardCommentReaction, $this>
      */
     public function reactions(): HasMany
     {
@@ -78,7 +98,7 @@ trait HasCommentThread
     }
 
     /**
-     * @return HasMany<\App\Models\BoardItemCommentView|\App\Models\BoardCommentView, $this>
+     * @return HasMany<BoardItemCommentView|BoardCommentView, $this>
      */
     public function views(): HasMany
     {
@@ -86,7 +106,7 @@ trait HasCommentThread
     }
 
     /**
-     * @return HasMany<\App\Models\BoardItemCommentMention|\App\Models\BoardCommentMention, $this>
+     * @return HasMany<BoardItemCommentMention|BoardCommentMention, $this>
      */
     public function mentions(): HasMany
     {
@@ -95,9 +115,9 @@ trait HasCommentThread
 
     /**
      * People explicitly notified through the composer's "Notify" action,
-     * distinct from {@see mentions()} — see {@see \App\Models\BoardItemCommentNotify}.
+     * distinct from {@see mentions()}, see {@see BoardItemCommentNotify}.
      *
-     * @return HasMany<\App\Models\BoardItemCommentNotify|\App\Models\BoardCommentNotify, $this>
+     * @return HasMany<BoardItemCommentNotify|BoardCommentNotify, $this>
      */
     public function notifiedUsers(): HasMany
     {
@@ -105,7 +125,7 @@ trait HasCommentThread
     }
 
     /**
-     * @return HasMany<\App\Models\BoardItemCommentAttachment|\App\Models\BoardCommentAttachment, $this>
+     * @return HasMany<BoardItemCommentAttachment|BoardCommentAttachment, $this>
      */
     public function attachments(): HasMany
     {
@@ -113,11 +133,22 @@ trait HasCommentThread
     }
 
     /**
-     * @return HasMany<\App\Models\BoardItemCommentBookmark|\App\Models\BoardCommentBookmark, $this>
+     * @return HasMany<BoardItemCommentBookmark|BoardCommentBookmark, $this>
      */
     public function bookmarks(): HasMany
     {
         return $this->hasMany($this->commentModel('Bookmark'), 'comment_id');
+    }
+
+    /**
+     * Earlier bodies this comment had before an edit replaced them, newest
+     * edit first, see {@see CommentThreadActionsService::editBody()}.
+     *
+     * @return HasMany<BoardItemCommentRevision|BoardCommentRevision, $this>
+     */
+    public function revisions(): HasMany
+    {
+        return $this->hasMany($this->commentModel('Revision'), 'comment_id')->orderByDesc('id');
     }
 
     /**
