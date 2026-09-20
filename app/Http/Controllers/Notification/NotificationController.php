@@ -18,6 +18,8 @@ class NotificationController extends Controller
 
     private const MAX_PAGE_SIZE = 50;
 
+    private const MAX_LATEST_LIMIT = 10;
+
     private const MAX_SNOOZE_DAYS = 365;
 
     private const MAX_BULK_IDS = 100;
@@ -106,6 +108,47 @@ class NotificationController extends Controller
             'data' => [
                 'unread_count' => $request->user()->notifications()->unread()->visible()->count(),
             ],
+        ]);
+    }
+
+    /**
+     * GET /api/notifications/latest?after_id=&limit=
+     *
+     * Polling fallback for the live toast, used when the browser or an
+     * extension blocks the websocket. Without `after_id` it only returns the
+     * newest id, so the client can set its baseline without replaying old
+     * notifications. With it, the visible notifications created after that id
+     * come back oldest first, carrying the same `is_silenced` and
+     * `is_push_muted` flags as the websocket payload.
+     */
+    public function latest(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'after_id' => ['sometimes', 'integer', 'min:0'],
+            'limit' => ['sometimes', 'integer', 'min:1', 'max:'.self::MAX_LATEST_LIMIT],
+        ]);
+
+        $user = $request->user();
+        $latest_id = (int) $user->notifications()->max('id');
+
+        if (! isset($validated['after_id'])) {
+            return response()->json(['data' => [], 'meta' => ['latest_id' => (string) $latest_id]]);
+        }
+
+        $notifications = $user->notifications()
+            ->visible()
+            ->where('id', '>', $validated['after_id'])
+            ->with(['actor', 'board'])
+            ->orderBy('id')
+            ->limit($validated['limit'] ?? self::MAX_LATEST_LIMIT)
+            ->get();
+
+        return response()->json([
+            'data' => $notifications->map(fn (Notification $notification) => [
+                ...(new NotificationResource($notification))->resolve(),
+                ...$notification->deliveryFlags($user),
+            ])->values(),
+            'meta' => ['latest_id' => (string) $latest_id],
         ]);
     }
 

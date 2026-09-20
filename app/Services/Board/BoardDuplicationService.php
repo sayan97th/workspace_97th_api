@@ -2,8 +2,10 @@
 
 namespace App\Services\Board;
 
+use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\FormulaReferences;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -26,6 +28,7 @@ class BoardDuplicationService
 
         return DB::transaction(function () use ($source, $target_item, $overrides, $created_by_id) {
             $column_id_map = [];
+            $column_copies = [];
 
             $view_copy = $target_item->views()->create(array_merge([
                 'label' => $source->label,
@@ -54,7 +57,10 @@ class BoardDuplicationService
                     'pinnable' => $column->pinnable,
                 ]);
                 $column_id_map[$column->id] = $column_copy->id;
+                $column_copies[] = $column_copy;
             }
+
+            $this->remapFormulaColumns($column_copies, $column_id_map);
 
             foreach ($source->groups as $group) {
                 $group_copy = $view_copy->groups()->create([
@@ -106,6 +112,37 @@ class BoardDuplicationService
                 'is_primary' => $view->is_primary,
                 'pinned' => $view->pinned,
             ], $created_by_id);
+        }
+    }
+
+    /**
+     * A formula column names the columns it reads by id, so its copy would
+     * still read the source tab's columns. Repoints each one at the freshly
+     * cloned column, both in the expression and in the legacy
+     * `source_column_ids` list.
+     *
+     * @param  array<int, BoardColumn>  $column_copies
+     * @param  array<int, int>  $column_id_map  source column id => copy column id
+     */
+    private function remapFormulaColumns(array $column_copies, array $column_id_map): void
+    {
+        foreach ($column_copies as $column_copy) {
+            $config = $column_copy->config;
+
+            if ($column_copy->type !== BoardColumn::TYPE_FORMULA || ! is_array($config)) {
+                continue;
+            }
+
+            if (isset($config['expression']) && is_string($config['expression'])) {
+                $config['expression'] = FormulaReferences::remap($config['expression'], $column_id_map);
+            }
+
+            if (isset($config['source_column_ids']) && is_array($config['source_column_ids'])) {
+                $config['source_column_ids'] = array_map(fn ($id) => $column_id_map[$id] ?? $id, $config['source_column_ids']);
+            }
+
+            $column_copy->config = $config;
+            $column_copy->save();
         }
     }
 

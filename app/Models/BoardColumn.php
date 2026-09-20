@@ -119,7 +119,7 @@ class BoardColumn extends Model
     /** A read-only sequential number assigned once, server-side, when the item is created — mirrors monday.com's "Item ID" column. Never editable from the cell. */
     public const TYPE_AUTO_NUMBER = 'auto_number';
 
-    /** A read-only value computed from other columns on the same item, per `config.operation` (`sum`/`subtract`/`multiply`/`divide`/`concat`) applied to `config.source_column_ids`. Never stores a {@see BoardItemValue} of its own; recomputed on every read. */
+    /** A read-only value computed from other columns on the same item by the expression in `config.expression` (columns referenced by id, `{#12}`, see {@see \App\Support\FormulaReferences}). Older columns still carry `config.operation` (`sum`/`subtract`/`multiply`/`divide`/`concat`) applied to `config.source_column_ids`, which the frontend converts to an expression when it reads them. Never stores a {@see BoardItemValue} of its own; evaluated by the client on every render. */
     public const TYPE_FORMULA = 'formula';
 
     /** Links this item to one or more items on a *different* board (`config.linked_board_id`), stored as an array of that board's item ids, mirroring `TYPE_DEPENDENCY`'s value shape but cross-board. The prerequisite a `TYPE_MIRROR` column reads through. */

@@ -4,6 +4,7 @@ namespace App\Http\Requests\Board;
 
 use App\Models\BoardColumn;
 use App\Models\WorkspaceNavigationItem;
+use App\Rules\ValidFormulaExpression;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -86,6 +87,8 @@ class StoreBoardColumnRequest extends FormRequest
             // but Formula/Mirror have no sensible default), then configured
             // afterward through the header menu's "Configure ..." modal (see
             // `BoardColumnController::update()`), not at creation time.
+            // Formula columns: the saved expression, columns referenced by id like `{#12}`. `operation`/`source_column_ids` are the legacy fixed-operation form, still accepted.
+            'config.expression' => ['sometimes', 'string', 'min:1', 'max:2000', new ValidFormulaExpression($view_id, $scope)],
             'config.operation' => ['sometimes', 'string', Rule::in(['sum', 'subtract', 'multiply', 'divide', 'concat'])],
             'config.source_column_ids' => ['sometimes', 'array', 'min:1'],
             'config.source_column_ids.*' => ['integer', Rule::exists('board_columns', 'id')],

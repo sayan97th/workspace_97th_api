@@ -52,8 +52,7 @@ class NewNotification implements ShouldBroadcast
     {
         return [
             ...(new NotificationResource($this->notification))->resolve(),
-            'is_silenced' => $this->notification->user->isInQuietHours(),
-            'is_push_muted' => (($this->notification->user->notification_preferences ?? [])["{$this->notification->type}_push"] ?? true) === false,
+            ...$this->notification->deliveryFlags(),
         ];
     }
 }

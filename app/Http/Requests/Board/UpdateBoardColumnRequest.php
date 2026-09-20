@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Board;
 
 use App\Models\BoardColumn;
+use App\Rules\ValidFormulaExpression;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -16,6 +17,8 @@ class UpdateBoardColumnRequest extends FormRequest
      */
     public function rules(): array
     {
+        $column = $this->route('column');
+
         return [
             'label' => ['sometimes', 'string', 'max:255'],
             'type' => ['sometimes', 'string', Rule::in([
@@ -56,7 +59,16 @@ class UpdateBoardColumnRequest extends FormRequest
             // People columns only: whether assigning someone here notifies
             // them (in-app + email) — the People cell picker's bottom toggle.
             'config.notify_on_assignment' => ['sometimes', 'boolean'],
-            // Formula columns only: the operation applied to `source_column_ids`, in row order.
+            // Formula columns only: the saved expression, columns referenced by id like `{#12}`, checked against this column's own tab and scope.
+            'config.expression' => [
+                'sometimes', 'string', 'min:1', 'max:2000',
+                new ValidFormulaExpression(
+                    $column instanceof BoardColumn ? $column->board_view_id : null,
+                    $column instanceof BoardColumn ? $column->scope : BoardColumn::SCOPE_ITEM,
+                    $column instanceof BoardColumn ? $column->id : null,
+                ),
+            ],
+            // Legacy fixed-operation form, still accepted: the operation applied to `source_column_ids`, in row order.
             'config.operation' => ['sometimes', 'string', Rule::in(['sum', 'subtract', 'multiply', 'divide', 'concat'])],
             'config.source_column_ids' => ['sometimes', 'array', 'min:1'],
             'config.source_column_ids.*' => ['integer', Rule::exists('board_columns', 'id')],

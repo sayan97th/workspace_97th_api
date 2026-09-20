@@ -224,6 +224,25 @@ class Notification extends Model
         return 'subscribed';
     }
 
+    /**
+     * How the client should surface this notification live: `is_silenced` while
+     * the recipient's quiet hours are active (still listed, no toast or push),
+     * `is_push_muted` when they turned off the desktop push for this type.
+     * Shared by the websocket payload and the polling fallback so both channels
+     * always agree.
+     *
+     * @return array{is_silenced: bool, is_push_muted: bool}
+     */
+    public function deliveryFlags(?User $recipient = null): array
+    {
+        $recipient ??= $this->user;
+
+        return [
+            'is_silenced' => $recipient->isInQuietHours(),
+            'is_push_muted' => (($recipient->notification_preferences ?? [])["{$this->type}_push"] ?? true) === false,
+        ];
+    }
+
     public function markAsRead(): void
     {
         $this->update(['is_read' => true, 'read_at' => now()]);

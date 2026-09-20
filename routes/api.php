@@ -148,6 +148,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('/', [NotificationController::class, 'index']);
         Route::get('filters', [NotificationController::class, 'filters']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
+        Route::get('latest', [NotificationController::class, 'latest'])->middleware('throttle:60,1');
         Route::get('summary', [NotificationController::class, 'summary']);
         Route::patch('read-all', [NotificationController::class, 'markAllAsRead']);
         Route::post('bulk', [NotificationController::class, 'bulk']);
@@ -574,7 +575,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         });
 
         // Departments — account-wide organizational units, one per user, used for
-        // headcount/seat-limit tracking on the Administration Users/Departments sections.
+        // headcount/seat-limit tracking on the Administration Users/Departments sections. Each
+        // department can have owners who manage its members without full admin access.
         Route::prefix('departments')->group(function () {
             Route::get('/', [DepartmentController::class, 'index']);
 
@@ -582,7 +584,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('/', [DepartmentController::class, 'store']);
                 Route::patch('{department}', [DepartmentController::class, 'update']);
                 Route::delete('{department}', [DepartmentController::class, 'destroy']);
+                Route::post('{department}/owners', [DepartmentController::class, 'assignOwners']);
+                Route::delete('{department}/owners/{user}', [DepartmentController::class, 'removeOwner']);
             });
+
+            // Members: admins, or the department's owners (authorized inside the controller).
+            Route::post('{department}/members', [DepartmentController::class, 'assignMembers']);
+            Route::delete('{department}/members/{user}', [DepartmentController::class, 'removeMember']);
         });
 
         // Board ownership — reassigning a departed/renamed staff member's boards, and

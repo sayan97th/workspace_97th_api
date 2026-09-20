@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
@@ -51,5 +52,29 @@ class Department extends Model
     public function users(): HasMany
     {
         return $this->hasMany(User::class);
+    }
+
+    /**
+     * Staff users delegated to manage this department's members without full admin access.
+     *
+     * @return BelongsToMany<User, $this>
+     */
+    public function owners(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'department_owners')
+            ->withTimestamps();
+    }
+
+    /**
+     * Whether the given user may add or remove this department's members: account admins
+     * always, otherwise only one of the department's owners.
+     */
+    public function canBeManagedBy(User $user): bool
+    {
+        if ($user->hasRole(['super_admin', 'admin'])) {
+            return true;
+        }
+
+        return $this->owners()->whereKey($user->id)->exists();
     }
 }
