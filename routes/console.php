@@ -27,3 +27,5 @@ Schedule::command('notifications:wake-snoozed')->everyMinute();
 Schedule::command('notifications:send-digests daily')->dailyAt('08:00');
 
 Schedule::command('notifications:send-digests weekly')->weeklyOn(1, '08:00');
+
+Schedule::command('comments:purge-deleted')->dailyAt('03:30');

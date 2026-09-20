@@ -24,7 +24,6 @@ use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class BoardItemCommentController extends Controller
@@ -125,6 +124,8 @@ class BoardItemCommentController extends Controller
                 }
             }
 
+            $this->feed_service->autoFollowItem($board_item, $mentioned_user_ids->concat([$actor?->id])->filter());
+
             $this->automation_service->handleUpdatePosted($board_item, $comment, $request->user());
 
             broadcast(new ItemCommentPosted($comment))->toOthers();
@@ -217,11 +218,35 @@ class BoardItemCommentController extends Controller
     }
 
     /**
+     * POST /api/boards/{item}/items/{board_item}/comments/{comment}/resolve
+     *
+     * Toggles whether an update is resolved. Only top-level updates can be, a
+     * reply belongs to its thread. Only people who can edit the board may
+     * resolve or reopen.
+     */
+    public function toggleResolve(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+        BoardEditGate::authorize($item, $request->user());
+        abort_if($comment->parent_id !== null, 422, 'Only an update can be resolved, not a reply.');
+
+        $resolved = $this->comment_actions->toggleResolved($comment, $request->user());
+
+        return response()->json([
+            'message' => $resolved ? 'Thread resolved successfully.' : 'Thread reopened successfully.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
      * DELETE /api/boards/{item}/items/{board_item}/comments/{comment}
      *
      * Author-only — this app has no roles/policy layer on Board controllers.
-     * Also removes the comment's attachment files from the `public` disk, so
-     * a deleted comment doesn't leave orphaned uploads behind.
+     * A soft delete: the row and its attachment files stay for
+     * {@see CommentThreadActionsService::UNDO_WINDOW_DAYS} days so the drawer's
+     * "Undo" can bring it back, `comments:purge-deleted` removes them for good
+     * after that.
      */
     public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment): JsonResponse
     {
@@ -229,11 +254,34 @@ class BoardItemCommentController extends Controller
         $this->ensureCommentBelongsToItem($board_item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $this->deleteAttachmentFiles($comment);
         $comment->delete();
 
         return response()->json([
             'message' => 'Comment deleted successfully.',
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/items/{board_item}/comments/{comment_id}/restore
+     *
+     * The "Undo" of a delete: brings a soft deleted comment or reply back, with
+     * its replies, reactions and attachments. Author-only and only inside the
+     * undo window.
+     */
+    public function restore(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, int $comment_id): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+
+        $comment = BoardItemComment::onlyTrashed()->where('item_id', $board_item->id)->findOrFail($comment_id);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+        abort_if($comment->deleted_at->lt(now()->subDays(CommentThreadActionsService::UNDO_WINDOW_DAYS)), 410, 'This comment can no longer be restored.');
+        abort_if($comment->parent_id !== null && $comment->parent === null, 409, 'The update this reply belongs to was deleted.');
+
+        $comment->restore();
+
+        return response()->json([
+            'message' => 'Comment restored successfully.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
         ]);
     }
 
@@ -284,6 +332,7 @@ class BoardItemCommentController extends Controller
                     action_label: 'Reacted to your comment',
                     action_target: sprintf('on "%s"', $board_item->name),
                     link: "/boards/{$item->id}/pulses/{$board_item->id}",
+                    comment: $comment,
                 );
             }
         }
@@ -403,6 +452,7 @@ class BoardItemCommentController extends Controller
                 action_label: 'Replied to your comment',
                 action_target: sprintf('on "%s"', $board_item->name),
                 link: $link,
+                comment: $comment,
             );
         }
 
@@ -416,6 +466,7 @@ class BoardItemCommentController extends Controller
                     action_label: 'Mentioned you',
                     action_target: sprintf('in a comment on "%s"', $board_item->name),
                     link: $link,
+                    comment: $comment,
                 );
             }
         }
@@ -429,25 +480,11 @@ class BoardItemCommentController extends Controller
      */
     private function eagerLoads(bool $with_replies = true): array
     {
-        $own = ['author', 'likes', 'reactions.user', 'views.user', 'bookmarks', 'mentions', 'notifiedUsers', 'attachments'];
+        $own = ['author', 'resolvedBy', 'likes', 'reactions.user', 'views.user', 'bookmarks', 'mentions', 'notifiedUsers', 'attachments'];
 
         return $with_replies
             ? [...$own, ...array_map(fn ($relation) => "replies.{$relation}", $own)]
             : $own;
-    }
-
-    /**
-     * Deletes every attachment file the comment has on the `public` disk —
-     * skipping any that are already missing, since a repeat delete or a
-     * manually-cleared disk shouldn't turn this into a hard failure.
-     */
-    private function deleteAttachmentFiles(BoardItemComment $comment): void
-    {
-        foreach ($comment->attachments as $attachment) {
-            if (Storage::disk(config('filesystems.app_disk'))->exists($attachment->file_path)) {
-                Storage::disk(config('filesystems.app_disk'))->delete($attachment->file_path);
-            }
-        }
     }
 
     /**

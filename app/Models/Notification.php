@@ -24,6 +24,8 @@ use Illuminate\Support\Carbon;
  * @property string $type
  * @property int|null $board_id
  * @property int|null $board_item_id
+ * @property int|null $comment_id
+ * @property string|null $comment_kind
  * @property string $action_label
  * @property string $action_target
  * @property string|null $link
@@ -39,7 +41,7 @@ use Illuminate\Support\Carbon;
  * @property-read WorkspaceNavigationItem|null $board
  * @property-read BoardItem|null $boardItem
  */
-#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until', 'saved_at'])]
+#[Fillable(['user_id', 'actor_id', 'type', 'board_id', 'board_item_id', 'comment_id', 'comment_kind', 'action_label', 'action_target', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until', 'saved_at'])]
 class Notification extends Model
 {
     use HasFactory;

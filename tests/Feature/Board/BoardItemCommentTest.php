@@ -8,6 +8,7 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\CommentThreadActionsService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
@@ -297,7 +298,7 @@ test('a comment can only be deleted by its author', function () {
     $this->assertSoftDeleted('board_item_comments', ['id' => $comment->id]);
 });
 
-test('deleting a comment removes its attachment files from storage', function () {
+test('deleting a comment keeps its attachment files until the purge command runs after the undo window', function () {
     Storage::fake('public');
     $item = createCommentTestItem();
     $author = User::factory()->create();
@@ -319,7 +320,17 @@ test('deleting a comment removes its attachment files from storage', function ()
         ->deleteJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}")
         ->assertOk();
 
+    // Still there, so "Undo" can bring the comment back with its file.
+    Storage::disk('public')->assertExists($path);
+
+    $this->artisan('comments:purge-deleted')->assertSuccessful();
+    Storage::disk('public')->assertExists($path);
+
+    $this->travel(CommentThreadActionsService::UNDO_WINDOW_DAYS + 1)->days();
+    $this->artisan('comments:purge-deleted')->assertSuccessful();
+
     Storage::disk('public')->assertMissing($path);
+    $this->assertDatabaseMissing('board_item_comments', ['id' => $comment->id]);
 });
 
 test('deleting a comment whose attachment file is already missing does not fail', function () {

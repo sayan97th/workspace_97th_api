@@ -47,6 +47,7 @@ class ProfileResource extends JsonResource
             'desktop_notifications_enabled' => $this->desktop_notifications_enabled,
             'notification_sound_enabled' => (bool) $this->notification_sound_enabled,
             'tab_badge_enabled' => (bool) $this->tab_badge_enabled,
+            'auto_follow_enabled' => (bool) $this->auto_follow_enabled,
             'quiet_hours_enabled' => (bool) $this->quiet_hours_enabled,
             'quiet_hours_start' => $this->quiet_hours_start ?? '22:00',
             'quiet_hours_end' => $this->quiet_hours_end ?? '07:00',

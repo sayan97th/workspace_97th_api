@@ -36,6 +36,7 @@ use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Board\BoardItemMoveController;
+use App\Http\Controllers\Board\BoardItemNotificationMuteController;
 use App\Http\Controllers\Board\BoardItemUpdatesExportController;
 use App\Http\Controllers\Board\BoardNotificationMuteController;
 use App\Http\Controllers\Board\BoardTagController;
@@ -176,6 +177,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // "updates" (item- and board-level) the current user has visibility on.
     Route::prefix('feed')->group(function () {
         Route::get('updates', [FeedUpdateController::class, 'index']);
+        Route::get('updates/export', [FeedUpdateController::class, 'export'])->middleware('throttle:10,1');
         Route::get('boards', [FeedUpdateController::class, 'boards']);
         Route::get('boards/{board}/people', [FeedUpdateController::class, 'people']);
         Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
@@ -214,6 +216,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Per-board notification muting — checked by `NotificationService::notify()`
     // ahead of the recipient's own per-type preferences.
     Route::get('boards/muted', [BoardNotificationMuteController::class, 'index']);
+    Route::get('boards/muted-items', [BoardItemNotificationMuteController::class, 'index']);
     Route::post('boards/{item}/mute', [BoardNotificationMuteController::class, 'store']);
     Route::delete('boards/{item}/mute', [BoardNotificationMuteController::class, 'destroy']);
 
@@ -439,6 +442,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('{board_item}/recurrence', [BoardItemController::class, 'clearRecurrence']);
             Route::patch('{board_item}/board', [BoardItemMoveController::class, 'store']);
             Route::get('{board_item}/updates/export', [BoardItemUpdatesExportController::class, 'export']);
+            Route::post('{board_item}/mute', [BoardItemNotificationMuteController::class, 'store']);
+            Route::delete('{board_item}/mute', [BoardItemNotificationMuteController::class, 'destroy']);
             Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
 
             Route::prefix('{board_item}/comments')->group(function () {
@@ -451,6 +456,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('{comment}/reactions', [BoardItemCommentController::class, 'toggleReaction']);
                 Route::post('{comment}/seen', [BoardItemCommentController::class, 'toggleSeen']);
                 Route::post('{comment}/pin', [BoardItemCommentController::class, 'togglePin']);
+                Route::post('{comment}/resolve', [BoardItemCommentController::class, 'toggleResolve']);
+                Route::post('{comment_id}/restore', [BoardItemCommentController::class, 'restore'])->whereNumber('comment_id');
                 Route::post('{comment}/bookmark', [BoardItemCommentController::class, 'toggleBookmark']);
                 Route::patch('{comment}/schedule', [BoardItemCommentController::class, 'updateSchedule']);
                 Route::get('{comment}/revisions', [BoardItemCommentController::class, 'revisions']);
@@ -508,6 +515,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{comment}/reactions', [BoardCommentController::class, 'toggleReaction']);
             Route::post('{comment}/seen', [BoardCommentController::class, 'toggleSeen']);
             Route::post('{comment}/pin', [BoardCommentController::class, 'togglePin']);
+            Route::post('{comment}/resolve', [BoardCommentController::class, 'toggleResolve']);
+            Route::post('{comment_id}/restore', [BoardCommentController::class, 'restore'])->whereNumber('comment_id');
             Route::post('{comment}/bookmark', [BoardCommentController::class, 'toggleBookmark']);
             Route::patch('{comment}/schedule', [BoardCommentController::class, 'updateSchedule']);
             Route::get('{comment}/revisions', [BoardCommentController::class, 'revisions']);

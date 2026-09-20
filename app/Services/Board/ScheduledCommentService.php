@@ -79,6 +79,7 @@ class ScheduledCommentService
         $this->feed_service->broadcastUpdate($comment, $board, $comment->parent?->author);
 
         if ($is_item) {
+            $this->feed_service->autoFollowItem($comment->item, $comment->mentions->pluck('user_id')->concat([$comment->user_id])->filter());
             $this->automation_service->handleUpdatePosted($comment->item, $comment, $actor);
         }
     }
@@ -102,6 +103,7 @@ class ScheduledCommentService
                 action_label: $is_item ? 'Replied to your comment' : 'Replied to your update',
                 action_target: $action_target,
                 link: $link,
+                comment: $comment,
             );
         }
 
@@ -115,6 +117,7 @@ class ScheduledCommentService
                     action_label: 'Mentioned you',
                     action_target: $is_item ? sprintf('in a comment on "%s"', $comment->item->name) : sprintf('in a comment on the Board "%s"', $board->label),
                     link: $link,
+                    comment: $comment,
                 );
             }
         }
@@ -126,6 +129,7 @@ class ScheduledCommentService
             $link,
             $action_target,
             $is_item ? $comment->item : null,
+            $comment,
         );
     }
 }

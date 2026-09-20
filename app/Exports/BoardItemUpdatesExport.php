@@ -3,6 +3,7 @@
 namespace App\Exports;
 
 use App\Models\BoardItemComment;
+use App\Support\MarkdownPlainText;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithHeadings;
@@ -71,22 +72,7 @@ class BoardItemUpdatesExport implements FromArray, WithHeadings, WithTitle
             $comment->pinned ? 'Yes' : 'No',
             $comment->likes->count(),
             $comment->attachments->pluck('file_name')->implode(', '),
-            $this->toPlainText($comment->body),
+            MarkdownPlainText::convert($comment->body),
         ];
-    }
-
-    /**
-     * Strips the Markdown the rich text composer produces (images, links,
-     * emphasis, headings, quotes, list markers, code ticks) down to readable text.
-     */
-    private function toPlainText(string $markdown): string
-    {
-        $text = preg_replace('/!\[([^\]]*)\]\([^)]*\)/', '[Image]', $markdown);
-        $text = preg_replace('/\[([^\]]*)\]\(([^)]*)\)/', '$1 ($2)', $text);
-        $text = preg_replace('/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/m', '', $text);
-        $text = preg_replace('/(\*\*|__|~~|`)/', '', $text);
-        $text = preg_replace('/(?<![\w*])[*_]([^*_\n]+)[*_](?![\w*])/', '$1', $text);
-
-        return trim($text);
     }
 }

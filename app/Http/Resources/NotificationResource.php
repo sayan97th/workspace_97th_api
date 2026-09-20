@@ -38,6 +38,14 @@ class NotificationResource extends JsonResource
                 'name' => $this->board->label,
             ] : null,
             'link' => $this->link,
+            // The item the notification is about, what "Mute this item" targets.
+            'board_item_id' => $this->board_item_id,
+            // Only the list endpoint counts mutes (`withExists`), a live push is never for a muted item.
+            'is_item_muted' => (bool) ($this->is_item_muted ?? false),
+            // The feed id of the comment that triggered it, what an inline reply attaches to.
+            'reply_to' => $this->comment_id !== null && $this->comment_kind !== null
+                ? ($this->comment_kind === 'item' ? 'ic-' : 'bc-').$this->comment_id
+                : null,
             // Notifications of the same type on the same thread share this key,
             // which is how the drawer collapses "3 people replied" into one card.
             'group_key' => $this->link !== null ? "{$this->type}|{$this->link}" : "single|{$this->id}",

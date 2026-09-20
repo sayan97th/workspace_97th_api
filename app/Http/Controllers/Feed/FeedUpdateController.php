@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Feed;
 
+use App\Exports\FeedUpdatesExport;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\FeedUpdateResource;
 use App\Models\BoardComment;
@@ -23,6 +24,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Maatwebsite\Excel\Facades\Excel;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * The Update Feed opened from the AppTopBar feed button
@@ -41,6 +44,9 @@ class FeedUpdateController extends Controller
 
     /** Pinned updates are always shown first, so the first page loads at most this many. */
     private const MAX_PINNED = 50;
+
+    /** The most updates one Excel export holds, the newest ones win. */
+    private const MAX_EXPORT_ROWS = 5000;
 
     /** Validation for the filters shared by the list, "mark all as read" and saved views. */
     private const FILTER_RULES = [
@@ -117,6 +123,35 @@ class FeedUpdateController extends Controller
             $pinned->concat($rows),
             $has_more && $rows->isNotEmpty() ? $this->encodeCursor($rows->last()) : null,
         );
+    }
+
+    /**
+     * GET /api/feed/updates/export?tab=&board_id=&q=&author_id=&kind=&from=&to=&unread=
+     *
+     * The feed's "Export to Excel": every update of the tab and filters the
+     * viewer has open (the newest {@see MAX_EXPORT_ROWS} at most), pinned ones
+     * first, as an .xlsx workbook. Takes the same parameters as {@see index()}
+     * minus the paging ones.
+     */
+    public function export(Request $request): BinaryFileResponse
+    {
+        $validated = $request->validate([
+            'tab' => ['sometimes', 'string', 'in:'.self::TABS],
+            'board_id' => ['sometimes', 'integer'],
+            ...self::FILTER_RULES,
+        ]);
+
+        $tab = $validated['tab'] ?? 'all';
+        $board_id = $request->integer('board_id') ?: null;
+        $user = $request->user();
+        $filters = $this->readFilters($request);
+
+        $updates = $tab === 'scheduled'
+            ? $this->scheduledUpdates($user, $board_id)
+            : $this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED, $filters)
+                ->concat($this->fetchUpdates($user, $tab, $board_id, false, null, self::MAX_EXPORT_ROWS, $filters));
+
+        return Excel::download(new FeedUpdatesExport($updates->values()), 'update_feed_'.now()->format('Y_m_d').'.xlsx');
     }
 
     /**
@@ -498,6 +533,7 @@ class FeedUpdateController extends Controller
     public function reply(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
+        $this->ensureViewerCanAccess($comment, $request->user());
         $validated = $request->validate([
             'body' => ['required', 'string', 'max:5000'],
             'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
@@ -521,6 +557,7 @@ class FeedUpdateController extends Controller
     public function schedule(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
+        $this->ensureViewerCanAccess($comment, $request->user());
         $validated = $request->validate([
             'body' => ['required', 'string', 'max:5000'],
             'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
@@ -922,6 +959,16 @@ class FeedUpdateController extends Controller
         abort(404);
     }
 
+    /**
+     * The feed only shows updates from the viewer's own workspaces, so replying
+     * to one from anywhere else, an inline reply from a notification included,
+     * is refused.
+     */
+    private function ensureViewerCanAccess(BoardItemComment|BoardComment $comment, User $user): void
+    {
+        abort_unless($user->workspaces()->where('workspaces.id', $this->boardFor($comment)->workspace_id)->exists(), 403);
+    }
+
     private function boardFor(BoardItemComment|BoardComment $comment): WorkspaceNavigationItem
     {
         return $comment instanceof BoardItemComment ? $comment->item->board : $comment->board;
@@ -987,6 +1034,7 @@ class FeedUpdateController extends Controller
                 action_label: 'Replied to your update',
                 action_target: $is_item ? sprintf('on "%s"', $reply->item->name) : sprintf('on the Board "%s"', $board->label),
                 link: $link,
+                comment: $reply,
             );
         }
 
@@ -1000,8 +1048,13 @@ class FeedUpdateController extends Controller
                     action_label: 'Mentioned you',
                     action_target: $is_item ? sprintf('in a comment on "%s"', $reply->item->name) : sprintf('in a comment on the Board "%s"', $board->label),
                     link: $link,
+                    comment: $reply,
                 );
             }
+        }
+
+        if ($is_item) {
+            $this->feed_service->autoFollowItem($reply->item, $mentioned_user_ids->concat([$actor->id]));
         }
 
         $this->feed_service->broadcastUpdate($this->refreshed($reply), $board, $thread_author);

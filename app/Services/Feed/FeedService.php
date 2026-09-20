@@ -5,7 +5,9 @@ namespace App\Services\Feed;
 use App\Events\NewFeedUpdate;
 use App\Http\Resources\FeedUpdateResource;
 use App\Models\BoardComment;
+use App\Models\BoardItem;
 use App\Models\BoardItemComment;
+use App\Models\FeedFollow;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardItemActivityService;
@@ -23,6 +25,41 @@ use Illuminate\Support\Collection;
 class FeedService
 {
     public function __construct(private readonly BoardItemActivityService $activity_service) {}
+
+    /**
+     * Makes each user in `$user_ids` follow `$item` in the Update Feed, the
+     * "Following" tab, because they commented on it or were mentioned in it.
+     * Skips anyone who switched auto follow off in Profile > Notifications,
+     * anyone outside the item's workspace, and anyone who already follows the
+     * item or its whole board. Following twice is a no-op.
+     *
+     * @param  iterable<int, int|string>  $user_ids
+     */
+    public function autoFollowItem(BoardItem $item, iterable $user_ids): void
+    {
+        $ids = collect($user_ids)->map(fn ($user_id) => (int) $user_id)->unique()->values();
+
+        if ($ids->isEmpty() || $item->board === null) {
+            return;
+        }
+
+        $already_following = FeedFollow::query()
+            ->whereIn('user_id', $ids)
+            ->where(fn ($query) => $query
+                ->where(fn ($q) => $q->where('target_type', FeedFollow::TYPE_ITEM)->where('target_id', $item->id))
+                ->orWhere(fn ($q) => $q->where('target_type', FeedFollow::TYPE_BOARD)->where('target_id', $item->board_id)))
+            ->pluck('user_id');
+
+        User::query()
+            ->whereIn('id', $ids->diff($already_following))
+            ->where('auto_follow_enabled', true)
+            ->whereHas('workspaces', fn ($query) => $query->where('workspaces.id', $item->board->workspace_id))
+            ->get()
+            ->each(fn (User $user) => $user->feedFollows()->firstOrCreate([
+                'target_type' => FeedFollow::TYPE_ITEM,
+                'target_id' => $item->id,
+            ]));
+    }
 
     /**
      * Everyone who should receive this update live: every member of the

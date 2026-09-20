@@ -34,6 +34,7 @@ class UpdateNotificationPreferencesRequest extends FormRequest
             'desktop_notifications_enabled' => ['sometimes', 'boolean'],
             'notification_sound_enabled' => ['sometimes', 'boolean'],
             'tab_badge_enabled' => ['sometimes', 'boolean'],
+            'auto_follow_enabled' => ['sometimes', 'boolean'],
             'quiet_hours_enabled' => ['sometimes', 'boolean'],
             'quiet_hours_start' => ['sometimes', 'date_format:H:i'],
             'quiet_hours_end' => ['sometimes', 'date_format:H:i'],

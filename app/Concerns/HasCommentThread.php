@@ -48,6 +48,7 @@ trait HasCommentThread
             'scheduled_at' => 'datetime',
             'edited_at' => 'datetime',
             'pinned' => 'boolean',
+            'resolved_at' => 'datetime',
         ];
     }
 
@@ -79,6 +80,16 @@ trait HasCommentThread
     public function author(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id')->withTrashed();
+    }
+
+    /**
+     * The person who marked this thread as resolved, if it is.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function resolvedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'resolved_by_id')->withTrashed();
     }
 
     /**

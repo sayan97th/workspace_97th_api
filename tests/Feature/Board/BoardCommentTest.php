@@ -5,6 +5,7 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\CommentThreadActionsService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
@@ -261,7 +262,7 @@ test('a comment can only be deleted by its author', function () {
     $this->assertSoftDeleted('board_comments', ['id' => $comment->id]);
 });
 
-test('deleting a comment removes its attachment files from storage', function () {
+test('deleting a comment keeps its attachment files until the purge command runs after the undo window', function () {
     Storage::fake('public');
     $board = createCommentTestBoard();
     $author = User::factory()->create();
@@ -283,7 +284,13 @@ test('deleting a comment removes its attachment files from storage', function ()
         ->deleteJson("/api/boards/{$board->id}/comments/{$comment->id}")
         ->assertOk();
 
+    Storage::disk('public')->assertExists($path);
+
+    $this->travel(CommentThreadActionsService::UNDO_WINDOW_DAYS + 1)->days();
+    $this->artisan('comments:purge-deleted')->assertSuccessful();
+
     Storage::disk('public')->assertMissing($path);
+    $this->assertDatabaseMissing('board_comments', ['id' => $comment->id]);
 });
 
 test('a comment from another board is not reachable through this board', function () {

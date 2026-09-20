@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Notification;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\NotificationResource;
+use App\Models\BoardItemNotificationMute;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -55,6 +56,15 @@ class NotificationController extends Controller
             ->when($request->boolean('unread'), fn (Builder $query) => $query->unread())
             ->when(trim((string) ($validated['q'] ?? '')) !== '', fn (Builder $query) => $this->applySearch($query, trim($validated['q'])))
             ->with(['actor', 'board'])
+            ->addSelect('notifications.*')
+            ->selectSub(
+                BoardItemNotificationMute::query()
+                    ->selectRaw('1')
+                    ->where('user_id', $request->user()->id)
+                    ->whereColumn('board_item_notification_mutes.board_item_id', 'notifications.board_item_id')
+                    ->limit(1),
+                'is_item_muted'
+            )
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->cursorPaginate($validated['limit'] ?? self::PAGE_SIZE);

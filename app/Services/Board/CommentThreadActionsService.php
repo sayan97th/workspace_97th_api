@@ -23,6 +23,12 @@ use Illuminate\Support\Facades\DB;
  */
 class CommentThreadActionsService
 {
+    /**
+     * How many days a deleted comment can still be restored, after that
+     * `comments:purge-deleted` removes it and its files for good.
+     */
+    public const UNDO_WINDOW_DAYS = 7;
+
     public function __construct(
         private readonly NotificationService $notification_service,
     ) {}
@@ -35,6 +41,19 @@ class CommentThreadActionsService
         $comment->update(['pinned' => ! $comment->pinned]);
 
         return $comment->pinned;
+    }
+
+    /**
+     * Marks a top-level update as resolved by `$user`, or reopens it when it
+     * already is. Returns whether it ends up resolved.
+     */
+    public function toggleResolved(BoardItemComment|BoardComment $comment, User $user): bool
+    {
+        $comment->update($comment->resolved_at === null
+            ? ['resolved_at' => now(), 'resolved_by_id' => $user->id]
+            : ['resolved_at' => null, 'resolved_by_id' => null]);
+
+        return $comment->resolved_at !== null;
     }
 
     /**
@@ -79,7 +98,7 @@ class CommentThreadActionsService
     ): void {
         $recorded_ids = $this->recordNotified($comment, $notified_user_ids, $actor);
 
-        $this->sendNotified($recorded_ids, $actor, $board, $link, $action_target, $board_item);
+        $this->sendNotified($recorded_ids, $actor, $board, $link, $action_target, $board_item, $comment);
     }
 
     /**
@@ -115,6 +134,7 @@ class CommentThreadActionsService
         string $link,
         string $action_target,
         ?BoardItem $board_item = null,
+        BoardItemComment|BoardComment|null $comment = null,
     ): void {
         foreach ($notified_user_ids as $notified_user_id) {
             if ($notified_user = User::find($notified_user_id)) {
@@ -127,6 +147,7 @@ class CommentThreadActionsService
                     action_target: $action_target,
                     link: $link,
                     board_item: $board_item,
+                    comment: $comment,
                 );
             }
         }

@@ -6,7 +6,10 @@ use App\Events\NewNotification;
 use App\Jobs\SendEmailJob;
 use App\Mail\Notifications\AssignedNotificationEmail;
 use App\Mail\Notifications\NotificationEmail;
+use App\Models\BoardComment;
 use App\Models\BoardItem;
+use App\Models\BoardItemComment;
+use App\Models\BoardItemNotificationMute;
 use App\Models\BoardNotificationMute;
 use App\Models\Notification;
 use App\Models\User;
@@ -30,8 +33,9 @@ class NotificationService
      * each gated by `$recipient`'s own `notification_preferences` for this
      * `$type` (the `_app` and `_email` channel keys). No-ops entirely when
      * `$actor` is notifying themselves, or when `$recipient` has muted `$board`
-     * (see {@see BoardNotificationMute}) — checked ahead of the per-type gate,
-     * since muting a board is meant to silence every notification type for it.
+     * (see {@see BoardNotificationMute}) or the item the notification is about
+     * (see {@see BoardItemNotificationMute}), checked ahead of the per-type gate,
+     * since muting is meant to silence every notification type for it.
      *
      * While the recipient's quiet hours are active ({@see User::isInQuietHours()})
      * only the in-app notification is created, no email or Slack message goes out.
@@ -48,6 +52,11 @@ class NotificationService
      * triggered it (currently only passed for {@see Notification::TYPE_ASSIGNED}),
      * so its email can render the item/table/view/workspace breadcrumb — see
      * {@see AssignedNotificationEmail}.
+     *
+     * `$comment` is the comment that triggered it, when there is one. The
+     * notification keeps a reference to it so the bell can reply to that thread
+     * inline, and an item comment also ties the notification to its item, which
+     * is what muting an item silences.
      */
     public function notify(
         User $recipient,
@@ -58,12 +67,19 @@ class NotificationService
         string $action_target,
         ?string $link,
         ?BoardItem $board_item = null,
+        BoardItemComment|BoardComment|null $comment = null,
     ): ?Notification {
         if ($actor !== null && $recipient->id === $actor->id) {
             return null;
         }
 
         if ($board !== null && BoardNotificationMute::where('user_id', $recipient->id)->where('board_id', $board->id)->exists()) {
+            return null;
+        }
+
+        $board_item ??= $comment instanceof BoardItemComment ? $comment->item : null;
+
+        if ($board_item !== null && BoardItemNotificationMute::where('user_id', $recipient->id)->where('board_item_id', $board_item->id)->exists()) {
             return null;
         }
 
@@ -78,6 +94,12 @@ class NotificationService
             'type' => $type,
             'board_id' => $board?->id,
             'board_item_id' => $board_item?->id,
+            'comment_id' => $comment?->id,
+            'comment_kind' => match (true) {
+                $comment instanceof BoardItemComment => 'item',
+                $comment instanceof BoardComment => 'board',
+                default => null,
+            },
             'action_label' => $action_label,
             'action_target' => $action_target,
             'link' => $link,

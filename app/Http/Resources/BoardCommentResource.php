@@ -55,6 +55,12 @@ class BoardCommentResource extends JsonResource
             'bookmarked_by_me' => $this->bookmarks->contains('user_id', $current_user_id),
             'scheduled_at' => $this->scheduled_at,
             'pinned' => $this->pinned,
+            'is_resolved' => $this->resolved_at !== null,
+            'resolved_at' => $this->resolved_at,
+            'resolved_by' => $this->resolved_at !== null && $this->resolvedBy ? [
+                'id' => $this->resolvedBy->id,
+                'full_name' => $this->resolvedBy->full_name,
+            ] : null,
             'notified_user_ids' => $this->notifiedUsers->pluck('user_id')->values(),
             'reactions' => $this->reactions
                 ->groupBy('emoji')
@@ -62,6 +68,17 @@ class BoardCommentResource extends JsonResource
                     'emoji' => $emoji,
                     'count' => $group->count(),
                     'reacted_by_me' => $group->contains('user_id', $current_user_id),
+                    // Who reacted and when, oldest first, for the "who reacted" popover.
+                    'reactors' => $group
+                        ->sortBy('created_at')
+                        ->map(fn ($reaction) => [
+                            'id' => $reaction->user_id,
+                            'full_name' => $reaction->user?->full_name ?? __('Deleted user'),
+                            'profile_photo_url' => $reaction->user?->profile_photo_url,
+                            'is_deactivated' => $reaction->user?->is_deactivated ?? true,
+                            'reacted_at' => $reaction->created_at,
+                        ])
+                        ->values(),
                     'reactor_names' => $group
                         ->map(fn ($reaction) => $reaction->user_id === $current_user_id
                             ? __('You')
