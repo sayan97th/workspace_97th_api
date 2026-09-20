@@ -5,6 +5,7 @@ namespace App\Http\Resources;
 use App\Models\BoardAutomation;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Carbon;
 
 /**
  * @mixin BoardAutomation
@@ -28,6 +29,13 @@ class BoardAutomationResource extends JsonResource
             'action_type' => $this->action_type,
             'action_params' => $this->action_params,
             'created_at' => $this->created_at,
+            // Filled in by `BoardAutomationController`, which loads the run stats and the creator.
+            'run_count' => (int) ($this->run_logs_count ?? 0),
+            'last_run_at' => $this->run_logs_max_created_at ? Carbon::parse($this->run_logs_max_created_at)->toIso8601String() : null,
+            'created_by' => $this->whenLoaded('creator', fn () => $this->creator ? [
+                'id' => $this->creator->id,
+                'name' => $this->creator->full_name,
+            ] : null),
         ];
     }
 }

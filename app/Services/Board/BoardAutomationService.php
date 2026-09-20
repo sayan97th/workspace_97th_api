@@ -9,6 +9,7 @@ use App\Mail\Automations\AutomationEmail;
 use App\Models\BoardActivityLog;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationRun;
+use App\Models\BoardAutomationRunLog;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
@@ -21,6 +22,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * Runs the rule-based (no AI) automation recipes a board tab can define, see
@@ -265,22 +267,75 @@ class BoardAutomationService
      * (`column`, `old_value`, `new_value`, `update_text`), used to fill in the
      * message of a communication action.
      *
+     * Every call is written to {@see BoardAutomationRunLog} for the Manage tab's "Run history".
+     * An exception thrown while acting is caught and recorded as a failed run, so one broken
+     * automation can never break the change that triggered it.
+     *
      * @param  array<string, mixed>  $context
      */
     private function executeAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context = []): void
     {
+        try {
+            [$status, $message] = $this->performAction($automation, $item, $actor, $context);
+        } catch (Throwable $exception) {
+            report($exception);
+            [$status, $message] = [BoardAutomationRunLog::STATUS_FAILED, 'The action failed unexpectedly.'];
+        }
+
+        $this->recordRun($automation, $item, $actor, $status, $message);
+    }
+
+    /**
+     * @return array{0: string, 1: string} The run status and a one sentence outcome.
+     */
+    private function outcome(string $status, string $message): array
+    {
+        return [$status, $message];
+    }
+
+    private function recordRun(BoardAutomation $automation, BoardItem $item, ?User $actor, string $status, string $message): void
+    {
+        try {
+            BoardAutomationRunLog::create([
+                'automation_id' => $automation->id,
+                'board_id' => $automation->board_id,
+                'board_view_id' => $automation->board_view_id,
+                'board_item_id' => $item->id,
+                'actor_id' => $actor?->id,
+                'automation_name' => $automation->name,
+                'item_name' => Str::limit((string) $item->name, 250, ''),
+                'trigger_type' => $automation->trigger_type,
+                'action_type' => $automation->action_type,
+                'status' => $status,
+                'message' => $message,
+            ]);
+        } catch (Throwable $exception) {
+            // Keeping the history is best effort, it must never break the change that triggered the automation.
+            report($exception);
+        }
+    }
+
+    /**
+     * Does the work of one automation and reports what came of it, see {@see executeAction()}.
+     *
+     * @param  array<string, mixed>  $context
+     * @return array{0: string, 1: string}
+     */
+    private function performAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context): array
+    {
         $automation_label = $automation->name ?: 'Automation';
 
         if (in_array($automation->action_type, BoardAutomation::communicationActions(), true)) {
-            $this->executeCommunicationAction($automation, $item, $actor, $context);
-
-            return;
+            return $this->executeCommunicationAction($automation, $item, $actor, $context);
         }
 
         if ($automation->action_type === BoardAutomation::ACTION_MOVE_TO_GROUP) {
             $target_group_id = (int) ($automation->action_params['target_group_id'] ?? 0);
-            if (! $target_group_id || $item->group_id === $target_group_id) {
-                return;
+            if (! $target_group_id) {
+                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'No target table is set.');
+            }
+            if ($item->group_id === $target_group_id) {
+                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'The item was already in the target table.');
             }
 
             DB::transaction(function () use ($item, $target_group_id) {
@@ -296,13 +351,13 @@ class BoardAutomationService
                 ['item_id' => $item->id]
             );
 
-            return;
+            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Moved the item to a different table.');
         }
 
         if ($automation->action_type === BoardAutomation::ACTION_NOTIFY_PERSON) {
             $recipient = $this->resolveNotifyTarget($automation, $item);
             if (! $recipient) {
-                return;
+                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'Found nobody to notify.');
             }
 
             $this->notification_service->notify(
@@ -324,7 +379,7 @@ class BoardAutomationService
                 ['item_id' => $item->id]
             );
 
-            return;
+            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, "Notified {$recipient->full_name}.");
         }
 
         if ($automation->action_type === BoardAutomation::ACTION_ARCHIVE_ITEM) {
@@ -338,13 +393,13 @@ class BoardAutomationService
                 ['item_id' => $item->id]
             );
 
-            return;
+            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Archived the item.');
         }
 
         if ($automation->action_type === BoardAutomation::ACTION_SET_COLUMN_VALUE) {
             $target_column_id = $automation->action_params['target_column_id'] ?? null;
             if (! $target_column_id) {
-                return;
+                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'No column to update is set.');
             }
 
             $item->values()->updateOrCreate(
@@ -360,13 +415,13 @@ class BoardAutomationService
                 ['item_id' => $item->id]
             );
 
-            return;
+            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Updated a column on the item.');
         }
 
         if ($automation->action_type === BoardAutomation::ACTION_CREATE_ITEM) {
             $target_group_id = (int) ($automation->action_params['target_group_id'] ?? 0);
             if (! $target_group_id) {
-                return;
+                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'No target table is set.');
             }
 
             $position = (int) BoardItem::where('group_id', $target_group_id)->whereNull('parent_id')->max('position') + 1;
@@ -387,7 +442,11 @@ class BoardAutomationService
                 "Automation \"{$automation_label}\" created a new item",
                 ['item_id' => $item->id]
             );
+
+            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Created a new item.');
         }
+
+        return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'This action type is not supported.');
     }
 
     /**
@@ -397,14 +456,17 @@ class BoardAutomationService
      * being thrown, since they must not break the change that triggered the automation.
      *
      * @param  array<string, mixed>  $context
+     * @return array{0: string, 1: string} Failed when anything could not be delivered, skipped when there was nobody to reach.
      */
-    private function executeCommunicationAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context): void
+    private function executeCommunicationAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context): array
     {
         $automation_label = $automation->name ?: 'Automation';
         $message = $this->renderMessage($automation, $item, $actor, $context);
         $link = "/boards/{$item->board_id}/pulses/{$item->id}";
         $board_label = $item->board->label;
         $outcomes = [];
+        $delivered_count = 0;
+        $failed_count = 0;
 
         if ($automation->action_type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL) {
             $channel_id = (string) ($automation->action_params['slack_channel_id'] ?? '');
@@ -412,6 +474,7 @@ class BoardAutomationService
 
             $was_sent = $channel_id !== '' && $this->slack_notifier->notifyChannel($channel_id, $message, $link, $board_label);
             $outcomes[] = $was_sent ? "posted to Slack channel #{$channel_name}" : 'could not post to Slack because Slack is not connected';
+            $was_sent ? $delivered_count++ : $failed_count++;
         } else {
             $recipients = $this->resolveRecipients($automation, $item);
 
@@ -426,13 +489,16 @@ class BoardAutomationService
                         $recipient->email,
                     );
                     $outcomes[] = "emailed {$recipient->full_name}";
+                    $delivered_count++;
 
                     continue;
                 }
 
-                $outcomes[] = $this->slack_notifier->notifyUser($recipient, $message, $link, $board_label)
+                $was_sent = $this->slack_notifier->notifyUser($recipient, $message, $link, $board_label);
+                $outcomes[] = $was_sent
                     ? "sent a Slack message to {$recipient->full_name}"
                     : "could not reach {$recipient->full_name} on Slack because they have not connected their Slack account";
+                $was_sent ? $delivered_count++ : $failed_count++;
             }
         }
 
@@ -443,6 +509,14 @@ class BoardAutomationService
             "Automation \"{$automation_label}\" ".implode(', ', $outcomes),
             ['item_id' => $item->id]
         );
+
+        $status = match (true) {
+            $failed_count > 0 => BoardAutomationRunLog::STATUS_FAILED,
+            $delivered_count > 0 => BoardAutomationRunLog::STATUS_SUCCESS,
+            default => BoardAutomationRunLog::STATUS_SKIPPED,
+        };
+
+        return $this->outcome($status, ucfirst(implode(', ', $outcomes)).'.');
     }
 
     /**

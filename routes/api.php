@@ -373,6 +373,12 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::prefix('automations')->group(function () {
             Route::get('/', [BoardAutomationController::class, 'index']);
             Route::post('/', [BoardAutomationController::class, 'store']);
+
+            // Manage tab data, declared before the `{automation}` wildcard routes so these literal segments win.
+            Route::get('runs', [BoardAutomationController::class, 'runs']);
+            Route::get('usage', [BoardAutomationController::class, 'usage']);
+
+            Route::post('{automation}/duplicate', [BoardAutomationController::class, 'duplicate']);
             Route::patch('{automation}', [BoardAutomationController::class, 'update']);
             Route::delete('{automation}', [BoardAutomationController::class, 'destroy']);
         });

@@ -7,6 +7,7 @@ use App\Services\Board\BoardAutomationService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 /**
@@ -152,6 +153,16 @@ class BoardAutomation extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_id');
+    }
+
+    /**
+     * Every recorded run of this automation, shown under the Manage tab's "Run history".
+     *
+     * @return HasMany<BoardAutomationRunLog, $this>
+     */
+    public function runLogs(): HasMany
+    {
+        return $this->hasMany(BoardAutomationRunLog::class, 'automation_id');
     }
 
     /**
