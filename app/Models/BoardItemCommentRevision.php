@@ -52,6 +52,6 @@ class BoardItemCommentRevision extends Model
      */
     public function editor(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'edited_by_id');
+        return $this->belongsTo(User::class, 'edited_by_id')->withTrashed();
     }
 }

@@ -26,6 +26,7 @@ class BoardActivityLogResource extends JsonResource
                 'id' => $this->user->id,
                 'full_name' => $this->user->full_name,
                 'profile_photo_url' => $this->user->profile_photo_url,
+                'is_deactivated' => $this->user->is_deactivated,
             ] : null,
         ];
     }

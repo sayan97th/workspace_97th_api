@@ -31,6 +31,7 @@ class BoardItemCommentResource extends JsonResource
                 'id' => $this->author->id,
                 'full_name' => $this->author->full_name,
                 'profile_photo_url' => $this->author->profile_photo_url,
+                'is_deactivated' => $this->author->is_deactivated,
             ] : null,
             'body' => $this->body,
             'created_at' => $this->created_at,
@@ -46,6 +47,7 @@ class BoardItemCommentResource extends JsonResource
                     'id' => $view->user->id,
                     'full_name' => $view->user->full_name,
                     'profile_photo_url' => $view->user->profile_photo_url,
+                    'is_deactivated' => $view->user->is_deactivated,
                     'seen_at' => $view->created_at,
                 ])
                 ->values(),

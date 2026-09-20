@@ -29,6 +29,7 @@ class NotificationResource extends JsonResource
                 'name' => $this->actor?->full_name ?? 'Deleted user',
                 'id' => $this->actor?->id,
                 'avatar_url' => $this->actor?->profile_photo_url,
+                'is_deactivated' => $this->actor?->is_deactivated ?? true,
             ],
             'action_label' => $this->action_label,
             'action_target' => $this->action_target,

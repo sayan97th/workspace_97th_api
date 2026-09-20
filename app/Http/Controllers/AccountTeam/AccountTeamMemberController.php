@@ -10,6 +10,7 @@ use App\Http\Resources\AccountTeamMemberResource;
 use App\Http\Resources\AccountTeamResource;
 use App\Models\AccountTeam;
 use App\Models\User;
+use App\Support\AuditLogger;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -61,12 +62,24 @@ class AccountTeamMemberController extends Controller
      *
      * Adds members to the team's existing roster without touching anyone
      * already on it, unlike `sync()`'s full-replace used by the "Edit team"
-     * dialog. Backs the roster panel's "Add members" action.
+     * dialog. Backs the roster panel's "Add members" action. Admins, the account owner and the
+     * team's own owners may call it.
      */
     public function store(AddAccountTeamMembersRequest $request, AccountTeam $team): JsonResponse
     {
-        $team->members()->syncWithoutDetaching($request->validated('member_ids'));
-        $team->loadCount('members');
+        $actor = $request->user();
+        abort_unless($team->canBeManagedBy($actor), 403, 'You cannot manage this team.');
+
+        $member_ids = $request->validated('member_ids');
+        $team->members()->syncWithoutDetaching($member_ids);
+        $team->loadCount('members')->load('owners');
+
+        AuditLogger::log(
+            'team.members_added',
+            'Added '.count($member_ids)." member(s) to team \"{$team->name}\".",
+            $actor,
+            ['team_id' => $team->id, 'user_ids' => $member_ids],
+        );
 
         return response()->json([
             'message' => 'Members added successfully.',
@@ -78,15 +91,82 @@ class AccountTeamMemberController extends Controller
      * DELETE /api/account-teams/{team}/members/{user}
      *
      * Removes a single member from the team's roster. Backs the roster
-     * panel's per-row remove action.
+     * panel's per-row remove action. Team owners can remove regular members but only an admin
+     * can remove another owner, so an owner cannot lock out the person who delegated to them.
      */
-    public function destroy(AccountTeam $team, User $user): JsonResponse
+    public function destroy(Request $request, AccountTeam $team, User $user): JsonResponse
     {
+        $actor = $request->user();
+        abort_unless($team->canBeManagedBy($actor), 403, 'You cannot manage this team.');
+
+        $is_target_owner = $team->owners()->whereKey($user->id)->exists();
+        abort_if(
+            $is_target_owner && ! $actor->hasRole(['super_admin', 'admin']),
+            403,
+            'Only an admin can remove a team owner.'
+        );
+
         $team->members()->detach($user->id);
-        $team->loadCount('members');
+        $team->loadCount('members')->load('owners');
+
+        AuditLogger::log(
+            'team.member_removed',
+            "Removed {$user->full_name} from team \"{$team->name}\".",
+            $actor,
+            ['team_id' => $team->id, 'user_id' => $user->id],
+        );
 
         return response()->json([
             'message' => 'Member removed successfully.',
+            'team' => new AccountTeamResource($team),
+        ]);
+    }
+
+    /**
+     * PUT /api/account-teams/{team}/owners/{user}
+     *
+     * Makes a staff user an owner of the team, adding them to the roster first when they are
+     * not on it yet. Admin only, the route sits behind the admin role gate.
+     */
+    public function assignOwner(Request $request, AccountTeam $team, User $user): JsonResponse
+    {
+        abort_unless($user->hasRole(self::staffRoles()), 422, 'Only staff users can own a team.');
+
+        $team->members()->syncWithoutDetaching([$user->id => ['is_team_owner' => true]]);
+        $team->loadCount('members')->load('owners');
+
+        AuditLogger::log(
+            'team.owner_assigned',
+            "Made {$user->full_name} an owner of team \"{$team->name}\".",
+            $request->user(),
+            ['team_id' => $team->id, 'user_id' => $user->id],
+        );
+
+        return response()->json([
+            'message' => 'Team owner assigned successfully.',
+            'team' => new AccountTeamResource($team),
+        ]);
+    }
+
+    /**
+     * DELETE /api/account-teams/{team}/owners/{user}
+     *
+     * Takes the owner delegation away but keeps the user on the roster. Admin only.
+     */
+    public function removeOwner(Request $request, AccountTeam $team, User $user): JsonResponse
+    {
+        $team->members()->updateExistingPivot($user->id, ['is_team_owner' => false]);
+        $team->loadCount('members')->load('owners');
+
+        AuditLogger::log(
+            'team.owner_removed',
+            "Removed {$user->full_name} as an owner of team \"{$team->name}\".",
+            $request->user(),
+            ['team_id' => $team->id, 'user_id' => $user->id],
+        );
+
+        return response()->json([
+            'message' => 'Team owner removed successfully.',
             'team' => new AccountTeamResource($team),
         ]);
     }

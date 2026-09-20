@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Board\RecurringItemService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -56,7 +57,7 @@ class BoardActivityLog extends Model
     /** A {@see BoardAutomation} rule fired and ran its action against an item. */
     public const ACTION_AUTOMATION_RAN = 'automation_ran';
 
-    /** A {@see \App\Models\BoardItemRecurrence} fired and recreated its item — see {@see \App\Services\Board\RecurringItemService}. */
+    /** A {@see BoardItemRecurrence} fired and recreated its item — see {@see RecurringItemService}. */
     public const ACTION_ITEM_RECURRED = 'item_recurred';
 
     /**
@@ -72,7 +73,7 @@ class BoardActivityLog extends Model
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class)->withTrashed();
     }
 
     /**

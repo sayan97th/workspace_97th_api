@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\User;
+use App\Models\Workspace;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -25,11 +26,12 @@ class WorkspaceMemberResource extends JsonResource
             'full_name' => $this->full_name,
             'email' => $this->email,
             'profile_photo_url' => $this->profile_photo_url,
+            'is_deactivated' => $this->is_deactivated,
             'role' => $this->pivot->role,
             'is_recent' => (bool) $this->pivot->is_recent,
             'invited_by' => $this->pivot->invited_by,
             'joined_at' => $this->pivot->created_at,
-            /** @see \App\Models\Workspace::isCreator() — set by the controller before building this resource. */
+            /** @see Workspace::isCreator() — set by the controller before building this resource. */
             'is_creator' => (bool) ($this->is_workspace_creator ?? false),
         ];
     }

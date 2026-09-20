@@ -349,11 +349,14 @@ class WorkspaceController extends Controller
      * GET /api/workspaces/{workspace}/members
      *
      * The full member roster (with role) for the Manage Workspace
-     * "Collaborations" tab.
+     * "Collaborations" tab. Pass `include_deactivated=1` to also get deleted accounts
+     * (flagged `is_deactivated`), so a board can still show them, faded, on the items
+     * they were assigned to.
      */
-    public function members(Workspace $workspace): JsonResponse
+    public function members(Request $request, Workspace $workspace): JsonResponse
     {
         $members = $workspace->users()
+            ->when($request->boolean('include_deactivated'), fn ($query) => $query->withTrashed())
             ->orderBy('first_name')
             ->orderBy('last_name')
             ->get()

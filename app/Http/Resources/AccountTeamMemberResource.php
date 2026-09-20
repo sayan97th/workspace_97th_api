@@ -9,7 +9,9 @@ use Illuminate\Http\Resources\Json\JsonResource;
 /**
  * A staff user shown in a Teams roster (a single team's members, the account-wide
  * "All members" dedupe, or the "add members" candidate directory). The controller
- * must eager-load `roles:id,name` before returning this, since `is_owner` reads it.
+ * must eager-load `roles:id,name` before returning this, since `is_owner` reads it. `is_team_owner`
+ * is only meaningful when the row came through a team's `members()` relation (it reads the
+ * membership pivot), every other listing reports false.
  *
  * @mixin User
  */
@@ -27,6 +29,7 @@ class AccountTeamMemberResource extends JsonResource
             'job_title' => $this->job_title,
             'profile_photo_url' => $this->profile_photo_url,
             'is_owner' => $this->hasRole('super_admin'),
+            'is_team_owner' => $this->relationLoaded('pivot') && (bool) $this->pivot->is_team_owner,
         ];
     }
 }

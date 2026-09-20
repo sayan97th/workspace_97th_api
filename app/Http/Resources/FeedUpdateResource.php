@@ -100,6 +100,7 @@ class FeedUpdateResource extends JsonResource
                     'id' => $entry->user->id,
                     'name' => $entry->user->full_name,
                     'avatar_url' => $entry->user->profile_photo_url,
+                    'is_deactivated' => $entry->user->is_deactivated,
                 ] : null,
                 'column_label' => $entry->column_label,
                 'column_type' => $entry->column_type,
@@ -131,6 +132,7 @@ class FeedUpdateResource extends JsonResource
                 'id' => $comment->author?->id,
                 'name' => $comment->author !== null ? $comment->author->full_name : __('Deleted user'),
                 'avatar_url' => $comment->author?->profile_photo_url,
+                'is_deactivated' => $comment->author?->is_deactivated ?? true,
             ],
             'body' => $comment->body,
             'created_at' => $comment->created_at,
@@ -157,6 +159,7 @@ class FeedUpdateResource extends JsonResource
                     'id' => $mention->user_id,
                     'name' => $mention->user->full_name,
                     'avatar_url' => $mention->user->profile_photo_url,
+                    'is_deactivated' => $mention->user->is_deactivated,
                 ])
                 ->values(),
             'pinned' => $comment->pinned,

@@ -25,6 +25,8 @@ class UserWithRolesResource extends JsonResource
             'phone' => $this->phone,
             'profile_photo_url' => $this->profile_photo_url,
             'is_active' => $this->is_active,
+            'is_deactivated' => $this->is_deactivated,
+            'deleted_at' => $this->deleted_at,
             'email_verified_at' => $this->email_verified_at,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,

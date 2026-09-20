@@ -24,7 +24,7 @@ class AccountTeamController extends Controller
     {
         $search = $request->query('search');
 
-        $query = AccountTeam::withCount('members')->orderBy('name');
+        $query = AccountTeam::withCount('members')->with('owners')->orderBy('name');
 
         if ($search !== null && $search !== '') {
             $query->where('name', 'LIKE', '%'.$search.'%');
@@ -58,7 +58,7 @@ class AccountTeamController extends Controller
             return $team;
         });
 
-        $team->loadCount('members');
+        $team->loadCount('members')->load('owners');
 
         return response()->json([
             'message' => 'Team created successfully.',
@@ -71,7 +71,7 @@ class AccountTeamController extends Controller
      */
     public function show(AccountTeam $team): JsonResponse
     {
-        $team->loadCount('members');
+        $team->loadCount('members')->load('owners');
 
         return response()->json(new AccountTeamResource($team));
     }
@@ -82,7 +82,7 @@ class AccountTeamController extends Controller
     public function update(UpdateAccountTeamRequest $request, AccountTeam $team): JsonResponse
     {
         $team->update($request->validated());
-        $team->loadCount('members');
+        $team->loadCount('members')->load('owners');
 
         return response()->json([
             'message' => 'Team updated successfully.',

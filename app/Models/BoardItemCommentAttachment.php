@@ -49,7 +49,7 @@ class BoardItemCommentAttachment extends Model
      */
     public function uploader(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'uploaded_by_id');
+        return $this->belongsTo(User::class, 'uploaded_by_id')->withTrashed();
     }
 
     /**

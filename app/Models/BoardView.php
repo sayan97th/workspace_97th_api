@@ -94,7 +94,7 @@ class BoardView extends Model
      */
     public function creator(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'created_by_id');
+        return $this->belongsTo(User::class, 'created_by_id')->withTrashed();
     }
 
     /**
@@ -104,7 +104,7 @@ class BoardView extends Model
      */
     public function lockedBy(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'locked_by_id');
+        return $this->belongsTo(User::class, 'locked_by_id')->withTrashed();
     }
 
     /**

@@ -163,7 +163,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
     // Profile card shown when hovering a mention or avatar, limited to people
     // who share a workspace with the viewer.
-    Route::get('people/{user}/card', [PersonCardController::class, 'show']);
+    Route::get('people/{user}/card', [PersonCardController::class, 'show'])->withTrashed();
 
     // Account teams a board's comment composers can group `@mention`, limited
     // to each team's members inside the board's workspace.
@@ -521,13 +521,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Admin — staff-level roles and above
     Route::middleware('role:super_admin,admin,staff')->prefix('admin')->group(function () {
         Route::get('users', [AdminUserController::class, 'index']);
-        Route::get('users/{user}', [AdminUserController::class, 'show']);
+        Route::get('users/{user}', [AdminUserController::class, 'show'])->withTrashed();
 
         Route::middleware('role:super_admin,admin')->group(function () {
             Route::patch('users/{user}', [AdminUserController::class, 'update']);
             Route::patch('users/{user}/ban', [AdminUserController::class, 'ban']);
             Route::patch('users/{user}/unban', [AdminUserController::class, 'unban']);
             Route::delete('users/{user}', [AdminUserController::class, 'destroy']);
+            Route::patch('users/{user}/restore', [AdminUserController::class, 'restore'])->withTrashed();
             Route::post('users/invite', [AdminUserController::class, 'invite']);
 
             // Password management — set a password directly, or email the account a reset
@@ -613,23 +614,29 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         });
     });
 
-    // Account Teams — company-wide staff groupings (Monday-style "Teams"),
-    // independent of any single workspace. Staff-level roles and above, same
-    // gate as the rest of the account-management surface.
+    // Account Teams, company-wide staff groupings (Monday-style "Teams"), independent of any
+    // single workspace. Staff-level roles and above can read them, but only admins and the
+    // account owner create, edit or delete a team and pick its owners. Adding and removing
+    // members is also open to that team's own owners, checked in `AccountTeamMemberController`.
     Route::middleware('role:super_admin,admin,staff')->group(function () {
         Route::get('account-team-members', [AccountTeamMemberController::class, 'all']);
         Route::get('account-team-candidates', [AccountTeamMemberController::class, 'candidates']);
 
         Route::prefix('account-teams')->group(function () {
             Route::get('/', [AccountTeamController::class, 'index']);
-            Route::post('/', [AccountTeamController::class, 'store']);
             Route::get('{team}', [AccountTeamController::class, 'show']);
-            Route::patch('{team}', [AccountTeamController::class, 'update']);
-            Route::delete('{team}', [AccountTeamController::class, 'destroy']);
             Route::get('{team}/members', [AccountTeamMemberController::class, 'forTeam']);
             Route::post('{team}/members', [AccountTeamMemberController::class, 'store']);
-            Route::put('{team}/members', [AccountTeamMemberController::class, 'sync']);
             Route::delete('{team}/members/{user}', [AccountTeamMemberController::class, 'destroy']);
+
+            Route::middleware('role:super_admin,admin')->group(function () {
+                Route::post('/', [AccountTeamController::class, 'store']);
+                Route::patch('{team}', [AccountTeamController::class, 'update']);
+                Route::delete('{team}', [AccountTeamController::class, 'destroy']);
+                Route::put('{team}/members', [AccountTeamMemberController::class, 'sync']);
+                Route::put('{team}/owners/{user}', [AccountTeamMemberController::class, 'assignOwner']);
+                Route::delete('{team}/owners/{user}', [AccountTeamMemberController::class, 'removeOwner']);
+            });
         });
     });
 });

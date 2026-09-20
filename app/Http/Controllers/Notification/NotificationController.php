@@ -352,13 +352,14 @@ class NotificationController extends Controller
             ->limit(3)
             ->pluck('total', 'actor_id');
 
-        $top_actors = User::query()
+        $top_actors = User::withTrashed()
             ->whereIn('id', $top_counts->keys())
             ->get()
             ->map(fn (User $actor) => [
                 'id' => $actor->id,
                 'name' => $actor->full_name,
                 'avatar_url' => $actor->profile_photo_url,
+                'is_deactivated' => $actor->is_deactivated,
                 'count' => (int) $top_counts->get($actor->id, 0),
             ])
             ->sortByDesc('count')

@@ -33,6 +33,7 @@ class PersonCardController extends Controller
                 'job_title' => $user->job_title,
                 'avatar_url' => $user->profile_photo_url,
                 'timezone' => $user->timezone,
+                'is_deactivated' => $user->is_deactivated,
             ],
         ]);
     }

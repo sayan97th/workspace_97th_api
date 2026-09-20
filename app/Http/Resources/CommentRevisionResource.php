@@ -31,6 +31,7 @@ class CommentRevisionResource extends JsonResource
                 'id' => $this->editor->id,
                 'full_name' => $this->editor->full_name,
                 'profile_photo_url' => $this->editor->profile_photo_url,
+                'is_deactivated' => $this->editor->is_deactivated,
             ] : null,
         ];
     }

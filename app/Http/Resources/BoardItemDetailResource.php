@@ -35,6 +35,7 @@ class BoardItemDetailResource extends JsonResource
                 'id' => $this->creator->id,
                 'full_name' => $this->creator->full_name,
                 'profile_photo_url' => $this->creator->profile_photo_url,
+                'is_deactivated' => $this->creator->is_deactivated,
             ] : null,
             'checklist_items' => BoardItemChecklistItemResource::collection($this->whenLoaded('checklistItems')),
         ]);

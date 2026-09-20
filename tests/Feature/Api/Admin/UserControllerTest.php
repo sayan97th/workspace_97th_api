@@ -95,7 +95,8 @@ test('an admin can delete a client account', function () {
         ->deleteJson("/api/admin/users/{$target->id}")
         ->assertOk();
 
-    expect(User::find($target->id))->toBeNull();
+    expect(User::find($target->id))->toBeNull()
+        ->and(User::withTrashed()->find($target->id))->not->toBeNull();
 });
 
 test('a user cannot delete their own account', function () {
@@ -134,7 +135,8 @@ test('a super admin can delete an admin account', function () {
         ->deleteJson("/api/admin/users/{$admin->id}")
         ->assertOk();
 
-    expect(User::find($admin->id))->toBeNull();
+    expect(User::find($admin->id))->toBeNull()
+        ->and(User::withTrashed()->find($admin->id))->not->toBeNull();
 });
 
 test('an admin can ban and unban a client account', function () {
@@ -346,4 +348,69 @@ test('users can be sorted by department, with unassigned users still included', 
 
     $emails = collect($response->json('data'))->pluck('email');
     expect($emails)->toContain($staff->email, $with_department->email);
+});
+
+test('a deleted account keeps its name and email and can no longer sign in', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create(['first_name' => 'Ada', 'last_name' => 'Lovelace', 'email' => 'ada@example.com']);
+    $target->assignRole('client');
+
+    $this->actingAs($admin, 'api')->deleteJson("/api/admin/users/{$target->id}")->assertOk();
+
+    $kept = User::withTrashed()->find($target->id);
+    expect($kept->full_name)->toBe('Ada Lovelace')
+        ->and($kept->email)->toBe('ada@example.com')
+        ->and($kept->is_deactivated)->toBeTrue();
+
+    $this->postJson('/api/auth/login', ['email' => 'ada@example.com', 'password' => 'password'])->assertStatus(422);
+});
+
+test('an admin can list deleted accounts and restore one', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create();
+    $target->assignRole('client');
+    $target->delete();
+
+    $this->actingAs($admin, 'api')
+        ->getJson('/api/admin/users?account_status=deleted')
+        ->assertOk()
+        ->assertJsonPath('total', 1)
+        ->assertJsonPath('data.0.id', $target->id)
+        ->assertJsonPath('data.0.is_deactivated', true);
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$target->id}/restore")
+        ->assertOk()
+        ->assertJsonPath('user.is_deactivated', false);
+
+    expect(User::find($target->id))->not->toBeNull();
+});
+
+test('restoring an account that was not deleted is a conflict', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create();
+    $target->assignRole('client');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$target->id}/restore")
+        ->assertStatus(409);
+});
+
+test('inviting the email of a deleted account explains that it can be restored', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $target = User::factory()->create(['email' => 'gone@example.com']);
+    $target->delete();
+
+    $this->actingAs($admin, 'api')
+        ->postJson('/api/admin/users/invite', ['email' => 'gone@example.com', 'role' => 'client'])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors(['email']);
 });

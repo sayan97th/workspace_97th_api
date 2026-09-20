@@ -193,7 +193,9 @@ class FeedUpdateController extends Controller
     {
         abort_unless($request->user()->workspaces()->where('workspaces.id', $board->workspace_id)->exists(), 403);
 
+        // Deactivated accounts stay out: they cannot see the mention, so there is nobody to notify.
         $people = $board->workspace->users()
+            ->where('users.is_active', true)
             ->orderBy('first_name')
             ->orderBy('last_name')
             ->get()

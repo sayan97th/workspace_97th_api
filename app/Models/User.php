@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -68,7 +69,9 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property bool $excluded_from_home_workspace
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
+ * @property Carbon|null $deleted_at
  * @property-read string $full_name
+ * @property-read bool $is_deactivated
  * @property-read string|null $profile_photo_url
  * @property-read Team|null $currentTeam
  * @property-read Workspace|null $lastActiveWorkspace
@@ -90,11 +93,11 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
     'language', 'time_format', 'date_format', 'first_day_of_week', 'sidebar_width',
 ])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
-#[Appends(['full_name', 'profile_photo_url'])]
+#[Appends(['full_name', 'profile_photo_url', 'is_deactivated'])]
 class User extends Authenticatable implements JWTSubject, PasskeyUser
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, HasRoles, HasTeams, Notifiable, PasskeyAuthenticatable, TwoFactorAuthenticatable;
+    use HasFactory, HasRoles, HasTeams, Notifiable, PasskeyAuthenticatable, SoftDeletes, TwoFactorAuthenticatable;
 
     /**
      * The model's default attribute values.
@@ -219,6 +222,21 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     {
         $this->update(['last_active_workspace_id' => $workspace->id]);
         $this->setRelation('lastActiveWorkspace', $workspace);
+    }
+
+    /**
+     * Whether this account can no longer sign in, either because an administrator disabled
+     * it (`is_active` is false) or deleted it (soft deleted). Either way the row is kept, so
+     * the person's past comments and assignments stay attributed to them, and the frontend
+     * shows their name and avatar faded instead of a generic "Deleted user".
+     *
+     * @return Attribute<bool, never>
+     */
+    protected function isDeactivated(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => ! $this->is_active || $this->trashed(),
+        );
     }
 
     /**

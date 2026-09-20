@@ -99,6 +99,8 @@ class UserController extends Controller
             $query->where('is_active', true);
         } elseif ($account_status === 'disabled') {
             $query->where('is_active', false);
+        } elseif ($account_status === 'deleted') {
+            $query->onlyTrashed();
         }
 
         if ($department === 'unassigned') {
@@ -207,9 +209,9 @@ class UserController extends Controller
     /**
      * DELETE /api/admin/users/{user}
      *
-     * Permanently removes the account. There is no soft-delete for `User`, so this cannot be
-     * undone, unlike {@see ban()} which only flips `is_active` and can be reversed via
-     * {@see unban()}.
+     * Soft deletes the account: the person can no longer sign in and disappears from every
+     * roster and picker, but the row (name, email, photo) is kept so their past comments,
+     * updates and assignments still show who they were, faded. Undo it with {@see restore()}.
      */
     public function destroy(Request $request, User $user): JsonResponse
     {
@@ -233,6 +235,34 @@ class UserController extends Controller
 
         return response()->json([
             'message' => 'User account has been deleted.',
+        ]);
+    }
+
+    /**
+     * PATCH /api/admin/users/{user}/restore
+     *
+     * Brings a deleted account back, exactly as it was: same roles, workspaces and history.
+     */
+    public function restore(Request $request, User $user): JsonResponse
+    {
+        /** @var User $actor */
+        $actor = $request->user();
+
+        if (! $user->trashed()) {
+            return response()->json(['message' => 'This account has not been deleted.'], 409);
+        }
+
+        if (! $this->actorCanManage($actor, $user)) {
+            return response()->json(['message' => 'You do not have permission to restore this account.'], 403);
+        }
+
+        $user->restore();
+
+        AuditLogger::log('user.restored', "Restored {$user->full_name}'s account.", $actor, ['target_user_id' => $user->id]);
+
+        return response()->json([
+            'message' => 'User account has been restored.',
+            'user' => new UserWithRolesResource($user->fresh(['roles:id,name,display_name', 'department:id,name'])),
         ]);
     }
 
