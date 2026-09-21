@@ -21,6 +21,7 @@ use App\Models\BoardItemValue;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemFilterService;
+use App\Services\Board\BoardItemScopeConversionService;
 use App\Services\Board\BoardItemValueService;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\MirrorColumnResolver;
@@ -40,6 +41,7 @@ class BoardItemController extends Controller
         private readonly MirrorColumnResolver $mirror_resolver,
         private readonly BoardAutomationService $automation_service,
         private readonly BoardItemValueService $value_service,
+        private readonly BoardItemScopeConversionService $scope_conversion_service,
     ) {}
 
     /**
@@ -74,14 +76,20 @@ class BoardItemController extends Controller
             ->where('is_archived', false)
             ->whereNull('parent_id')
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
-            ->with(['values', 'childrenRecursive', 'recurrence'])
+            ->with([
+                'values',
+                'recurrence',
+                // An archived subitem is hidden like an archived root item, it
+                // only comes back through the board's archive panel.
+                'childrenRecursive' => fn ($q) => $q->where('is_archived', false),
+            ])
             ->withCount([
                 'comments',
                 'commentAttachments',
                 'attachments',
                 'checklistItems as checklist_total_count',
                 'checklistItems as checklist_done_count' => fn ($q) => $q->where('is_done', true),
-                'children as subitem_count',
+                'children as subitem_count' => fn ($q) => $q->where('is_archived', false),
             ])
             ->orderBy('group_id')->orderBy('position');
 
@@ -121,6 +129,11 @@ class BoardItemController extends Controller
      * item instead of a top-level row — the subitem's `group_id` is always
      * inherited from its parent (any client-supplied `group_id` is ignored)
      * so a subitem's denormalized group never diverges from its parent's.
+     *
+     * `after_item_id` is the row menu's "Create new item below": the new row
+     * becomes the next sibling of that item (same group and same parent, so
+     * `group_id` and `parent_id` are ignored) and every later sibling is
+     * shifted down by one to make room, in the same transaction.
      */
     public function store(StoreBoardItemRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -128,8 +141,13 @@ class BoardItemController extends Controller
 
         $validated = $request->validated();
         $parent_id = $validated['parent_id'] ?? null;
+        $after_item = isset($validated['after_item_id']) ? $item->items()->findOrFail($validated['after_item_id']) : null;
 
-        if ($parent_id !== null) {
+        if ($after_item !== null) {
+            $parent_id = $after_item->parent_id;
+            $group_id = $after_item->group_id;
+            $position = $after_item->position + 1;
+        } elseif ($parent_id !== null) {
             $parent = BoardItem::where('id', $parent_id)->firstOrFail();
             $group_id = $parent->group_id;
             $position = $validated['position'] ?? $this->nextPosition($item, $group_id, $parent_id);
@@ -138,15 +156,25 @@ class BoardItemController extends Controller
             $position = $validated['position'] ?? $this->nextPosition($item, $group_id);
         }
 
-        $board_item = $item->items()->create([
-            'group_id' => $group_id,
-            'parent_id' => $parent_id,
-            'name' => $validated['name'],
-            'description' => $validated['description'] ?? null,
-            'position' => $position,
-            'is_priority' => $validated['is_priority'] ?? false,
-            'created_by_id' => $request->user()?->id,
-        ]);
+        $board_item = DB::transaction(function () use ($item, $request, $validated, $after_item, $group_id, $parent_id, $position) {
+            if ($after_item !== null) {
+                $item->items()
+                    ->where('group_id', $group_id)
+                    ->where('parent_id', $parent_id)
+                    ->where('position', '>=', $position)
+                    ->increment('position');
+            }
+
+            return $item->items()->create([
+                'group_id' => $group_id,
+                'parent_id' => $parent_id,
+                'name' => $validated['name'],
+                'description' => $validated['description'] ?? null,
+                'position' => $position,
+                'is_priority' => $validated['is_priority'] ?? false,
+                'created_by_id' => $request->user()?->id,
+            ]);
+        });
 
         $this->assignAutoNumberValues($board_item, $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM);
 
@@ -192,12 +220,19 @@ class BoardItemController extends Controller
     /**
      * PATCH /api/boards/{item}/items/{board_item}/parent
      *
-     * Row menu's "Convert to subitem" / "Convert to item" — the one boundary
-     * `reorder()` deliberately can't cross. `parent_id` set converts a root
-     * item into a subitem of that item, landing at the end of its subitem
-     * list; `parent_id` null promotes a subitem back to a root item, landing
-     * at the end of the given `group_id`. Cascades the resulting `group_id`
-     * onto the moved item's own descendants, same as `update()`.
+     * Row menu's "Convert to subitem" / "Convert to item" and a subitem's
+     * "Move to item", the one boundary `reorder()` deliberately can't cross.
+     * `parent_id` set makes the row a subitem of that item, landing at the end
+     * of its subitem list (a root item is converted, a subitem is moved to a
+     * different parent); `parent_id` null promotes a subitem back to a root
+     * item, landing at the end of the given `group_id`. Cascades the resulting
+     * `group_id` onto the moved item's own descendants, same as `update()`.
+     *
+     * A root item and a subitem read from separate column sets, so when the
+     * row crosses that boundary its cell values are carried over to the
+     * matching columns of the other set (see
+     * {@see BoardItemScopeConversionService}) and its Auto-number columns
+     * are assigned again. Everything runs in one transaction.
      */
     public function updateParent(UpdateBoardItemParentRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
@@ -216,13 +251,28 @@ class BoardItemController extends Controller
             $position = $this->nextPosition($item, $group_id);
         }
 
-        $board_item->update([
-            'parent_id' => $parent_id,
-            'group_id' => $group_id,
-            'position' => $position,
-        ]);
+        DB::transaction(function () use ($board_item, $parent_id, $group_id, $position) {
+            $board_item->loadMissing('group');
+            $source_view_id = $board_item->group->board_view_id;
+            $source_scope = $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
 
-        $this->cascadeGroupToDescendants($board_item, $group_id);
+            $board_item->update([
+                'parent_id' => $parent_id,
+                'group_id' => $group_id,
+                'position' => $position,
+            ]);
+
+            $this->cascadeGroupToDescendants($board_item, $group_id);
+
+            $board_item->load('group');
+            $target_view_id = $board_item->group->board_view_id;
+            $target_scope = $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
+
+            if ($source_scope !== $target_scope || $source_view_id !== $target_view_id) {
+                $this->scope_conversion_service->convert($board_item, $source_view_id, $source_scope, $target_view_id, $target_scope);
+                $this->assignAutoNumberValues($board_item, $target_scope);
+            }
+        });
 
         return response()->json([
             'message' => 'Item moved successfully.',
@@ -601,6 +651,7 @@ class BoardItemController extends Controller
             'name' => $parent_id === $original->parent_id ? "{$original->name} (copy)" : $original->name,
             'description' => $original->description,
             'position' => $position,
+            'is_priority' => $original->is_priority,
             'created_by_id' => $original->created_by_id,
         ]);
 
@@ -628,7 +679,7 @@ class BoardItemController extends Controller
         $this->assignAutoNumberValues($copy, $scope);
 
         if ($with_children) {
-            foreach ($original->childrenRecursive as $child) {
+            foreach ($original->childrenRecursive->where('is_archived', false) as $child) {
                 $this->copySubtree($item, $child, $group_id, $copy->id, $child->position);
             }
         }

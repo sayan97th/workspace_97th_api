@@ -34,7 +34,8 @@ class UpdateBoardItemParentRequest extends FormRequest
                 'present', 'nullable', 'integer',
                 Rule::exists('board_items', 'id')->where(fn ($query) => $query
                     ->where('board_id', $board_id)
-                    ->whereNull('parent_id')),
+                    ->whereNull('parent_id')
+                    ->whereNull('deleted_at')),
             ],
             // Deliberately no 'sometimes' here: combined with `Rule::requiredIf`,
             // 'sometimes' would skip the required check entirely whenever the

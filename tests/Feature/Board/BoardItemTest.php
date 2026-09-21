@@ -610,3 +610,131 @@ test('reorder rejects a subitem id claimed under the wrong parent', function () 
         'target_ordered_ids' => [$child->id],
     ])->assertInvalid(['target_ordered_ids.0']);
 });
+
+test('converting a root item into a subitem carries its values over to the matching subitem columns', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $item_notes = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'scope' => BoardColumn::SCOPE_ITEM, 'label' => 'Notes', 'type' => BoardColumn::TYPE_TEXT]);
+    $item_only = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'scope' => BoardColumn::SCOPE_ITEM, 'label' => 'Budget', 'type' => BoardColumn::TYPE_NUMBER]);
+    $sub_notes = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'scope' => BoardColumn::SCOPE_SUBITEM, 'label' => 'notes', 'type' => BoardColumn::TYPE_TEXT]);
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 1]);
+    $item->values()->create(['column_id' => $item_notes->id, 'value' => 'keep me']);
+    $item->values()->create(['column_id' => $item_only->id, 'value' => 500]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", ['parent_id' => $parent->id]);
+
+    $response->assertOk()->assertJsonPath("item.values.{$sub_notes->id}", 'keep me');
+    $this->assertDatabaseMissing('board_item_values', ['item_id' => $item->id, 'column_id' => $item_notes->id]);
+    $this->assertDatabaseMissing('board_item_values', ['item_id' => $item->id, 'column_id' => $item_only->id]);
+});
+
+test('converting a row across the item and subitem boundary assigns a fresh auto number', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $sub_number = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'scope' => BoardColumn::SCOPE_SUBITEM, 'label' => 'ID', 'type' => BoardColumn::TYPE_AUTO_NUMBER]);
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 1]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", ['parent_id' => $parent->id]);
+
+    $response->assertOk()->assertJsonPath("item.values.{$sub_number->id}", 1);
+});
+
+test('a subitem can be moved to a different parent item', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $first_parent = $board->items()->create(['group_id' => $group->id, 'name' => 'First', 'position' => 0]);
+    $second_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id]);
+    $second_parent = $board->items()->create(['group_id' => $second_group->id, 'name' => 'Second', 'position' => 0]);
+    $sub = $board->items()->create(['group_id' => $group->id, 'parent_id' => $first_parent->id, 'name' => 'Sub', 'position' => 0]);
+
+    $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$sub->id}/parent", ['parent_id' => $second_parent->id]);
+
+    $response->assertOk()
+        ->assertJsonPath('item.parent_id', $second_parent->id)
+        ->assertJsonPath('item.group_id', $second_group->id);
+});
+
+test('an item cannot be converted into a subitem of a deleted item', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $deleted_parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Gone', 'position' => 0]);
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 1]);
+    $deleted_parent->delete();
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", ['parent_id' => $deleted_parent->id])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('parent_id');
+});
+
+test('an item created below another one takes the next position and shifts later siblings', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $first = $board->items()->create(['group_id' => $group->id, 'name' => 'First', 'position' => 0]);
+    $second = $board->items()->create(['group_id' => $group->id, 'name' => 'Second', 'position' => 1]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", ['name' => 'Between', 'after_item_id' => $first->id]);
+
+    $response->assertCreated()
+        ->assertJsonPath('item.position', 1)
+        ->assertJsonPath('item.group_id', $group->id)
+        ->assertJsonPath('item.parent_id', null);
+    expect($second->fresh()->position)->toBe(2);
+    expect($first->fresh()->position)->toBe(0);
+});
+
+test('a subitem created below another subitem stays under the same parent', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $sub = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Sub', 'position' => 0]);
+    $other_root = $board->items()->create(['group_id' => $group->id, 'name' => 'Other root', 'position' => 1]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", ['name' => 'Below sub', 'after_item_id' => $sub->id]);
+
+    $response->assertCreated()->assertJsonPath('item.parent_id', $parent->id)->assertJsonPath('item.position', 1);
+    expect($other_root->fresh()->position)->toBe(1);
+});
+
+test('creating an item below an item from another board is rejected', function () {
+    [$board, $group] = createItemTestBoard();
+    [$other_board, $other_group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $foreign = $other_board->items()->create(['group_id' => $other_group->id, 'name' => 'Foreign', 'position' => 0]);
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", ['name' => 'Nope', 'after_item_id' => $foreign->id])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('after_item_id');
+});
+
+test('an archived subitem is left out of the index and the subitem count', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Visible', 'position' => 0]);
+    $archived = $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Archived', 'position' => 1]);
+
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/archive", ['item_ids' => [$archived->id]])->assertOk();
+
+    $response = $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/items");
+
+    $response->assertOk()
+        ->assertJsonPath('data.0.subitem_count', 1)
+        ->assertJsonCount(1, 'data.0.children')
+        ->assertJsonPath('data.0.children.0.name', 'Visible');
+});
+
+test('duplicating an item keeps its priority flag and skips archived subitems', function () {
+    [$board, $group] = createItemTestBoard();
+    $user = User::factory()->create();
+    $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0, 'is_priority' => true]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Live', 'position' => 0]);
+    $board->items()->create(['group_id' => $group->id, 'parent_id' => $parent->id, 'name' => 'Archived', 'position' => 1, 'is_archived' => true]);
+
+    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items/duplicate", ['item_ids' => [$parent->id]]);
+
+    $response->assertCreated()
+        ->assertJsonPath('items.0.is_priority', true)
+        ->assertJsonCount(1, 'items.0.children');
+});
