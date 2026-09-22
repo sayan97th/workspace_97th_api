@@ -15,8 +15,10 @@ use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardViewResolver;
+use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class BoardGroupController extends Controller
 {
@@ -35,6 +37,9 @@ class BoardGroupController extends Controller
      * frontend can render an accurate "N items" label and a correctly-sized
      * loading skeleton *before* that table's rows are actually fetched (see
      * `GroupSection`'s lazy per-table loading).
+     *
+     * An archived group is left out, it only comes back through the board's
+     * archive panel ({@see BoardTrashController}).
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -48,6 +53,7 @@ class BoardGroupController extends Controller
 
         $groups = $view
             ? $view->groups()
+                ->where('is_archived', false)
                 ->withCount(['items as item_count' => fn ($q) => $q->whereNull('parent_id')->where('is_archived', false)])
                 ->get()
             : collect();
@@ -63,6 +69,8 @@ class BoardGroupController extends Controller
      */
     public function store(StoreBoardGroupRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorize($item, $request->user());
+
         $validated = $request->validated();
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
 
@@ -129,10 +137,14 @@ class BoardGroupController extends Controller
 
     /**
      * PATCH /api/boards/{item}/groups/{group}
+     *
+     * Group menu's "Rename group", "Change group color" and "Mark as
+     * priority client", each sends just the field it changes.
      */
     public function update(UpdateBoardGroupRequest $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
+        BoardEditGate::authorize($item, $request->user());
 
         $group->fill($request->validated())->save();
 
@@ -144,16 +156,69 @@ class BoardGroupController extends Controller
 
     /**
      * PATCH /api/boards/{item}/groups/{group}/move
+     *
+     * Group menu's "Move group" (top, up, down, bottom). `position` is the
+     * zero-based slot the group should land in among the tab's active
+     * groups. Every active sibling is resequenced (0, 1, 2, ...) in the same
+     * transaction, so the order is always gap free and unique, whatever the
+     * positions looked like before. An out of range `position` is clamped to
+     * the last slot. Archived groups keep their own position, they get a
+     * fresh one when restored.
+     *
+     * Responds with the whole resequenced list (`groups`) next to the moved
+     * `group`, so the client can reconcile every position in one go.
      */
     public function move(MoveBoardGroupRequest $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
+        BoardEditGate::authorize($item, $request->user());
 
-        $group->position = $request->validated()['position'];
-        $group->save();
+        DB::transaction(function () use ($group, $request) {
+            $ordered_ids = BoardGroup::where('board_view_id', $group->board_view_id)
+                ->where('is_archived', false)
+                ->where('id', '!=', $group->id)
+                ->orderBy('position')
+                ->orderBy('id')
+                ->pluck('id')
+                ->all();
+
+            array_splice($ordered_ids, min($request->validated()['position'], count($ordered_ids)), 0, [$group->id]);
+
+            foreach ($ordered_ids as $position => $id) {
+                BoardGroup::where('id', $id)->update(['position' => $position]);
+            }
+        });
+
+        $groups = BoardGroup::where('board_view_id', $group->board_view_id)
+            ->where('is_archived', false)
+            ->withCount(['items as item_count' => fn ($q) => $q->whereNull('parent_id')->where('is_archived', false)])
+            ->orderBy('position')
+            ->get();
 
         return response()->json([
             'message' => 'Table moved successfully.',
+            'group' => new BoardGroupResource($groups->firstWhere('id', $group->id)),
+            'groups' => BoardGroupResource::collection($groups),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/groups/{group}/archive
+     *
+     * Group menu's "Archive group", hides the table (and, through it, every
+     * item it holds) from the board without deleting anything, unlike
+     * `destroy()`. Restored from the board's archive panel
+     * ({@see BoardTrashController::restoreGroup()}).
+     */
+    public function archive(Request $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
+    {
+        $this->ensureGroupBelongsToBoard($item, $group);
+        BoardEditGate::authorize($item, $request->user());
+
+        $group->update(['is_archived' => true, 'archived_at' => now()]);
+
+        return response()->json([
+            'message' => 'Table archived successfully.',
             'group' => new BoardGroupResource($this->loadItemCount($group->fresh())),
         ]);
     }
@@ -163,9 +228,10 @@ class BoardGroupController extends Controller
      *
      * Cascades to the group's items (see the `board_items` migration).
      */
-    public function destroy(WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
+    public function destroy(Request $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
+        BoardEditGate::authorize($item, $request->user());
 
         $group->delete();
 
@@ -177,8 +243,9 @@ class BoardGroupController extends Controller
     /**
      * POST /api/boards/{item}/groups/{group}/duplicate
      *
-     * Group menu's "Duplicate this group" — clones the table itself (name
-     * suffixed " copy") appended at the end of the tab's group order, and
+     * Group menu's "Duplicate this group", clones the table itself (name
+     * suffixed " copy") right below the original, shifting every later group
+     * down by one (like `store()` does for "Add group"), and
      * when `with_items` is true, deep-copies its entire item/subitem subtree
      * with column values (mirroring {@see BoardItemController::copySubtree()},
      * without the "(copy)" per-item name suffix since the group's own name
@@ -187,14 +254,23 @@ class BoardGroupController extends Controller
     public function duplicate(DuplicateBoardGroupRequest $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
+        BoardEditGate::authorize($item, $request->user());
 
-        $copy = $group->replicate();
-        $copy->name = "{$group->name} copy";
-        $copy->position = $this->nextPosition($group->boardView);
-        $copy->save();
+        $copy = DB::transaction(function () use ($group) {
+            BoardGroup::where('board_view_id', $group->board_view_id)
+                ->where('position', '>', $group->position)
+                ->increment('position');
+
+            $copy = $group->replicate();
+            $copy->name = "{$group->name} copy";
+            $copy->position = $group->position + 1;
+            $copy->save();
+
+            return $copy;
+        });
 
         if ($request->boolean('with_items')) {
-            $originals = $group->items()->whereNull('parent_id')->with(['values', 'childrenRecursive'])->orderBy('position')->get();
+            $originals = $group->items()->whereNull('parent_id')->where('is_archived', false)->with(['values', 'childrenRecursive'])->orderBy('position')->get();
 
             foreach ($originals as $original) {
                 $this->copyItemSubtree($item, $original, $copy->id, null);
@@ -239,6 +315,7 @@ class BoardGroupController extends Controller
             'name' => $original->name,
             'description' => $original->description,
             'position' => $original->position,
+            'is_priority' => $original->is_priority,
             'created_by_id' => $original->created_by_id,
         ]);
 
@@ -249,7 +326,7 @@ class BoardGroupController extends Controller
             ]);
         }
 
-        foreach ($original->childrenRecursive as $child) {
+        foreach ($original->childrenRecursive->where('is_archived', false) as $child) {
             $this->copyItemSubtree($item, $child, $group_id, $copy->id);
         }
     }

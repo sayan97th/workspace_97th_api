@@ -107,7 +107,8 @@ class GlobalSearchService
     {
         $items = BoardItem::query()
             ->whereIn('board_id', $this->visibleBoardsQuery($user)->select('id'))
-            ->where('is_archived', false);
+            ->where('is_archived', false)
+            ->whereHas('group', fn ($query) => $query->where('is_archived', false));
 
         return $this->applyTermFilter($items, 'name', $term)
             ->with(['board:id,workspace_id,label', 'board.workspace:id,name,slug', 'group:id,board_view_id', 'parent:id,name'])

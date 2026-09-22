@@ -37,7 +37,7 @@ class BoardExportController extends Controller
             ? $item->items()
                 ->where('is_archived', false)
                 ->whereNull('parent_id')
-                ->whereHas('group', fn ($query) => $query->where('board_view_id', $view->id))
+                ->whereHas('group', fn ($query) => $query->where('board_view_id', $view->id)->where('is_archived', false))
                 ->with('values')
                 ->orderBy('group_id')->orderBy('position')
                 ->get()

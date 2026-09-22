@@ -50,7 +50,7 @@ class BoardItemController extends Controller
      * Returns every top-level item in the tab (`view_id` if given, otherwise
      * the board's primary tab) with its values and its entire subitem
      * subtree eager-loaded via `childrenRecursive`, optionally narrowed by a
-     * `search` term. An item's tab is derived through its group
+     * `search` term. Items of an archived group stay hidden with it. An item's tab is derived through its group
      * (`board_groups.board_view_id`), since every item requires a group.
      * Grouping/sorting/hiding/coloring is derived client-side by
      * `useBoardToolbar` from this full set — since it only ever sees roots,
@@ -75,7 +75,7 @@ class BoardItemController extends Controller
         $query = $item->items()
             ->where('is_archived', false)
             ->whereNull('parent_id')
-            ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id))
+            ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id)->where('is_archived', false))
             ->with([
                 'values',
                 'recurrence',

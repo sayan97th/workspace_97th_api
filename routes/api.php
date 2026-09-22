@@ -321,6 +321,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('trash', [BoardTrashController::class, 'index']);
         Route::patch('trash/{board_item}/restore', [BoardTrashController::class, 'restore']);
         Route::delete('trash/{board_item}', [BoardTrashController::class, 'forceDelete']);
+        Route::patch('trash/groups/{group}/restore', [BoardTrashController::class, 'restoreGroup']);
+        Route::delete('trash/groups/{group}', [BoardTrashController::class, 'forceDeleteGroup']);
 
         Route::get('export', [BoardExportController::class, 'export']);
     });
@@ -403,6 +405,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::put('collapsed-state', [BoardGroupController::class, 'updateCollapsedState']);
             Route::patch('{group}', [BoardGroupController::class, 'update']);
             Route::patch('{group}/move', [BoardGroupController::class, 'move']);
+            Route::patch('{group}/archive', [BoardGroupController::class, 'archive']);
             Route::post('{group}/duplicate', [BoardGroupController::class, 'duplicate']);
             Route::delete('{group}', [BoardGroupController::class, 'destroy']);
         });
