@@ -217,6 +217,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('/', [SlackIntegrationController::class, 'destroy']);
             Route::get('diagnostics', [SlackIntegrationController::class, 'diagnostics'])->middleware('throttle:10,1');
             Route::post('diagnostics/channel-test', [SlackIntegrationController::class, 'sendChannelTest'])->middleware('throttle:6,1');
+            Route::get('diagnostics/recipients', [SlackIntegrationController::class, 'notificationRecipients']);
+            Route::post('diagnostics/user-test', [SlackIntegrationController::class, 'sendUserTest'])->middleware('throttle:6,1');
         });
     });
 

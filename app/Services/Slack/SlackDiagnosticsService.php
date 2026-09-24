@@ -3,6 +3,7 @@
 namespace App\Services\Slack;
 
 use App\Models\SlackInstallation;
+use App\Models\SlackUserLink;
 use App\Models\User;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -30,6 +31,7 @@ class SlackDiagnosticsService
     public function __construct(
         private readonly SlackClient $client,
         private readonly SlackService $slack_service,
+        private readonly SlackNotifier $slack_notifier,
     ) {}
 
     /**
@@ -100,6 +102,55 @@ class SlackDiagnosticsService
     }
 
     /**
+     * Active members who linked their Slack account to the connected workspace, the only people
+     * a direct message can reach. Sorted by name for the recipient picker.
+     *
+     * @return array<int, array{user_id: int, full_name: string, email: string, profile_photo_url: string|null, slack_user_id: string, slack_display_name: string|null}>
+     */
+    public function listNotificationRecipients(): array
+    {
+        $installation = SlackInstallation::current();
+
+        if (! $installation) {
+            return [];
+        }
+
+        // `whereHas` goes through the User model, so its soft delete scope drops deactivated members.
+        return $installation->userLinks()
+            ->whereHas('user')
+            ->with('user')
+            ->get()
+            ->map(fn (SlackUserLink $link) => [
+                'user_id' => $link->user_id,
+                'full_name' => $link->user->full_name,
+                'email' => $link->user->email,
+                'profile_photo_url' => $link->user->profile_photo_url,
+                'slack_user_id' => $link->slack_user_id,
+                'slack_display_name' => $link->slack_display_name,
+            ])
+            ->sortBy('full_name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Sends `$message` to `$recipient` as a Slack direct message right away, through the same
+     * channel tagged notifications use, so a failure comes back with Slack's real error.
+     *
+     * @throws SlackException
+     */
+    public function sendUserTest(User $recipient, string $message, User $actor): void
+    {
+        $installation = SlackInstallation::current()
+            ?? throw new SlackException('not_installed', 'Slack is not connected to this account yet.');
+
+        $link = $recipient->slackLink()->where('slack_installation_id', $installation->id)->with('installation')->first()
+            ?? throw new SlackException('recipient_not_linked', 'That member has not linked their Slack account yet.');
+
+        $this->slack_notifier->sendTestNotification($link, $actor, $message, $this->client);
+    }
+
+    /**
      * Remembers that a request carrying a valid Slack signature arrived, which is the only
      * proof that the signing secret matches the one Slack holds.
      */
@@ -144,7 +195,7 @@ class SlackDiagnosticsService
         }
 
         if (parse_url($redirect_uri, PHP_URL_SCHEME) !== 'https') {
-            return $this->result('redirect_uri', $label, self::STATUS_WARNING, 'Slack only accepts HTTPS redirect URLs. For local testing expose the API through an HTTPS tunnel and set SLACK_REDIRECT_URI to it.');
+            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set SLACK_REDIRECT_URI to it and add that URL in the Slack app.');
         }
 
         return $this->result('redirect_uri', $label, self::STATUS_PASSED, 'Make sure this exact URL is listed under OAuth & Permissions in the Slack app.');

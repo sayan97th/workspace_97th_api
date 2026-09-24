@@ -185,3 +185,89 @@ test('an app_uninstalled event removes the installation', function () {
 
     expect(SlackInstallation::current())->toBeNull();
 });
+
+function linkDiagnosticsMember(SlackInstallation $installation, array $user_attributes = [], string $slack_user_id = 'U200'): User
+{
+    $member = User::factory()->create($user_attributes);
+
+    SlackUserLink::create([
+        'user_id' => $member->id,
+        'slack_installation_id' => $installation->id,
+        'slack_user_id' => $slack_user_id,
+        'slack_display_name' => 'member.slack',
+        'linked_at' => now(),
+    ]);
+
+    return $member;
+}
+
+test('the recipient list only includes active members linked to the current workspace', function () {
+    $installation = makeDiagnosticsInstallation();
+    $linked = linkDiagnosticsMember($installation, ['first_name' => 'Amanda']);
+    $deactivated = linkDiagnosticsMember($installation, ['first_name' => 'Zed'], 'U300');
+    $deactivated->delete();
+    User::factory()->create();
+
+    $response = $this->actingAs(makeDiagnosticsAdmin(), 'api')
+        ->getJson('/api/integrations/slack/diagnostics/recipients')
+        ->assertOk()
+        ->assertJsonCount(1, 'data');
+
+    expect($response->json('data.0'))
+        ->user_id->toBe($linked->id)
+        ->slack_user_id->toBe('U200')
+        ->not->toHaveKey('bot_token');
+});
+
+test('only administrators can list recipients and send a user notification', function () {
+    $installation = makeDiagnosticsInstallation();
+    $member = linkDiagnosticsMember($installation);
+
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack/diagnostics/recipients')->assertForbidden();
+    $this->actingAs($member, 'api')
+        ->postJson('/api/integrations/slack/diagnostics/user-test', ['user_id' => $member->id, 'message' => 'Hello'])
+        ->assertForbidden();
+});
+
+test('an administrator can send a slack notification to a linked member', function () {
+    $installation = makeDiagnosticsInstallation();
+    $member = linkDiagnosticsMember($installation);
+    $admin = makeDiagnosticsAdmin();
+    Http::fake(['slack.com/api/chat.postMessage' => Http::response(['ok' => true])]);
+
+    $this->actingAs($admin, 'api')
+        ->postJson('/api/integrations/slack/diagnostics/user-test', ['user_id' => $member->id, 'message' => 'Review <!channel> & ship'])
+        ->assertOk()
+        ->assertJsonPath('message', "Notification sent to {$member->full_name}. Ask them to check Slack.");
+
+    Http::assertSent(fn ($request) => $request->url() === 'https://slack.com/api/chat.postMessage'
+        && $request['channel'] === 'U200'
+        && $request->hasHeader('Authorization', 'Bearer xoxb-secret-token')
+        && str_contains(json_encode($request['blocks']), 'Review &lt;!channel&gt; &amp; ship'));
+
+    $this->assertDatabaseHas('audit_logs', ['user_id' => $admin->id, 'event' => 'slack.test_notification_sent']);
+});
+
+test('the user notification validates input and reports unlinked members and slack errors', function () {
+    $installation = makeDiagnosticsInstallation();
+    $admin = makeDiagnosticsAdmin();
+    $unlinked = User::factory()->create();
+    Http::fake(['slack.com/api/chat.postMessage' => Http::response(['ok' => false, 'error' => 'user_not_found'])]);
+
+    $this->actingAs($admin, 'api')
+        ->postJson('/api/integrations/slack/diagnostics/user-test', ['user_id' => 999999, 'message' => str_repeat('a', 1001)])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['user_id', 'message']);
+
+    $this->actingAs($admin, 'api')
+        ->postJson('/api/integrations/slack/diagnostics/user-test', ['user_id' => $unlinked->id, 'message' => 'Hello'])
+        ->assertUnprocessable()
+        ->assertJsonPath('message', 'That member has not linked their Slack account yet. Ask them to use "Connect my Slack" first.');
+
+    $member = linkDiagnosticsMember($installation);
+
+    $this->actingAs($admin, 'api')
+        ->postJson('/api/integrations/slack/diagnostics/user-test', ['user_id' => $member->id, 'message' => 'Hello'])
+        ->assertUnprocessable()
+        ->assertJsonPath('message', 'Slack could not find where to send that message.');
+});

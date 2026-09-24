@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Integration;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Integration\SlackChannelTestRequest;
 use App\Http\Requests\Integration\SlackConnectRequest;
+use App\Http\Requests\Integration\SlackUserTestRequest;
 use App\Models\BoardAutomation;
 use App\Models\SlackInstallation;
+use App\Models\User;
 use App\Services\Slack\SlackClient;
 use App\Services\Slack\SlackDiagnosticsService;
 use App\Services\Slack\SlackException;
@@ -168,6 +170,40 @@ class SlackIntegrationController extends Controller
     }
 
     /**
+     * GET /api/integrations/slack/diagnostics/recipients  (admin, super_admin)
+     *
+     * Members who can receive a Slack direct message, for the notification test picker.
+     */
+    public function notificationRecipients(SlackDiagnosticsService $diagnostics_service): JsonResponse
+    {
+        return response()->json(['data' => $diagnostics_service->listNotificationRecipients()]);
+    }
+
+    /**
+     * POST /api/integrations/slack/diagnostics/user-test  (admin, super_admin)
+     *
+     * Sends a custom notification to another member as a Slack direct message right away, so
+     * an administrator can confirm a specific person really receives Slack notifications.
+     */
+    public function sendUserTest(SlackUserTestRequest $request, SlackDiagnosticsService $diagnostics_service): JsonResponse
+    {
+        $actor = $request->user();
+        $recipient = User::findOrFail($request->validated('user_id'));
+
+        try {
+            $diagnostics_service->sendUserTest($recipient, $request->validated('message'), $actor);
+        } catch (SlackException $exception) {
+            return $this->errorResponse($exception);
+        }
+
+        AuditLogger::log('slack.test_notification_sent', "Sent a Slack test notification to {$recipient->full_name}.", $actor, [
+            'recipient_id' => $recipient->id,
+        ]);
+
+        return response()->json(['message' => "Notification sent to {$recipient->full_name}. Ask them to check Slack."]);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function statusPayload(Request $request): array
@@ -201,6 +237,7 @@ class SlackIntegrationController extends Controller
             'not_configured' => 'Slack is not configured on this server yet. Ask an administrator to add the Slack app credentials.',
             'not_installed' => 'Slack is not connected to this account yet.',
             'not_linked' => 'Connect your Slack account first.',
+            'recipient_not_linked' => 'That member has not linked their Slack account yet. Ask them to use "Connect my Slack" first.',
             'ratelimited' => 'Slack is busy right now. Please try again in a moment.',
             'connection_failed' => 'Slack could not be reached. Please try again in a moment.',
             'channel_not_found', 'user_not_found' => 'Slack could not find where to send that message.',

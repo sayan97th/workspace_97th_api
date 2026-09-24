@@ -5,6 +5,7 @@ namespace App\Services\Slack;
 use App\Jobs\SendSlackMessageJob;
 use App\Models\Notification;
 use App\Models\SlackInstallation;
+use App\Models\SlackUserLink;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
 
@@ -95,6 +96,26 @@ class SlackNotifier
         $text = 'Slack is connected. You will receive your workspace notifications here.';
 
         $client->postMessage($installation->bot_token, $link->slack_user_id, $text, $this->buildBlocks($this->escape($text), null, null));
+    }
+
+    /**
+     * Sends a custom test notification from `$actor` to another member right away, not through
+     * the queue, so the diagnostics page can show the real Slack error. Uses the same direct
+     * message channel and block layout as every real notification.
+     *
+     * @throws SlackException
+     */
+    public function sendTestNotification(SlackUserLink $recipient_link, User $actor, string $message, SlackClient $client): void
+    {
+        $sender_name = $actor->full_name ?: 'An administrator';
+        $mrkdwn = sprintf("*%s* sent you a test notification:\n>%s", $this->escape($sender_name), str_replace("\n", "\n>", $this->escape($message)));
+
+        $client->postMessage(
+            $recipient_link->installation->bot_token,
+            $recipient_link->slack_user_id,
+            mb_substr("{$sender_name} sent you a test notification: {$message}", 0, 3000),
+            $this->buildBlocks($mrkdwn, 'Sent from the Slack diagnostics page', null),
+        );
     }
 
     /**
