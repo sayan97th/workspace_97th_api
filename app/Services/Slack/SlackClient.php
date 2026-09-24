@@ -95,6 +95,18 @@ class SlackClient
     }
 
     /**
+     * Checks a token and returns who it belongs to: `team_id`, `team`, `user_id`, `bot_id`, `url`.
+     *
+     * @return array<string, mixed>
+     */
+    public function authTest(string $token): array
+    {
+        return $this->send('auth.test', fn (PendingRequest $request) => $request
+            ->withToken($token)
+            ->post(self::API_BASE_URL.'auth.test'));
+    }
+
+    /**
      * Invalidates a bot token. Best effort, the caller ignores failures.
      *
      * @return array<string, mixed>

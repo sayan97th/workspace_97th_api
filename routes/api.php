@@ -50,6 +50,7 @@ use App\Http\Controllers\Comment\SavedReplyController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\InlineUploadController;
+use App\Http\Controllers\Integration\SlackEventController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
 use App\Http\Controllers\Integration\SlackOAuthCallbackController;
 use App\Http\Controllers\Notification\NotificationController;
@@ -128,6 +129,10 @@ Route::prefix('auth')->group(function () {
 // Public, the browser arrives from Slack with no JWT. Who it acts for comes from the
 // single use `state` value issued when the flow started, see `SlackService::consumeState()`.
 Route::get('integrations/slack/callback', SlackOAuthCallbackController::class);
+
+// Event Subscriptions request URL of the Slack app. Public as well, but only requests signed
+// with SLACK_SIGNING_SECRET get through, see `VerifySlackSignature`.
+Route::post('integrations/slack/events', SlackEventController::class)->middleware(['slack.signature', 'throttle:120,1']);
 
 // ─── Authenticated routes ───────────────────────────────────────────────────
 Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
@@ -210,6 +215,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::middleware('role:super_admin,admin')->group(function () {
             Route::post('install-url', [SlackIntegrationController::class, 'installUrl']);
             Route::delete('/', [SlackIntegrationController::class, 'destroy']);
+            Route::get('diagnostics', [SlackIntegrationController::class, 'diagnostics'])->middleware('throttle:10,1');
+            Route::post('diagnostics/channel-test', [SlackIntegrationController::class, 'sendChannelTest'])->middleware('throttle:6,1');
         });
     });
 

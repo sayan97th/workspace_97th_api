@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Integration;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Integration\SlackChannelTestRequest;
 use App\Http\Requests\Integration\SlackConnectRequest;
 use App\Models\BoardAutomation;
 use App\Models\SlackInstallation;
 use App\Services\Slack\SlackClient;
+use App\Services\Slack\SlackDiagnosticsService;
 use App\Services\Slack\SlackException;
 use App\Services\Slack\SlackNotifier;
 use App\Services\Slack\SlackService;
@@ -139,6 +141,33 @@ class SlackIntegrationController extends Controller
     }
 
     /**
+     * GET /api/integrations/slack/diagnostics  (admin, super_admin)
+     *
+     * Runs every Slack check live and reports each one on its own, for the /admin/test/slack page.
+     * Never includes a secret, only the public client id and the URLs to register in Slack.
+     */
+    public function diagnostics(Request $request, SlackDiagnosticsService $diagnostics_service): JsonResponse
+    {
+        return response()->json($diagnostics_service->run($request->user()));
+    }
+
+    /**
+     * POST /api/integrations/slack/diagnostics/channel-test  (admin, super_admin)
+     *
+     * Posts a test message to the chosen channel right away, so a broken setup shows its real error.
+     */
+    public function sendChannelTest(SlackChannelTestRequest $request, SlackDiagnosticsService $diagnostics_service): JsonResponse
+    {
+        try {
+            $diagnostics_service->sendChannelTest($request->validated('channel_id'), $request->user());
+        } catch (SlackException $exception) {
+            return $this->errorResponse($exception);
+        }
+
+        return response()->json(['message' => 'Test message posted. Check the channel in Slack.']);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function statusPayload(Request $request): array
@@ -175,6 +204,8 @@ class SlackIntegrationController extends Controller
             'ratelimited' => 'Slack is busy right now. Please try again in a moment.',
             'connection_failed' => 'Slack could not be reached. Please try again in a moment.',
             'channel_not_found', 'user_not_found' => 'Slack could not find where to send that message.',
+            'not_in_channel' => 'The Slack app is not a member of that channel. Invite it to the channel first.',
+            'is_archived' => 'That Slack channel is archived.',
             'missing_scope' => 'The Slack app is missing a permission. Reconnect Slack from Administration.',
             default => $exception->isTokenInvalid()
                 ? 'The Slack connection is no longer valid. Reconnect Slack from Administration.'
