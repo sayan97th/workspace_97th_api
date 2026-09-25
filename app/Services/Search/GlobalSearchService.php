@@ -7,6 +7,7 @@ use App\Models\BoardItem;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\BoardVisibility;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
@@ -32,12 +33,6 @@ class GlobalSearchService
     public const DEFAULT_LIMIT = 5;
 
     public const MAX_LIMIT = 10;
-
-    /** "Manage Workspace" is itself a navigation leaf, not real content, never list it. */
-    private const MANAGE_WORKSPACE_VIEW_KEY = 'workspace_manage';
-
-    /** Global roles that can see every board, including private ones they were never added to. */
-    private const PRIVILEGED_GLOBAL_ROLES = ['super_admin', 'admin'];
 
     /** Escape character used in every LIKE pattern, portable across MySQL, PostgreSQL and SQLite. */
     private const LIKE_ESCAPE = '!';
@@ -130,27 +125,14 @@ class GlobalSearchService
     }
 
     /**
-     * Every board/doc leaf the user may open: not archived, in a workspace that
-     * still exists, not the special "Manage Workspace" leaf, and, for a private board, only when the user
-     * created or owns it, was added to it as a collaborator, or holds a
-     * privileged global role. Also used as a subquery to scope item search.
+     * Every board/doc leaf the user may open, see {@see BoardVisibility::query()}.
+     * Also used as a subquery to scope item search.
      *
      * @return Builder<WorkspaceNavigationItem>
      */
     private function visibleBoardsQuery(User $user): Builder
     {
-        return WorkspaceNavigationItem::query()
-            ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
-            ->notArchived()
-            ->whereHas('workspace')
-            ->where(fn (Builder $query) => $query->where('view_key', '!=', self::MANAGE_WORKSPACE_VIEW_KEY)
-                ->orWhereNull('view_key'))
-            ->unless($user->hasRole(self::PRIVILEGED_GLOBAL_ROLES), fn (Builder $query) => $query->where(
-                fn (Builder $visibility) => $visibility->where('board_type', '!=', WorkspaceNavigationItem::BOARD_TYPE_PRIVATE)
-                    ->orWhere('created_by_id', $user->id)
-                    ->orWhere('owner_id', $user->id)
-                    ->orWhereHas('collaborators', fn (Builder $collaborators) => $collaborators->where('users.id', $user->id))
-            ));
+        return BoardVisibility::query($user);
     }
 
     /**

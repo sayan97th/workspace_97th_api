@@ -44,6 +44,7 @@ use App\Http\Controllers\Board\BoardSavedFilterController;
 use App\Http\Controllers\Board\BoardTagController;
 use App\Http\Controllers\Board\BoardTrashController;
 use App\Http\Controllers\Board\BoardViewController;
+use App\Http\Controllers\Board\BoardViewDataController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
 use App\Http\Controllers\Board\BoardViewShareLinkController;
@@ -73,6 +74,7 @@ use App\Http\Controllers\Profile\WorkingStatusController;
 use App\Http\Controllers\PublicAccess\PublicFormController;
 use App\Http\Controllers\PublicAccess\PublicSharedViewController;
 use App\Http\Controllers\Search\GlobalSearchController;
+use App\Http\Controllers\Template\BoardTemplateController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceAvatarController;
@@ -277,6 +279,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::delete('sessions/{session}', [UserSessionController::class, 'destroy']);
     });
 
+    // Template center: built in templates plus boards saved as templates.
+    Route::prefix('board-templates')->group(function () {
+        Route::get('/', [BoardTemplateController::class, 'index']);
+        Route::post('/', [BoardTemplateController::class, 'store']);
+        Route::delete('{board_template}', [BoardTemplateController::class, 'destroy']);
+    });
+
     // Workspaces — dynamic sidebar + nested navigation tree
     Route::prefix('workspaces')->group(function () {
         Route::get('/', [WorkspaceController::class, 'index']);
@@ -320,6 +329,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // mirroring how `items/reorder` is declared ahead of
             // `items/{board_item}`.
             Route::patch('reorder', [WorkspaceNavigationItemController::class, 'reorder']);
+
+            // Template center's "Use template", declared before the `{item}` wildcard routes.
+            Route::post('from-template', [BoardTemplateController::class, 'use']);
 
             Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
             Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
@@ -473,6 +485,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('duplicate', [BoardItemController::class, 'bulkDuplicate']);
             Route::patch('move', [BoardItemController::class, 'bulkMove']);
             Route::patch('values', [BoardItemController::class, 'bulkSetValue']);
+            Route::patch('cell-values', [BoardItemController::class, 'batchUpdateValues']);
             Route::patch('reorder', [BoardItemController::class, 'reorder']);
             Route::patch('archive', [BoardItemController::class, 'bulkArchive']);
             Route::delete('/', [BoardItemController::class, 'bulkDestroy']);
@@ -527,6 +540,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             });
         });
 
+        // Boards a Dashboard widget may read from, see BoardViewDataController::sources().
+        Route::get('dashboard-sources', [BoardViewDataController::class, 'sources']);
+
         Route::prefix('views')->group(function () {
             Route::get('/', [BoardViewController::class, 'index']);
             Route::post('/', [BoardViewController::class, 'store']);
@@ -539,6 +555,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('{board_view}', [BoardViewController::class, 'destroy']);
             Route::post('{board_view}/duplicate', [BoardViewController::class, 'duplicate']);
             Route::get('{board_view}/chart-data', [BoardViewController::class, 'chartData']);
+            Route::get('{board_view}/workload-data', [BoardViewDataController::class, 'workload']);
+            Route::get('{board_view}/dashboard-data', [BoardViewDataController::class, 'dashboard']);
             Route::post('{board_view}/pin', [BoardViewController::class, 'togglePin']);
             Route::post('{board_view}/lock', [BoardViewController::class, 'toggleLock']);
 

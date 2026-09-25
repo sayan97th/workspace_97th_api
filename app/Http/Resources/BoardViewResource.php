@@ -37,6 +37,10 @@ class BoardViewResource extends JsonResource
             'doc_content' => $this->doc_content,
             // Chart type/data source/grouping for a `chart`-type view — null/unused for every other kind.
             'chart_config' => $this->chart_config,
+            // People, dates and capacity for a `workload`-type view, see App\Services\Board\WorkloadDataService.
+            'workload_config' => $this->workload_config,
+            // Widgets and their layout for a `dashboard`-type view, see App\Services\Board\DashboardDataService.
+            'dashboard_config' => $this->dashboard_config,
             'emoji' => $this->emoji,
             'description' => $this->description,
             'position' => $this->position,

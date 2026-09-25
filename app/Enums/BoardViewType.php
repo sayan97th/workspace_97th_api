@@ -24,6 +24,7 @@ enum BoardViewType: string
     case FileGallery = 'file_gallery';
     case Form = 'form';
     case Dashboard = 'dashboard';
+    case Workload = 'workload';
 
     /**
      * @return array<int, string>

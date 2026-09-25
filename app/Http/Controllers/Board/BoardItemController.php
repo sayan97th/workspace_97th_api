@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\BatchUpdateBoardItemValuesRequest;
 use App\Http\Requests\Board\BulkBoardItemsRequest;
 use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
 use App\Http\Requests\Board\BulkSetColumnValueRequest;
@@ -513,6 +514,41 @@ class BoardItemController extends Controller
         return response()->json([
             'message' => 'Items updated successfully.',
             'items' => BoardItemResource::collection($items->fresh('values')),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/cell-values
+     *
+     * The table's multi-cell writes (pasting a range, dragging the fill
+     * handle, clearing a selected range) in one request instead of one call
+     * per cell. Every item and column is authorized up front, then all values
+     * are written in a single transaction, so a refused row never leaves the
+     * rest of the paste half applied.
+     */
+    public function batchUpdateValues(BatchUpdateBoardItemValuesRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $cells = collect($request->validated()['cells'])
+            ->mapWithKeys(fn (array $cell) => [(int) $cell['item_id'] => $cell['values']]);
+
+        $items = $item->items()->whereIn('id', $cells->keys())->get()->keyBy('id');
+
+        $this->authorizeItems($item, $request, $items->values());
+        $column_ids = $cells->flatMap(fn (array $values) => array_keys($values))->unique()->values()->all();
+        $this->column_permissions->authorizeEdit($item, $request->user(), $column_ids);
+
+        DB::transaction(function () use ($cells, $items, $item, $request) {
+            foreach ($cells as $item_id => $values) {
+                $board_item = $items->get($item_id);
+                if ($board_item) {
+                    $this->value_service->sync($item, $board_item, $values, $request->user());
+                }
+            }
+        });
+
+        return response()->json([
+            'message' => 'Items updated successfully.',
+            'items' => BoardItemResource::collection($item->items()->with('values')->whereIn('id', $cells->keys())->get()),
         ]);
     }
 
