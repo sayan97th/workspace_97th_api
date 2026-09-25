@@ -379,3 +379,91 @@ test('a personal view order silently drops ids that do not belong to the board',
         ->assertOk()
         ->assertJsonPath('personal_order', [$view->id]);
 });
+
+test('resetting the personal view order clears it but keeps the other preferences', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $primary = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $second = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/views/order", ['view_ids' => [$second->id, $primary->id]])
+        ->assertOk();
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/views/preferences", ['default_view_id' => $second->id])
+        ->assertOk();
+
+    $this->actingAs($user, 'api')
+        ->deleteJson("/api/boards/{$board->id}/views/order")
+        ->assertOk()
+        ->assertJsonPath('personal_order', null);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/views")
+        ->assertJsonPath('personal_order', null)
+        ->assertJsonPath('personal_default_view_id', $second->id);
+});
+
+test('personal view preferences save hidden views and a default view per user', function () {
+    $user = User::factory()->create();
+    $other_user = User::factory()->create();
+    $board = createViewTestBoard();
+    $other_board = createViewTestBoard();
+    $primary = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $second = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+    $foreign_view = BoardView::factory()->create(['board_id' => $other_board->id, 'is_primary' => true]);
+
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/views/preferences", [
+            'hidden_view_ids' => [$second->id, $foreign_view->id],
+            'default_view_id' => $primary->id,
+        ])
+        ->assertOk()
+        ->assertJsonPath('personal_hidden_view_ids', [$second->id])
+        ->assertJsonPath('personal_default_view_id', $primary->id);
+
+    $this->actingAs($user, 'api')
+        ->getJson("/api/boards/{$board->id}/views")
+        ->assertJsonPath('personal_order', null)
+        ->assertJsonPath('personal_hidden_view_ids', [$second->id])
+        ->assertJsonPath('personal_default_view_id', $primary->id);
+
+    $this->actingAs($other_user, 'api')
+        ->getJson("/api/boards/{$board->id}/views")
+        ->assertJsonPath('personal_hidden_view_ids', [])
+        ->assertJsonPath('personal_default_view_id', null);
+});
+
+test('personal view preferences refuse to hide every view', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $primary = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/views/preferences", ['hidden_view_ids' => [$primary->id]])
+        ->assertStatus(422);
+});
+
+test('a default view that does not belong to the board is ignored', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $other_board = createViewTestBoard();
+    BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $foreign_view = BoardView::factory()->create(['board_id' => $other_board->id, 'is_primary' => true]);
+
+    $this->actingAs($user, 'api')
+        ->putJson("/api/boards/{$board->id}/views/preferences", ['default_view_id' => $foreign_view->id])
+        ->assertOk()
+        ->assertJsonPath('personal_default_view_id', null);
+});
+
+test('a view description can be saved', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/views/{$view->id}", ['description' => 'Work grouped by owner'])
+        ->assertOk()
+        ->assertJsonPath('view.description', 'Work grouped by owner');
+});

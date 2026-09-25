@@ -38,6 +38,7 @@ class BoardViewResource extends JsonResource
             // Chart type/data source/grouping for a `chart`-type view — null/unused for every other kind.
             'chart_config' => $this->chart_config,
             'emoji' => $this->emoji,
+            'description' => $this->description,
             'position' => $this->position,
             'is_primary' => $this->is_primary,
             'pinned' => $this->pinned,

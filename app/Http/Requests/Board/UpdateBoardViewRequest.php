@@ -25,6 +25,8 @@ class UpdateBoardViewRequest extends FormRequest
             // modifier or a multi-person ZWJ sequence) — 32 comfortably bounds any
             // real emoji grapheme without needing a fragile emoji-matching regex.
             'emoji' => ['sometimes', 'nullable', 'string', 'max:32'],
+            // Shown in the tab's hover card and the "Manage views" panel.
+            'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'position' => ['sometimes', 'integer', 'min:0'],
             'filter_state' => ['sometimes', 'nullable', 'array'],
             'sort_state' => ['sometimes', 'nullable', 'array'],

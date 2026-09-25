@@ -531,6 +531,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('/', [BoardViewController::class, 'index']);
             Route::post('/', [BoardViewController::class, 'store']);
             Route::put('order', [BoardViewController::class, 'updatePersonalOrder']);
+            Route::delete('order', [BoardViewController::class, 'destroyPersonalOrder']);
+            Route::put('preferences', [BoardViewController::class, 'updatePersonalPreferences']);
             Route::put('{board_view}/personal-state', [BoardViewController::class, 'updatePersonalState']);
             Route::delete('{board_view}/personal-state', [BoardViewController::class, 'destroyPersonalState']);
             Route::patch('{board_view}', [BoardViewController::class, 'update']);

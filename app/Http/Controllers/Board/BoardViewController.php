@@ -9,6 +9,7 @@ use App\Http\Requests\Board\StoreBoardViewRequest;
 use App\Http\Requests\Board\UpdateBoardViewPersonalStateRequest;
 use App\Http\Requests\Board\UpdateBoardViewRequest;
 use App\Http\Requests\Board\UpdatePersonalViewOrderRequest;
+use App\Http\Requests\Board\UpdatePersonalViewPreferencesRequest;
 use App\Http\Resources\BoardViewResource;
 use App\Models\BoardView;
 use App\Models\BoardViewUserOrder;
@@ -32,9 +33,9 @@ class BoardViewController extends Controller
     {
         $this->ensurePrimaryViewExists($item);
 
-        $personal_order = BoardViewUserOrder::where('user_id', $request->user()?->id)
+        $preferences = BoardViewUserOrder::where('user_id', $request->user()?->id)
             ->where('board_id', $item->id)
-            ->value('view_order');
+            ->first();
 
         $views = $item->views()->with('creator')->get();
 
@@ -47,7 +48,10 @@ class BoardViewController extends Controller
 
         return response()->json([
             'data' => BoardViewResource::collection($views),
-            'personal_order' => $personal_order,
+            'personal_order' => $preferences?->view_order,
+            // Tabs the viewer hid for themselves, and the tab they want opened first.
+            'personal_hidden_view_ids' => $preferences?->hidden_view_ids ?? [],
+            'personal_default_view_id' => $preferences?->default_view_id,
             // An object even when empty, so the client never receives a list here.
             'personal_states' => (object) $personal_states->all(),
         ]);
@@ -272,6 +276,71 @@ class BoardViewController extends Controller
         return response()->json([
             'message' => 'View order saved successfully.',
             'personal_order' => $order->view_order,
+        ]);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/views/order
+     *
+     * "Reset to default order": forgets the viewer's personal tab order, so the
+     * shared `position`/`pinned` ordering applies again. Hidden tabs and the
+     * default tab are kept.
+     */
+    public function destroyPersonalOrder(Request $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        BoardViewUserOrder::where('user_id', $request->user()?->id)
+            ->where('board_id', $item->id)
+            ->update(['view_order' => null]);
+
+        return response()->json([
+            'message' => 'View order reset successfully.',
+            'personal_order' => null,
+        ]);
+    }
+
+    /**
+     * PUT /api/boards/{item}/views/preferences
+     *
+     * Saves the viewer's own tab preferences for this board: which tabs are
+     * hidden for them and which tab opens first. Ids that don't belong to the
+     * board are dropped, and at least one tab always stays visible.
+     */
+    public function updatePersonalPreferences(UpdatePersonalViewPreferencesRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $board_view_ids = $item->views()->pluck('id');
+        $attributes = [];
+
+        if ($request->has('hidden_view_ids')) {
+            $hidden_view_ids = collect($request->validated('hidden_view_ids'))
+                ->filter(fn (int $id) => $board_view_ids->contains($id))
+                ->unique()
+                ->values();
+
+            abort_if(
+                $board_view_ids->isNotEmpty() && $hidden_view_ids->count() >= $board_view_ids->count(),
+                422,
+                'At least one view must stay visible.',
+            );
+
+            $attributes['hidden_view_ids'] = $hidden_view_ids->all();
+        }
+
+        if ($request->has('default_view_id')) {
+            $default_view_id = $request->validated('default_view_id');
+            $attributes['default_view_id'] = $default_view_id !== null && $board_view_ids->contains($default_view_id)
+                ? $default_view_id
+                : null;
+        }
+
+        $preferences = BoardViewUserOrder::updateOrCreate(
+            ['user_id' => $request->user()?->id, 'board_id' => $item->id],
+            $attributes,
+        );
+
+        return response()->json([
+            'message' => 'View preferences saved successfully.',
+            'personal_hidden_view_ids' => $preferences->hidden_view_ids ?? [],
+            'personal_default_view_id' => $preferences->default_view_id,
         ]);
     }
 

@@ -29,6 +29,7 @@ use Illuminate\Support\Carbon;
  * @property array<string, mixed>|null $form_config
  * @property string|null $form_token
  * @property string|null $emoji
+ * @property string|null $description
  * @property int $position
  * @property bool $is_primary
  * @property bool $pinned
@@ -59,6 +60,7 @@ use Illuminate\Support\Carbon;
     'form_config',
     'form_token',
     'emoji',
+    'description',
     'position',
     'is_primary',
     'pinned',
