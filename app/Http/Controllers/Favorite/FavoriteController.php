@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Favorite;
 
 use App\Http\Controllers\Controller;
 use App\Models\UserFavoriteItem;
+use App\Models\UserFavoriteWorkspace;
+use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Favorite\UserFavoriteService;
 use Illuminate\Http\JsonResponse;
@@ -12,7 +14,8 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * The sidebar's personal "Favorites" section: every board and folder the
- * user starred, across all workspaces, in the user's own order.
+ * user starred, across all workspaces, in the user's own order, plus the
+ * whole workspaces they starred (the section groups favorites by workspace).
  */
 class FavoriteController extends Controller
 {
@@ -31,9 +34,49 @@ class FavoriteController extends Controller
             ->orderBy('id')
             ->get();
 
+        $favorite_workspaces = UserFavoriteWorkspace::query()
+            ->where('user_id', $request->user()->id)
+            ->with('workspace:id,name,slug,color,mono')
+            ->orderBy('position')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (UserFavoriteWorkspace $favorite) => $favorite->workspace !== null);
+
         return response()->json([
             'data' => $favorites->map(fn (UserFavoriteItem $favorite) => $this->present($favorite->navigationItem))->values(),
+            'workspaces' => $favorite_workspaces->map(fn (UserFavoriteWorkspace $favorite) => $this->presentWorkspace($favorite->workspace))->values(),
         ]);
+    }
+
+    /**
+     * PUT /api/favorites/workspaces/{workspace}
+     *
+     * Stars a whole workspace. A new one goes to the end of the list.
+     */
+    public function storeWorkspace(Request $request, Workspace $workspace): JsonResponse
+    {
+        $user_id = $request->user()->id;
+        $next_position = (int) UserFavoriteWorkspace::query()->where('user_id', $user_id)->max('position') + 1;
+
+        UserFavoriteWorkspace::query()->firstOrCreate(
+            ['user_id' => $user_id, 'workspace_id' => $workspace->id],
+            ['position' => $next_position]
+        );
+
+        return response()->json(['message' => 'Workspace added to favorites.', 'workspace' => $this->presentWorkspace($workspace)]);
+    }
+
+    /**
+     * DELETE /api/favorites/workspaces/{workspace}
+     */
+    public function destroyWorkspace(Request $request, Workspace $workspace): JsonResponse
+    {
+        UserFavoriteWorkspace::query()
+            ->where('user_id', $request->user()->id)
+            ->where('workspace_id', $workspace->id)
+            ->delete();
+
+        return response()->json(['message' => 'Workspace removed from favorites.']);
     }
 
     /**
@@ -91,13 +134,21 @@ class FavoriteController extends Controller
             'type' => $item->type,
             'view_key' => $item->view_key,
             'board_type' => $item->board_type,
-            'workspace' => $item->workspace ? [
-                'id' => $item->workspace->id,
-                'name' => $item->workspace->name,
-                'slug' => $item->workspace->slug,
-                'color' => $item->workspace->color,
-                'mono' => $item->workspace->mono,
-            ] : null,
+            'workspace' => $item->workspace ? $this->presentWorkspace($item->workspace) : null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function presentWorkspace(Workspace $workspace): array
+    {
+        return [
+            'id' => $workspace->id,
+            'name' => $workspace->name,
+            'slug' => $workspace->slug,
+            'color' => $workspace->color,
+            'mono' => $workspace->mono,
         ];
     }
 }

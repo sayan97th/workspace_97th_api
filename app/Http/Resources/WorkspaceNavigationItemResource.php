@@ -26,6 +26,7 @@ class WorkspaceNavigationItemResource extends JsonResource
             'description' => $this->description,
             'slug' => $this->slug,
             'icon' => $this->icon,
+            'color' => $this->color,
             'view_key' => $this->view_key,
             'href' => $this->href,
             'display_style' => $this->display_style,

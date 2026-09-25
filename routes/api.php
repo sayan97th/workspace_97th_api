@@ -167,6 +167,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // page's recently visited boards.
     Route::get('favorites', [FavoriteController::class, 'index']);
     Route::put('favorites/order', [FavoriteController::class, 'reorder']);
+    Route::put('favorites/workspaces/{workspace}', [FavoriteController::class, 'storeWorkspace']);
+    Route::delete('favorites/workspaces/{workspace}', [FavoriteController::class, 'destroyWorkspace']);
     Route::put('favorites/{item}', [FavoriteController::class, 'store']);
     Route::delete('favorites/{item}', [FavoriteController::class, 'destroy']);
     Route::get('my-work', [MyWorkController::class, 'index']);
@@ -333,6 +335,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // mirroring how `items/reorder` is declared ahead of
             // `items/{board_item}`.
             Route::patch('reorder', [WorkspaceNavigationItemController::class, 'reorder']);
+            // Sidebar multi-select bulk bar (move, archive, delete) and "Sort A to Z".
+            Route::post('bulk', [WorkspaceNavigationItemController::class, 'bulk']);
+            Route::patch('sort', [WorkspaceNavigationItemController::class, 'sort']);
 
             Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
             Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);

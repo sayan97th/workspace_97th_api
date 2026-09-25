@@ -5,6 +5,7 @@ namespace App\Http\Resources;
 use App\Concerns\IssuesJwtTokens;
 use App\Http\Controllers\Profile\ProfileController;
 use App\Models\User;
+use App\Support\SidebarPreferences;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -61,6 +62,10 @@ class ProfileResource extends JsonResource
             // Null until the viewer has dragged the sidebar's resize handle at least
             // once, `AppSidebar` falls back to its own default width until then.
             'sidebar_width' => $this->sidebar_width,
+
+            // Order, visibility and collapse state of the sidebar's personal sections, always
+            // complete (defaults filled in), see SidebarPreferences.
+            'sidebar_preferences' => SidebarPreferences::normalize($this->sidebar_preferences),
 
             // Lets the frontend switcher restore this workspace on load instead
             // of always defaulting to the home workspace.

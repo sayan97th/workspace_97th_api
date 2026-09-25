@@ -61,6 +61,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string $date_format
  * @property string $first_day_of_week
  * @property int|null $sidebar_width
+ * @property array<string, mixed>|null $sidebar_preferences
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
@@ -92,7 +93,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
     'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
     'notification_preferences', 'desktop_notifications_enabled', 'notification_sound_enabled', 'tab_badge_enabled', 'auto_follow_enabled',
     'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end', 'email_digest_frequency',
-    'language', 'time_format', 'date_format', 'first_day_of_week', 'sidebar_width',
+    'language', 'time_format', 'date_format', 'first_day_of_week', 'sidebar_width', 'sidebar_preferences',
 ])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 #[Appends(['full_name', 'profile_photo_url', 'is_deactivated'])]
@@ -157,6 +158,7 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
             'disable_notifications_while_away' => 'boolean',
             'hide_online_status' => 'boolean',
             'notification_preferences' => 'array',
+            'sidebar_preferences' => 'array',
             'desktop_notifications_enabled' => 'boolean',
             'notification_sound_enabled' => 'boolean',
             'tab_badge_enabled' => 'boolean',

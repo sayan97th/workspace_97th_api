@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Workspace;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Workspace\BulkWorkspaceNavigationItemsRequest;
 use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\ReorderWorkspaceNavigationItemsRequest;
+use App\Http\Requests\Workspace\SortWorkspaceNavigationItemsRequest;
 use App\Http\Requests\Workspace\StoreWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavCollapseStateRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavigationItemRequest;
@@ -19,6 +21,7 @@ use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardDuplicationService;
 use App\Services\Favorite\UserFavoriteService;
 use App\Support\AccountPermissions;
+use App\Support\BoardManagementGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -101,6 +104,7 @@ class WorkspaceNavigationItemController extends Controller
             'description' => $validated['description'] ?? null,
             'slug' => $this->uniqueSlug($workspace, $parent_id, $validated['label']),
             'icon' => $validated['icon'] ?? null,
+            'color' => $validated['color'] ?? null,
             'view_key' => $validated['view_key'] ?? null,
             'href' => $validated['href'] ?? null,
             'display_style' => $validated['display_style'] ?? null,
@@ -298,6 +302,157 @@ class WorkspaceNavigationItemController extends Controller
     }
 
     /**
+     * POST /api/workspaces/{workspace}/navigation/bulk
+     *
+     * The sidebar's multi-select bulk bar. Items nested under another
+     * selected folder are skipped, since acting on the folder already covers
+     * them. Every item is authorized before anything changes, so a bulk
+     * action either applies to the whole selection or to none of it.
+     */
+    public function bulk(BulkWorkspaceNavigationItemsRequest $request, Workspace $workspace): JsonResponse
+    {
+        $validated = $request->validated();
+        $user = $request->user();
+
+        $items = $this->withoutSelectedAncestors(
+            $workspace,
+            $workspace->navigationItems()->whereIn('id', $validated['item_ids'])->get()
+        );
+
+        switch ($validated['action']) {
+            case BulkWorkspaceNavigationItemsRequest::ACTION_MOVE:
+                $parent_id = $validated['parent_id'] ?? null;
+
+                foreach ($items as $item) {
+                    if ($parent_id !== null && ((int) $parent_id === $item->id || $this->isDescendant($item, (int) $parent_id))) {
+                        return response()->json([
+                            'message' => 'A navigation item cannot be moved inside itself or one of its descendants.',
+                        ], 422);
+                    }
+                }
+
+                DB::transaction(function () use ($workspace, $items, $parent_id) {
+                    $position = $this->nextPosition($workspace, $parent_id);
+                    foreach ($items as $item) {
+                        if ($item->parent_id === $parent_id) {
+                            continue;
+                        }
+                        $item->update(['parent_id' => $parent_id, 'position' => $position++]);
+                    }
+                });
+
+                $message = 'Items moved successfully.';
+                break;
+
+            case BulkWorkspaceNavigationItemsRequest::ACTION_ARCHIVE:
+                $items->each(fn (WorkspaceNavigationItem $item) => BoardManagementGate::authorize($item, $user, 'archive this board'));
+
+                DB::transaction(function () use ($items, $user) {
+                    foreach ($items as $item) {
+                        $item->update(['is_archived' => true, 'archived_at' => now()]);
+                        $this->activity_logger->log($item, $user, BoardActivityLog::ACTION_ARCHIVED, 'Archived the board');
+                    }
+                });
+
+                $message = 'Items archived successfully.';
+                break;
+
+            default:
+                AccountPermissions::authorize($user, AccountPermissions::DELETE_BOARDS);
+
+                DB::transaction(function () use ($items, $user) {
+                    foreach ($items as $item) {
+                        $this->activity_logger->log($item, $user, BoardActivityLog::ACTION_DELETED, 'Deleted the board');
+                        $this->deleteSubtree($item);
+                    }
+                });
+
+                $message = 'Items deleted successfully.';
+        }
+
+        return response()->json([
+            'message' => $message,
+            'item_ids' => $items->pluck('id')->values(),
+        ]);
+    }
+
+    /**
+     * PATCH /api/workspaces/{workspace}/navigation/sort
+     *
+     * The sidebar's "Sort A to Z": folders first, then boards, each
+     * alphabetically (natural, case insensitive, so "Board 2" comes before
+     * "Board 10"). The result is saved as the new manual order, so drag and
+     * drop keeps working from there.
+     */
+    public function sort(SortWorkspaceNavigationItemsRequest $request, Workspace $workspace): JsonResponse
+    {
+        $validated = $request->validated();
+        $parent_id = $validated['parent_id'] ?? null;
+        $recursive = (bool) ($validated['recursive'] ?? true);
+
+        $children_by_parent = $workspace->navigationItems()
+            ->get(['id', 'parent_id', 'type', 'label'])
+            ->groupBy(fn (WorkspaceNavigationItem $item) => $item->parent_id ?? 0);
+
+        DB::transaction(function () use ($children_by_parent, $parent_id, $recursive) {
+            $this->sortLevel($children_by_parent, $parent_id, $recursive);
+        });
+
+        return response()->json([
+            'message' => 'Navigation items sorted successfully.',
+        ]);
+    }
+
+    /**
+     * Resequences one sibling list (see {@see sort()}), then its folders when `$recursive`.
+     *
+     * @param  Collection<int|string, Collection<int, WorkspaceNavigationItem>>  $children_by_parent
+     */
+    private function sortLevel(Collection $children_by_parent, ?int $parent_id, bool $recursive): void
+    {
+        $siblings = $children_by_parent->get($parent_id ?? 0, collect())
+            ->sort(function (WorkspaceNavigationItem $a, WorkspaceNavigationItem $b) {
+                $a_rank = $a->type === WorkspaceNavigationItem::TYPE_GROUP ? 0 : 1;
+                $b_rank = $b->type === WorkspaceNavigationItem::TYPE_GROUP ? 0 : 1;
+
+                return $a_rank <=> $b_rank ?: strnatcasecmp($a->label, $b->label);
+            })
+            ->values();
+
+        foreach ($siblings as $position => $item) {
+            WorkspaceNavigationItem::where('id', $item->id)->update(['position' => $position]);
+
+            if ($recursive && $item->type === WorkspaceNavigationItem::TYPE_GROUP) {
+                $this->sortLevel($children_by_parent, $item->id, true);
+            }
+        }
+    }
+
+    /**
+     * Drops every item that has one of its ancestors in the same selection.
+     *
+     * @param  Collection<int, WorkspaceNavigationItem>  $items
+     * @return Collection<int, WorkspaceNavigationItem>
+     */
+    private function withoutSelectedAncestors(Workspace $workspace, Collection $items): Collection
+    {
+        $selected_ids = $items->pluck('id')->flip();
+        $parent_by_id = $workspace->navigationItems()->pluck('parent_id', 'id');
+
+        return $items->reject(function (WorkspaceNavigationItem $item) use ($selected_ids, $parent_by_id) {
+            $ancestor_id = $item->parent_id;
+            while ($ancestor_id !== null) {
+                if ($selected_ids->has($ancestor_id)) {
+                    return true;
+                }
+                $ancestor_id = $parent_by_id->get($ancestor_id);
+            }
+
+            return false;
+        })->values();
+    }
+
+    /**
      * POST /api/workspaces/{workspace}/navigation/{item}/duplicate
      *
      * Deep-copies the nav-tree subtree itself (see `copySubtree()`) and,
@@ -417,6 +572,7 @@ class WorkspaceNavigationItemController extends Controller
             'description' => $item->description,
             'slug' => $this->uniqueSlug($item->workspace, $parent_id, $item->label),
             'icon' => $item->icon,
+            'color' => $item->color,
             'view_key' => $item->view_key,
             'href' => $item->href,
             'display_style' => $item->display_style,

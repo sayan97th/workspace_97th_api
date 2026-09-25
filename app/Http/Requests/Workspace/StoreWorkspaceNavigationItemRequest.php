@@ -33,6 +33,8 @@ class StoreWorkspaceNavigationItemRequest extends FormRequest
                     ->where(fn ($query) => $query->where('workspace_id', $workspace_id)),
             ],
             'icon' => ['sometimes', 'nullable', 'string', 'max:255'],
+            // A folder's color, shown on its sidebar icon.
+            'color' => ['sometimes', 'nullable', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
             'view_key' => ['sometimes', 'nullable', 'string', 'max:255'],
             'href' => ['sometimes', 'nullable', 'string', 'max:255'],
             'display_style' => ['sometimes', 'nullable', 'string', 'max:50'],

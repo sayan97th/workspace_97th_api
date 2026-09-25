@@ -29,6 +29,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $description
  * @property string $slug
  * @property string|null $icon
+ * @property string|null $color
  * @property string|null $view_key
  * @property string|null $href
  * @property string|null $display_style
@@ -68,6 +69,7 @@ use Illuminate\Support\Carbon;
     'description',
     'slug',
     'icon',
+    'color',
     'view_key',
     'href',
     'display_style',
