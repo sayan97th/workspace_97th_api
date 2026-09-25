@@ -64,6 +64,9 @@ class BoardItemController extends Controller
      * pulling a whole tab's items (which can span 100+ tables) up front.
      * Every other caller (Kanban/Calendar/Gantt's eager full-tab loads, a
      * `search`-only call) omits it and keeps getting the full tab, unchanged.
+     *
+     * Optionally narrowed by the toolbar's filters via `filter_state` (JSON),
+     * `today` (`YYYY-MM-DD`) and `timezone` (IANA), see {@see BoardItemFilterService::applyFilterState()}.
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -100,11 +103,51 @@ class BoardItemController extends Controller
             $query->whereIn('group_id', $group_ids);
         }
 
+        $query = $this->filter_service->applyFilterState(
+            $query,
+            $this->filterStateParam($request),
+            $view,
+            $request->user()?->id,
+            $request->query('today'),
+            $request->query('timezone'),
+        );
+
         $items = $query->get();
         $this->attachMirrorValues($items, $view->id, BoardColumn::SCOPE_ITEM);
 
         return response()->json([
             'data' => BoardItemResource::collection($items),
+        ]);
+    }
+
+    /**
+     * GET /api/boards/{item}/items/update-matches?q=&view_id=
+     *
+     * The toolbar Search box's "Updates and replies" option: ids of the tab's
+     * root items with a published update or reply (on the item or one of its
+     * subitems) containing `q`. Only ids come back, the rows themselves are
+     * already loaded or fetched through `index()`.
+     */
+    public function updateMatches(Request $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $validated = $request->validate([
+            'q' => ['required', 'string', 'max:200'],
+            'view_id' => ['nullable', 'integer'],
+        ]);
+        abort_unless($request->user()->workspaces()->where('workspaces.id', $item->workspace_id)->exists(), 403);
+
+        $view = $this->view_resolver->resolveForRead($item, $this->viewIdParam($request));
+        if (! $view) {
+            return response()->json(['data' => []]);
+        }
+
+        $root_query = $item->items()
+            ->where('is_archived', false)
+            ->whereNull('parent_id')
+            ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id)->where('is_archived', false));
+
+        return response()->json([
+            'data' => $this->filter_service->rootIdsWithMatchingUpdates($root_query, $validated['q']),
         ]);
     }
 
@@ -746,6 +789,26 @@ class BoardItemController extends Controller
     private function viewIdParam(Request $request): ?int
     {
         return $request->filled('view_id') ? (int) $request->query('view_id') : null;
+    }
+
+    /**
+     * The toolbar's Person/Quick/Advanced filter state, sent as a JSON string
+     * in `filter_state` (see `boardContentService.getItems`). Anything that is
+     * not a JSON object is ignored, so a malformed value simply returns the
+     * unfiltered tab.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function filterStateParam(Request $request): ?array
+    {
+        $raw = $request->query('filter_state');
+        if (! is_string($raw) || $raw === '') {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**

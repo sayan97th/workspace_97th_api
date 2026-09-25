@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\BoardItem;
+use App\Services\Board\BoardItemFilterEvaluator;
 use App\Services\Board\ColumnPermissionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -31,6 +32,12 @@ class BoardItemResource extends JsonResource
             'position' => $this->position,
             'is_archived' => $this->is_archived,
             'is_priority' => $this->is_priority,
+            // Item details the toolbar filters and sorts on ("Created by",
+            // "Creation date", "Last updated"). Last updated also counts value
+            // edits, which do not touch the item row itself.
+            'created_by_id' => $this->created_by_id,
+            'created_at' => $this->created_at?->toIso8601String(),
+            'last_updated_at' => BoardItemFilterEvaluator::lastUpdatedAt($this->resource)?->toIso8601String(),
             // Direct subitem count, for the collapsed-row "N Subitems" badge —
             // falls back to a loaded `children` count when the `withCount`
             // alias isn't present (mirrors `checklist_total_count` below).

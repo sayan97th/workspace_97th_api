@@ -40,6 +40,7 @@ use App\Http\Controllers\Board\BoardItemMoveController;
 use App\Http\Controllers\Board\BoardItemNotificationMuteController;
 use App\Http\Controllers\Board\BoardItemUpdatesExportController;
 use App\Http\Controllers\Board\BoardNotificationMuteController;
+use App\Http\Controllers\Board\BoardSavedFilterController;
 use App\Http\Controllers\Board\BoardTagController;
 use App\Http\Controllers\Board\BoardTrashController;
 use App\Http\Controllers\Board\BoardViewController;
@@ -463,6 +464,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('/', [BoardItemController::class, 'index']);
             Route::post('/', [BoardItemController::class, 'store']);
 
+            // Search box's "Updates and replies", declared before the `{board_item}` wildcard.
+            Route::get('update-matches', [BoardItemController::class, 'updateMatches'])->middleware('throttle:120,1');
+
             // Selection action bar (bulk row actions) — declared before the
             // `{board_item}` wildcard routes below so these literal segments
             // aren't swallowed by it.
@@ -527,6 +531,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('/', [BoardViewController::class, 'index']);
             Route::post('/', [BoardViewController::class, 'store']);
             Route::put('order', [BoardViewController::class, 'updatePersonalOrder']);
+            Route::put('{board_view}/personal-state', [BoardViewController::class, 'updatePersonalState']);
+            Route::delete('{board_view}/personal-state', [BoardViewController::class, 'destroyPersonalState']);
             Route::patch('{board_view}', [BoardViewController::class, 'update']);
             Route::delete('{board_view}', [BoardViewController::class, 'destroy']);
             Route::post('{board_view}/duplicate', [BoardViewController::class, 'duplicate']);
@@ -550,6 +556,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('/', [BoardViewFileController::class, 'store']);
                 Route::delete('{file}', [BoardViewFileController::class, 'destroy']);
             });
+        });
+
+        // The Filter panel's personal "Saved filters", private to each user.
+        Route::prefix('saved-filters')->group(function () {
+            Route::get('/', [BoardSavedFilterController::class, 'index']);
+            Route::post('/', [BoardSavedFilterController::class, 'store']);
+            Route::patch('{saved_filter}', [BoardSavedFilterController::class, 'update']);
+            Route::delete('{saved_filter}', [BoardSavedFilterController::class, 'destroy']);
         });
 
         // Board-wide discussion feed ("Board updates") — the whole board's

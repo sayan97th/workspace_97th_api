@@ -5,14 +5,20 @@ namespace App\Services\Board;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
 
 /**
- * Server-side twin of the frontend's `filterEngine.ts`: decides whether one
- * root item matches a board view's saved filter state (Person, Quick filters
- * and Advanced filters with And/Or groups). Every column type maps onto the
- * same filter family as on the client, so a filter narrows rows identically in
- * both places.
+ * Server-side twin of the frontend's `filterEngine.ts` and `deriveBoardRows.ts`:
+ * decides whether one root item matches a board view's filter state (Person
+ * with teams and chosen People columns, Quick filters picks and exclusions,
+ * and Advanced filters with And/Or groups and paused rules). Every column type
+ * maps onto the same filter family as on the client, so a filter narrows rows
+ * identically in both places.
+ *
+ * With "Filter subitems" on, rules and facets on subitem columns are checked
+ * against each subitem: the item matches when one of its subitems passes
+ * together with every item rule (an item without subitems reads them as empty).
  *
  * Conditions the server cannot evaluate (Formula columns, whose values are
  * computed in the browser, and rules saved as free text before typed
@@ -28,6 +34,16 @@ class BoardItemFilterEvaluator
     public const ME_VALUE = '__me__';
 
     public const BLANK_OPTION_ID = '__blank__';
+
+    public const CREATED_BY_FIELD_ID = '__created_by__';
+
+    public const CREATED_AT_FIELD_ID = '__created_at__';
+
+    public const UPDATED_AT_FIELD_ID = '__updated_at__';
+
+    private const SCOPE_ITEM = 'item';
+
+    private const SCOPE_SUBITEM = 'subitem';
 
     private const KIND_OPTION = 'option';
 
@@ -73,16 +89,19 @@ class BoardItemFilterEvaluator
         BoardColumn::TYPE_CHECKLIST => self::KIND_TEXT,
     ];
 
-    /** @var array<string, int> */
-    private array $values_cache = [];
-
     /**
      * @param  Collection<string, BoardColumn>  $columns  the view's item-scoped columns, keyed by id as a string
+     * @param  Collection<string, BoardColumn>|null  $subitem_columns  the view's subitem-scoped columns, keyed by id as a string
+     * @param  array<string, array<int, int>>  $team_member_ids  account team id => ids of its members, for the Person filter's teams
+     * @param  string  $timezone  the viewer's time zone, which turns Creation date and Last updated timestamps into days
      */
     public function __construct(
         private readonly Collection $columns,
         private readonly ?int $current_user_id,
         private readonly string $today,
+        private readonly ?Collection $subitem_columns = null,
+        private readonly array $team_member_ids = [],
+        private readonly string $timezone = 'UTC',
     ) {}
 
     /**
@@ -93,31 +112,43 @@ class BoardItemFilterEvaluator
      */
     public static function hasActiveFilters(array $filter_state): bool
     {
-        if (! empty($filter_state['selected_person_ids'])) {
+        if (! empty($filter_state['selected_person_ids']) || ! empty($filter_state['selected_team_ids'])) {
             return true;
         }
 
-        foreach ((array) ($filter_state['quick_filter_selections'] ?? []) as $option_ids) {
-            if (! empty($option_ids)) {
-                return true;
+        foreach (['quick_filter_selections', 'quick_filter_exclusions'] as $key) {
+            foreach ((array) ($filter_state[$key] ?? []) as $option_ids) {
+                if (! empty($option_ids)) {
+                    return true;
+                }
             }
         }
 
         foreach ((array) ($filter_state['advanced_filter_rows'] ?? []) as $rule) {
-            if (is_array($rule) && self::isRuleComplete($rule)) {
+            if (is_array($rule) && self::isRuleApplicable($rule)) {
                 return true;
             }
         }
 
         foreach ((array) ($filter_state['advanced_filter_groups'] ?? []) as $group) {
             foreach ((array) ($group['rules'] ?? []) as $rule) {
-                if (is_array($rule) && self::isRuleComplete($rule)) {
+                if (is_array($rule) && self::isRuleApplicable($rule)) {
                     return true;
                 }
             }
         }
 
         return false;
+    }
+
+    /**
+     * A complete rule that is not paused. A paused rule stays in the list but narrows nothing.
+     *
+     * @param  array<string, mixed>  $rule
+     */
+    public static function isRuleApplicable(array $rule): bool
+    {
+        return empty($rule['is_disabled']) && self::isRuleComplete($rule);
     }
 
     /**
@@ -148,27 +179,99 @@ class BoardItemFilterEvaluator
      */
     public function matches(BoardItem $item, array $filter_state): bool
     {
-        $this->values_cache = [];
+        $include_subitems = (bool) ($filter_state['include_subitems'] ?? false);
+        $selections = (array) ($filter_state['quick_filter_selections'] ?? []);
+        $exclusions = (array) ($filter_state['quick_filter_exclusions'] ?? []);
 
-        return $this->matchesPerson($item, (array) ($filter_state['selected_person_ids'] ?? []))
-            && $this->matchesQuickFilters($item, (array) ($filter_state['quick_filter_selections'] ?? []))
-            && $this->matchesAdvancedFilters($item, $filter_state);
+        $passes_item_checks = $this->matchesPerson($item, $filter_state)
+            && $this->matchesQuickFilters($item, $selections, $exclusions, self::SCOPE_ITEM, $include_subitems);
+        if (! $passes_item_checks) {
+            return false;
+        }
+
+        if (! $include_subitems || ! $this->hasSubitemFilters($filter_state)) {
+            return $this->matchesAdvancedFilters($item, null, $filter_state, $include_subitems);
+        }
+
+        $sub_items = $this->subItems($item);
+        if ($sub_items->isEmpty()) {
+            return $this->matchesQuickFilters(null, $selections, $exclusions, self::SCOPE_SUBITEM, true)
+                && $this->matchesAdvancedFilters($item, null, $filter_state, true);
+        }
+
+        return $sub_items->contains(
+            fn (BoardItem $sub_item) => $this->matchesQuickFilters($sub_item, $selections, $exclusions, self::SCOPE_SUBITEM, true)
+                && $this->matchesAdvancedFilters($item, $sub_item, $filter_state, true)
+        );
     }
 
     /**
-     * Same as the client's `getPersonIds`: any People column holding one of the picked people.
+     * Whether a subitem rule or a subitem facet pick applies.
      *
-     * @param  array<int, mixed>  $person_ids
+     * @param  array<string, mixed>  $filter_state
      */
-    private function matchesPerson(BoardItem $item, array $person_ids): bool
+    private function hasSubitemFilters(array $filter_state): bool
     {
-        if ($person_ids === []) {
-            return true;
+        foreach (['quick_filter_selections', 'quick_filter_exclusions'] as $key) {
+            foreach ((array) ($filter_state[$key] ?? []) as $field_id => $option_ids) {
+                if (! empty($option_ids) && ($this->resolveField((string) $field_id, true)['scope'] ?? null) === self::SCOPE_SUBITEM) {
+                    return true;
+                }
+            }
         }
 
-        $wanted = array_map('strval', $person_ids);
+        $rules = (array) ($filter_state['advanced_filter_rows'] ?? []);
+        foreach ((array) ($filter_state['advanced_filter_groups'] ?? []) as $group) {
+            $rules = [...$rules, ...(array) ($group['rules'] ?? [])];
+        }
+        foreach ($rules as $rule) {
+            if (is_array($rule) && self::isRuleApplicable($rule)
+                && ($this->resolveField((string) $rule['column_id'], true)['scope'] ?? null) === self::SCOPE_SUBITEM) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * An item's live (not archived) subitems, with their values.
+     *
+     * @return Collection<int, BoardItem>
+     */
+    private function subItems(BoardItem $item): Collection
+    {
+        if ($item->relationLoaded('children')) {
+            return $item->children->where('is_archived', false)->values();
+        }
+
+        return $item->children()->where('is_archived', false)->with('values')->get();
+    }
+
+    /**
+     * Same as the client's Person filter: the picked people plus the members of
+     * the picked teams, looked for in the chosen People columns (every People
+     * column when none are chosen).
+     *
+     * @param  array<string, mixed>  $filter_state
+     */
+    private function matchesPerson(BoardItem $item, array $filter_state): bool
+    {
+        $wanted = array_map('strval', (array) ($filter_state['selected_person_ids'] ?? []));
+        $team_ids = array_map('strval', (array) ($filter_state['selected_team_ids'] ?? []));
+        if ($wanted === [] && $team_ids === []) {
+            return true;
+        }
+        foreach ($team_ids as $team_id) {
+            $wanted = [...$wanted, ...array_map('strval', $this->team_member_ids[$team_id] ?? [])];
+        }
+
+        $column_ids = array_map('strval', (array) ($filter_state['person_column_ids'] ?? []));
         foreach ($this->columns as $column_id => $column) {
             if ($column->type !== BoardColumn::TYPE_PEOPLE) {
+                continue;
+            }
+            if ($column_ids !== [] && ! in_array((string) $column_id, $column_ids, true)) {
                 continue;
             }
             if (array_intersect($this->optionIds($item, $column), $wanted) !== []) {
@@ -180,22 +283,34 @@ class BoardItemFilterEvaluator
     }
 
     /**
+     * The facets of one scope: a row must hold one of each facet's picks (when
+     * it has any) and none of its exclusions. `$row` is null for a parent
+     * without subitems, which reads every subitem facet as blank.
+     *
      * @param  array<string, mixed>  $selections  facet (field) id => picked option ids
+     * @param  array<string, mixed>  $exclusions  facet (field) id => excluded option ids
      */
-    private function matchesQuickFilters(BoardItem $item, array $selections): bool
+    private function matchesQuickFilters(?BoardItem $row, array $selections, array $exclusions, string $scope, bool $include_subitems): bool
     {
-        foreach ($selections as $field_id => $option_ids) {
-            $option_ids = array_map('strval', (array) $option_ids);
-            if ($option_ids === []) {
+        $field_ids = array_unique([...array_keys($selections), ...array_keys($exclusions)]);
+
+        foreach ($field_ids as $field_id) {
+            $picked = array_map('strval', (array) ($selections[$field_id] ?? []));
+            $excluded = array_map('strval', (array) ($exclusions[$field_id] ?? []));
+            if ($picked === [] && $excluded === []) {
                 continue;
             }
 
-            $field = $this->resolveField((string) $field_id);
-            if ($field === null) {
+            $field = $this->resolveField((string) $field_id, $include_subitems);
+            if ($field === null || $field['scope'] !== $scope) {
                 continue;
             }
 
-            if (array_intersect($this->quickOptionIds($item, $field), $option_ids) === []) {
+            $row_ids = $row === null ? [self::BLANK_OPTION_ID] : $this->quickOptionIds($row, $field);
+            if ($picked !== [] && array_intersect($row_ids, $picked) === []) {
+                return false;
+            }
+            if (array_intersect($row_ids, $excluded) !== []) {
                 return false;
             }
         }
@@ -209,12 +324,12 @@ class BoardItemFilterEvaluator
      *
      * @param  array<string, mixed>  $filter_state
      */
-    private function matchesAdvancedFilters(BoardItem $item, array $filter_state): bool
+    private function matchesAdvancedFilters(BoardItem $item, ?BoardItem $sub_item, array $filter_state, bool $include_subitems): bool
     {
         $results = [];
 
         foreach ((array) ($filter_state['advanced_filter_rows'] ?? []) as $rule) {
-            $result = is_array($rule) ? $this->evaluateRule($item, $rule) : null;
+            $result = is_array($rule) ? $this->evaluateRule($item, $sub_item, $rule, $include_subitems) : null;
             if ($result !== null) {
                 $results[] = $result;
             }
@@ -223,7 +338,7 @@ class BoardItemFilterEvaluator
         foreach ((array) ($filter_state['advanced_filter_groups'] ?? []) as $group) {
             $group_results = [];
             foreach ((array) ($group['rules'] ?? []) as $rule) {
-                $result = is_array($rule) ? $this->evaluateRule($item, $rule) : null;
+                $result = is_array($rule) ? $this->evaluateRule($item, $sub_item, $rule, $include_subitems) : null;
                 if ($result !== null) {
                     $group_results[] = $result;
                 }
@@ -250,43 +365,45 @@ class BoardItemFilterEvaluator
 
     /**
      * Evaluates one rule, or returns null when it should be ignored (incomplete,
-     * unknown field, or a condition the server cannot evaluate).
+     * paused, unknown field, or a condition the server cannot evaluate). A
+     * subitem rule reads `$sub_item`, or an empty cell when it is null.
      *
      * @param  array<string, mixed>  $rule
      */
-    private function evaluateRule(BoardItem $item, array $rule): ?bool
+    private function evaluateRule(BoardItem $item, ?BoardItem $sub_item, array $rule, bool $include_subitems): ?bool
     {
-        if (! self::isRuleComplete($rule)) {
+        if (! self::isRuleApplicable($rule)) {
             return null;
         }
 
-        $field = $this->resolveField((string) $rule['column_id']);
+        $field = $this->resolveField((string) $rule['column_id'], $include_subitems);
         if ($field === null) {
             return null;
         }
+        $row = $field['scope'] === self::SCOPE_SUBITEM ? $sub_item : $item;
 
         $operator = (string) $rule['condition'];
         $value = (string) ($rule['value'] ?? '');
         $values = array_map('strval', array_values(array_filter((array) ($rule['values'] ?? []), fn ($entry) => is_scalar($entry))));
 
         return match ($field['kind']) {
-            self::KIND_OPTION, self::KIND_PEOPLE, self::KIND_GROUP => $this->evaluateOptionRule($item, $field, $operator, $values),
+            self::KIND_OPTION, self::KIND_PEOPLE, self::KIND_GROUP => $this->evaluateOptionRule($row, $field, $operator, $values),
             self::KIND_NUMBER => $operator === 'contains'
-                ? $this->evaluateTextOperator($this->text($item, $field), $operator, $value)
-                : $this->evaluateNumberRule($this->number($item, $field), $operator, $value, $values),
-            self::KIND_DATE => $this->evaluateDateRule($this->dateRange($item, $field), $operator, $value, $values),
-            self::KIND_CHECKBOX => $this->evaluateCheckboxRule($this->checked($item, $field), $operator),
-            default => $this->evaluateTextOperator($this->text($item, $field), $operator, $value),
+                ? $this->evaluateTextOperator($this->text($row, $field), $operator, $value)
+                : $this->evaluateNumberRule($this->number($row, $field), $operator, $value, $values),
+            self::KIND_DATE => $this->evaluateDateRule($this->dateRange($row, $field), $operator, $value, $values),
+            self::KIND_CHECKBOX => $this->evaluateCheckboxRule($this->checked($row, $field), $operator),
+            default => $this->evaluateTextOperator($this->text($row, $field), $operator, $value),
         };
     }
 
     /**
-     * @param  array{kind: string, column: BoardColumn|null}  $field
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
      * @param  array<int, string>  $values
      */
-    private function evaluateOptionRule(BoardItem $item, array $field, string $operator, array $values): ?bool
+    private function evaluateOptionRule(?BoardItem $item, array $field, string $operator, array $values): ?bool
     {
-        $row_ids = $this->optionIds($item, $field['column']);
+        $row_ids = $this->fieldOptionIds($item, $field);
 
         if ($operator === 'is_empty') {
             return $row_ids === [];
@@ -434,7 +551,7 @@ class BoardItemFilterEvaluator
      * Quick filters option ids a row falls under, mirroring the client's
      * `buildQuickFilterFacets`.
      *
-     * @param  array{kind: string, column: BoardColumn|null}  $field
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
      * @return array<int, string>
      */
     private function quickOptionIds(BoardItem $item, array $field): array
@@ -443,7 +560,7 @@ class BoardItemFilterEvaluator
             case self::KIND_OPTION:
             case self::KIND_PEOPLE:
             case self::KIND_GROUP:
-                $ids = $this->optionIds($item, $field['column']);
+                $ids = $this->fieldOptionIds($item, $field);
 
                 return $ids === [] ? [self::BLANK_OPTION_ID] : $ids;
             case self::KIND_CHECKBOX:
@@ -535,26 +652,83 @@ class BoardItemFilterEvaluator
     }
 
     /**
-     * @return array{kind: string, column: BoardColumn|null}|null
+     * The field a rule or facet id points at. Subitem columns only resolve while
+     * "Filter subitems" is on, like the client only offers them then.
+     *
+     * @return array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}|null
      */
-    private function resolveField(string $field_id): ?array
+    private function resolveField(string $field_id, bool $include_subitems = false): ?array
     {
-        if ($field_id === self::NAME_FIELD_ID) {
-            return ['kind' => self::KIND_TEXT, 'column' => null];
-        }
-        if ($field_id === self::GROUP_FIELD_ID) {
-            return ['kind' => self::KIND_GROUP, 'column' => null];
+        $virtual_kind = match ($field_id) {
+            self::NAME_FIELD_ID => self::KIND_TEXT,
+            self::GROUP_FIELD_ID => self::KIND_GROUP,
+            self::CREATED_BY_FIELD_ID => self::KIND_PEOPLE,
+            self::CREATED_AT_FIELD_ID, self::UPDATED_AT_FIELD_ID => self::KIND_DATE,
+            default => null,
+        };
+        if ($virtual_kind !== null) {
+            return ['kind' => $virtual_kind, 'column' => null, 'scope' => self::SCOPE_ITEM, 'meta' => $field_id];
         }
 
         $column = $this->columns->get($field_id);
+        $scope = self::SCOPE_ITEM;
+        if ($column === null && $include_subitems) {
+            $column = $this->subitem_columns?->get($field_id);
+            $scope = self::SCOPE_SUBITEM;
+        }
         $kind = $column ? (self::KIND_BY_COLUMN_TYPE[$column->type] ?? null) : null;
 
-        return $kind === null ? null : ['kind' => $kind, 'column' => $column];
+        return $kind === null ? null : ['kind' => $kind, 'column' => $column, 'scope' => $scope, 'meta' => null];
     }
 
-    private function rawValue(BoardItem $item, BoardColumn $column): mixed
+    /**
+     * Option ids a row holds for an option, people or group field, including
+     * the item detail "Created by" field.
+     *
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
+     * @return array<int, string>
+     */
+    private function fieldOptionIds(?BoardItem $item, array $field): array
     {
-        return $item->values->firstWhere('column_id', $column->id)?->value;
+        if ($item === null) {
+            return [];
+        }
+        if ($field['meta'] === self::CREATED_BY_FIELD_ID) {
+            return $item->created_by_id !== null ? [(string) $item->created_by_id] : [];
+        }
+
+        return $this->optionIds($item, $field['column']);
+    }
+
+    /**
+     * A timestamp as the day the viewer sees it, in their own time zone.
+     */
+    private function localDay(?CarbonInterface $timestamp): ?string
+    {
+        return $timestamp?->copy()->setTimezone($this->timezone)->format('Y-m-d');
+    }
+
+    /**
+     * When the item or any of its values last changed, the "Last updated" field.
+     * Reads the loaded `values` relation, the timestamps it carries are enough.
+     */
+    public static function lastUpdatedAt(BoardItem $item): ?CarbonInterface
+    {
+        $latest = $item->updated_at;
+        if ($item->relationLoaded('values')) {
+            foreach ($item->values as $value) {
+                if ($value->updated_at !== null && ($latest === null || $value->updated_at->greaterThan($latest))) {
+                    $latest = $value->updated_at;
+                }
+            }
+        }
+
+        return $latest;
+    }
+
+    private function rawValue(?BoardItem $item, BoardColumn $column): mixed
+    {
+        return $item?->values->firstWhere('column_id', $column->id)?->value;
     }
 
     /**
@@ -578,9 +752,9 @@ class BoardItemFilterEvaluator
     }
 
     /**
-     * @param  array{kind: string, column: BoardColumn|null}  $field
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
      */
-    private function number(BoardItem $item, array $field): ?float
+    private function number(?BoardItem $item, array $field): ?float
     {
         $column = $field['column'];
         if ($column === null) {
@@ -599,11 +773,17 @@ class BoardItemFilterEvaluator
     }
 
     /**
-     * @param  array{kind: string, column: BoardColumn|null}  $field
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
      * @return array{start: string, end: string}|null
      */
-    private function dateRange(BoardItem $item, array $field): ?array
+    private function dateRange(?BoardItem $item, array $field): ?array
     {
+        if ($item !== null && ($field['meta'] === self::CREATED_AT_FIELD_ID || $field['meta'] === self::UPDATED_AT_FIELD_ID)) {
+            $day = $this->localDay($field['meta'] === self::CREATED_AT_FIELD_ID ? $item->created_at : self::lastUpdatedAt($item));
+
+            return $day === null ? null : ['start' => $day, 'end' => $day];
+        }
+
         $column = $field['column'];
         if ($column === null) {
             return null;
@@ -628,9 +808,9 @@ class BoardItemFilterEvaluator
     }
 
     /**
-     * @param  array{kind: string, column: BoardColumn|null}  $field
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
      */
-    private function checked(BoardItem $item, array $field): bool
+    private function checked(?BoardItem $item, array $field): bool
     {
         $value = $field['column'] ? $this->rawValue($item, $field['column']) : null;
 
@@ -640,10 +820,13 @@ class BoardItemFilterEvaluator
     /**
      * Display text for text conditions, matching the client's `getColumnText`.
      *
-     * @param  array{kind: string, column: BoardColumn|null}  $field
+     * @param  array{kind: string, column: BoardColumn|null, scope: string, meta: string|null}  $field
      */
-    private function text(BoardItem $item, array $field): string
+    private function text(?BoardItem $item, array $field): string
     {
+        if ($item === null) {
+            return '';
+        }
         $column = $field['column'];
         if ($column === null) {
             return $field['kind'] === self::KIND_TEXT ? (string) $item->name : '';

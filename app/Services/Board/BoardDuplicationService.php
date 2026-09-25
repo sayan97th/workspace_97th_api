@@ -23,13 +23,17 @@ class BoardDuplicationService
 {
     /**
      * @param  array<string, mixed>  $overrides  Attributes to override on the copied view (e.g. `label`, `position`, `is_primary`).
+     * @param  array<string, mixed>  $state_overrides  Saved filter/sort/display state to keep on the copy instead of the source's
+     *                                                 (the toolbar's "Save as new view"). Still expressed in the source's column and
+     *                                                 group ids, which are remapped onto the copy like the source's own state.
      */
-    public function duplicateView(BoardView $source, WorkspaceNavigationItem $target_item, array $overrides = [], ?int $created_by_id = null): BoardView
+    public function duplicateView(BoardView $source, WorkspaceNavigationItem $target_item, array $overrides = [], ?int $created_by_id = null, array $state_overrides = []): BoardView
     {
         $source->loadMissing(['columns', 'groups.items.values']);
 
-        return DB::transaction(function () use ($source, $target_item, $overrides, $created_by_id) {
+        return DB::transaction(function () use ($source, $target_item, $overrides, $created_by_id, $state_overrides) {
             $column_id_map = [];
+            $group_id_map = [];
             $column_copies = [];
 
             $view_copy = $target_item->views()->create(array_merge([
@@ -78,6 +82,7 @@ class BoardDuplicationService
                     'accent_color' => $group->accent_color,
                     'position' => $group->position,
                 ]);
+                $group_id_map[$group->id] = $group_copy->id;
 
                 foreach ($group->items as $source_item) {
                     $item_copy = $target_item->items()->create([
@@ -101,7 +106,15 @@ class BoardDuplicationService
                 }
             }
 
-            $view_copy->fill($this->remapColumnReferences($source, $column_id_map))->save();
+            // An unsaved copy of the source holding the requested state, so the
+            // source row itself is never modified.
+            $state_source = $source->replicate();
+            $state_source->forceFill($state_overrides);
+            if (array_key_exists('row_height', $state_overrides)) {
+                $view_copy->row_height = $state_overrides['row_height'];
+            }
+
+            $view_copy->fill($this->remapColumnReferences($state_source, $column_id_map, $group_id_map))->save();
 
             return $view_copy;
         });
@@ -165,25 +178,53 @@ class BoardDuplicationService
      * duplicated tab's saved filters/sort/columns/grouping point at its own
      * freshly cloned columns instead of the source tab's.
      *
+     * Rules and Quick filters picks on the virtual Group field hold group ids
+     * as values, which are remapped onto the copied groups the same way.
+     *
      * @param  array<int, int>  $column_id_map  source column id => copy column id
+     * @param  array<int, int>  $group_id_map  source group id => copy group id
      * @return array<string, mixed>
      */
-    private function remapColumnReferences(BoardView $source, array $column_id_map): array
+    private function remapColumnReferences(BoardView $source, array $column_id_map, array $group_id_map = []): array
     {
         $filter_state = $source->filter_state;
         if ($filter_state) {
             $filter_state['search_column_ids'] = $this->remapIdList($filter_state['search_column_ids'] ?? [], $column_id_map);
 
-            $filter_state['advanced_filter_rows'] = collect($filter_state['advanced_filter_rows'] ?? [])
-                ->map(fn (array $row) => [
-                    ...$row,
-                    'column_id' => $this->remapId($row['column_id'] ?? null, $column_id_map),
-                ])
-                ->all();
+            $filter_state['advanced_filter_rows'] = $this->remapFilterRules($filter_state['advanced_filter_rows'] ?? [], $column_id_map, $group_id_map);
 
-            $filter_state['quick_filter_selections'] = collect($filter_state['quick_filter_selections'] ?? [])
-                ->mapWithKeys(fn ($option_ids, $facet_id) => [$this->remapId((string) $facet_id, $column_id_map) => $option_ids])
-                ->all();
+            if (isset($filter_state['advanced_filter_groups']) && is_array($filter_state['advanced_filter_groups'])) {
+                $filter_state['advanced_filter_groups'] = collect($filter_state['advanced_filter_groups'])
+                    ->filter(fn ($group) => is_array($group))
+                    ->map(fn (array $group) => [
+                        ...$group,
+                        'rules' => $this->remapFilterRules($group['rules'] ?? [], $column_id_map, $group_id_map),
+                    ])
+                    ->values()
+                    ->all();
+            }
+
+            // Quick filters picks and exclusions share one shape: facet (column) id => option ids.
+            foreach (['quick_filter_selections', 'quick_filter_exclusions'] as $key) {
+                if ($key === 'quick_filter_exclusions' && ! isset($filter_state[$key])) {
+                    continue;
+                }
+                $filter_state[$key] = collect($filter_state[$key] ?? [])
+                    ->mapWithKeys(fn ($option_ids, $facet_id) => [
+                        $this->remapId((string) $facet_id, $column_id_map) => (string) $facet_id === BoardItemFilterEvaluator::GROUP_FIELD_ID
+                            ? $this->remapGroupIds((array) $option_ids, $group_id_map)
+                            : $option_ids,
+                    ])
+                    ->all();
+            }
+
+            if (isset($filter_state['person_column_ids']) && is_array($filter_state['person_column_ids'])) {
+                $filter_state['person_column_ids'] = $this->remapIdList($filter_state['person_column_ids'], $column_id_map);
+            }
+
+            if (isset($filter_state['quick_filter_column_ids']) && is_array($filter_state['quick_filter_column_ids'])) {
+                $filter_state['quick_filter_column_ids'] = $this->remapIdList($filter_state['quick_filter_column_ids'], $column_id_map);
+            }
         }
 
         $sort_state = $source->sort_state === null ? null : collect($source->sort_state)
@@ -211,6 +252,44 @@ class BoardDuplicationService
     }
 
     /**
+     * @param  array<int, mixed>  $rules
+     * @param  array<int, int>  $column_id_map
+     * @param  array<int, int>  $group_id_map
+     * @return array<int, array<string, mixed>>
+     */
+    private function remapFilterRules(array $rules, array $column_id_map, array $group_id_map): array
+    {
+        return collect($rules)
+            ->filter(fn ($rule) => is_array($rule))
+            ->map(function (array $rule) use ($column_id_map, $group_id_map) {
+                $remapped = [
+                    ...$rule,
+                    'column_id' => $this->remapId($rule['column_id'] ?? null, $column_id_map),
+                ];
+                if (($rule['column_id'] ?? null) === BoardItemFilterEvaluator::GROUP_FIELD_ID && isset($rule['values']) && is_array($rule['values'])) {
+                    $remapped['values'] = $this->remapGroupIds($rule['values'], $group_id_map);
+                }
+
+                return $remapped;
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<int, mixed>  $group_ids
+     * @param  array<int, int>  $group_id_map
+     * @return array<int, string>
+     */
+    private function remapGroupIds(array $group_ids, array $group_id_map): array
+    {
+        return array_map(
+            fn ($id) => isset($group_id_map[(int) $id]) && ctype_digit((string) $id) ? (string) $group_id_map[(int) $id] : (string) $id,
+            array_values($group_ids),
+        );
+    }
+
+    /**
      * @param  array<int, int>  $column_id_map
      * @return array<int, string|null>
      */
@@ -220,7 +299,8 @@ class BoardDuplicationService
     }
 
     /**
-     * Remaps a single column-id reference. Non-numeric values (e.g. the
+     * Remaps a single column-id reference. A Group-by id may carry a bucket
+     * suffix (`"12:month"`), which is kept. Non-numeric values (e.g. the
      * `"name"` sort sentinel or the `"default"` group-by sentinel) are left
      * untouched, as is any id with no corresponding entry in the map.
      *
@@ -228,10 +308,13 @@ class BoardDuplicationService
      */
     private function remapId(?string $id, array $column_id_map): ?string
     {
-        if ($id === null || ! ctype_digit($id)) {
+        if ($id === null || preg_match('/^(\d+)(:[a-z_]+)?$/', $id, $matches) !== 1) {
             return $id;
         }
 
-        return isset($column_id_map[(int) $id]) ? (string) $column_id_map[(int) $id] : $id;
+        $column_id = (int) $matches[1];
+        $suffix = $matches[2] ?? '';
+
+        return isset($column_id_map[$column_id]) ? $column_id_map[$column_id].$suffix : $id;
     }
 }

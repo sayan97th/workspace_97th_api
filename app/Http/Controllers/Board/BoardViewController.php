@@ -4,12 +4,15 @@ namespace App\Http\Controllers\Board;
 
 use App\Enums\BoardViewType;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\DuplicateBoardViewRequest;
 use App\Http\Requests\Board\StoreBoardViewRequest;
+use App\Http\Requests\Board\UpdateBoardViewPersonalStateRequest;
 use App\Http\Requests\Board\UpdateBoardViewRequest;
 use App\Http\Requests\Board\UpdatePersonalViewOrderRequest;
 use App\Http\Resources\BoardViewResource;
 use App\Models\BoardView;
 use App\Models\BoardViewUserOrder;
+use App\Models\BoardViewUserState;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardDuplicationService;
 use App\Services\Board\ChartDataService;
@@ -33,9 +36,20 @@ class BoardViewController extends Controller
             ->where('board_id', $item->id)
             ->value('view_order');
 
+        $views = $item->views()->with('creator')->get();
+
+        // The viewer's remembered, unsaved changes per view ("Remember my filters").
+        $personal_states = BoardViewUserState::query()
+            ->where('user_id', $request->user()?->id)
+            ->whereIn('board_view_id', $views->pluck('id'))
+            ->get()
+            ->mapWithKeys(fn (BoardViewUserState $state) => [(string) $state->board_view_id => $state->toPayload()]);
+
         return response()->json([
-            'data' => BoardViewResource::collection($item->views()->with('creator')->get()),
+            'data' => BoardViewResource::collection($views),
             'personal_order' => $personal_order,
+            // An object even when empty, so the client never receives a list here.
+            'personal_states' => (object) $personal_states->all(),
         ]);
     }
 
@@ -146,18 +160,31 @@ class BoardViewController extends Controller
      * activity on the source items are intentionally NOT copied — a
      * duplicate is a fresh structural copy to edit, not a copy of the
      * conversation history.
+     *
+     * The toolbar's "Save as new view" sends a `label` and the live
+     * filter/sort/display state, which the copy keeps instead of the source's
+     * saved state (column and group ids remapped onto the copy's own). That
+     * leaves the source untouched, so it is allowed from a locked tab too.
      */
-    public function duplicate(Request $request, WorkspaceNavigationItem $item, BoardView $board_view, BoardDuplicationService $duplication_service): JsonResponse
+    public function duplicate(DuplicateBoardViewRequest $request, WorkspaceNavigationItem $item, BoardView $board_view, BoardDuplicationService $duplication_service): JsonResponse
     {
         $this->ensureViewBelongsToBoard($item, $board_view);
         BoardEditGate::authorizeStructure($item, $request->user());
-        $this->ensureViewUnlocked($board_view);
+
+        $state_overrides = $request->stateOverrides();
+        if ($state_overrides === []) {
+            $this->ensureViewUnlocked($board_view);
+        }
 
         $copy = $duplication_service->duplicateView(
             $board_view,
             $item,
-            ['label' => "{$board_view->label} (copy)", 'position' => $this->nextPosition($item)],
+            [
+                'label' => $request->validated('label') ?? "{$board_view->label} (copy)",
+                'position' => $this->nextPosition($item),
+            ],
             $request->user()?->id,
+            $state_overrides,
         );
 
         return response()->json([
@@ -246,6 +273,47 @@ class BoardViewController extends Controller
             'message' => 'View order saved successfully.',
             'personal_order' => $order->view_order,
         ]);
+    }
+
+    /**
+     * PUT /api/boards/{item}/views/{board_view}/personal-state
+     *
+     * "Remember my filters": stores the viewer's unsaved filter, sort, hidden
+     * columns and group by for this view, replayed the next time they open it
+     * (on any device). Only affects the viewer, so it needs no edit access and
+     * works on a locked view too.
+     */
+    public function updatePersonalState(UpdateBoardViewPersonalStateRequest $request, WorkspaceNavigationItem $item, BoardView $board_view): JsonResponse
+    {
+        $this->ensureViewBelongsToBoard($item, $board_view);
+        abort_unless($request->user()->workspaces()->where('workspaces.id', $item->workspace_id)->exists(), 403);
+
+        $state = BoardViewUserState::updateOrCreate(
+            ['user_id' => $request->user()->id, 'board_view_id' => $board_view->id],
+            $request->safe()->only(['filter_state', 'sort_state', 'hidden_column_ids', 'group_by_option_id']),
+        );
+
+        return response()->json([
+            'message' => 'View changes remembered.',
+            'personal_state' => $state->toPayload(),
+        ]);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/views/{board_view}/personal-state
+     *
+     * "Reset to view": forgets the viewer's remembered changes to this view.
+     */
+    public function destroyPersonalState(Request $request, WorkspaceNavigationItem $item, BoardView $board_view): JsonResponse
+    {
+        $this->ensureViewBelongsToBoard($item, $board_view);
+
+        BoardViewUserState::query()
+            ->where('user_id', $request->user()->id)
+            ->where('board_view_id', $board_view->id)
+            ->delete();
+
+        return response()->json(['message' => 'View reset to its saved state.']);
     }
 
     /**
