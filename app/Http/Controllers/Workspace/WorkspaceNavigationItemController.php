@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Workspace;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Workspace\DuplicateWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\ReorderWorkspaceNavigationItemsRequest;
 use App\Http\Requests\Workspace\StoreWorkspaceNavigationItemRequest;
@@ -12,6 +13,9 @@ use App\Http\Requests\Workspace\UpdateWorkspaceNavCollapseStateRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavigationItemRequest;
 use App\Http\Resources\WorkspaceNavigationItemResource;
 use App\Models\BoardActivityLog;
+use App\Models\BoardColumn;
+use App\Models\BoardItemValue;
+use App\Models\BoardTag;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavCollapseState;
 use App\Models\WorkspaceNavigationItem;
@@ -299,21 +303,42 @@ class WorkspaceNavigationItemController extends Controller
      * cell values — via {@see BoardDuplicationService}, so "Duplicate board"
      * from the board options menu produces a genuinely independent copy
      * rather than an empty shell.
+     *
+     * `mode` (see {@see DuplicateWorkspaceNavigationItemRequest}) mirrors
+     * monday.com's "Duplicate board" dialog: structure only, structure and
+     * items (the default), or structure, items and updates. `label` names the
+     * copy, otherwise it is "{label} (copy)".
      */
-    public function duplicate(Request $request, Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
+    public function duplicate(DuplicateWorkspaceNavigationItemRequest $request, Workspace $workspace, WorkspaceNavigationItem $item): JsonResponse
     {
         $this->ensureItemBelongsToWorkspace($workspace, $item);
 
         $item->load('childrenRecursive');
 
-        $copy = $this->copySubtree($item, $item->parent_id, $this->nextPosition($workspace, $item->parent_id), $request->user()?->id);
+        $mode = $request->validated('mode') ?? DuplicateWorkspaceNavigationItemRequest::MODE_ITEMS;
+        $label = trim((string) ($request->validated('label') ?? ''));
+
+        $copy = DB::transaction(fn () => $this->copySubtree(
+            $item,
+            $item->parent_id,
+            $this->nextPosition($workspace, $item->parent_id),
+            $request->user()?->id,
+            $mode !== DuplicateWorkspaceNavigationItemRequest::MODE_STRUCTURE,
+            $mode === DuplicateWorkspaceNavigationItemRequest::MODE_ITEMS_UPDATES,
+            $label !== '' ? $label : null,
+        ));
         $copy->load(['childrenRecursive', 'creator', 'workspace.owners']);
 
+        $what = match ($mode) {
+            DuplicateWorkspaceNavigationItemRequest::MODE_STRUCTURE => 'structure only',
+            DuplicateWorkspaceNavigationItemRequest::MODE_ITEMS_UPDATES => 'with items and updates',
+            default => 'with items',
+        };
         $this->activity_logger->log(
             $copy,
             $request->user(),
             BoardActivityLog::ACTION_DUPLICATED,
-            "Duplicated from \"{$item->label}\""
+            "Duplicated from \"{$item->label}\" ({$what})"
         );
 
         return response()->json([
@@ -401,19 +426,32 @@ class WorkspaceNavigationItemController extends Controller
     /**
      * Recursively deep-copy an item and its subtree under a new parent.
      */
-    private function copySubtree(WorkspaceNavigationItem $item, ?int $parent_id, int $position, ?int $created_by_id): WorkspaceNavigationItem
-    {
+    private function copySubtree(
+        WorkspaceNavigationItem $item,
+        ?int $parent_id,
+        int $position,
+        ?int $created_by_id,
+        bool $with_items = true,
+        bool $with_updates = false,
+        ?string $label = null,
+    ): WorkspaceNavigationItem {
+        $label ??= $parent_id === $item->parent_id ? $item->label.' (copy)' : $item->label;
+
         $copy = $item->workspace->navigationItems()->create([
             'parent_id' => $parent_id,
             'type' => $item->type,
-            'label' => $parent_id === $item->parent_id ? $item->label.' (copy)' : $item->label,
+            'label' => $label,
             'description' => $item->description,
-            'slug' => $this->uniqueSlug($item->workspace, $parent_id, $item->label),
+            'slug' => $this->uniqueSlug($item->workspace, $parent_id, $label),
             'icon' => $item->icon,
             'view_key' => $item->view_key,
             'href' => $item->href,
             'display_style' => $item->display_style,
             'board_type' => $item->board_type,
+            'edit_permission' => $item->edit_permission,
+            'item_column_label' => $item->item_column_label,
+            'item_column_width' => $item->item_column_width,
+            'sub_item_column_width' => $item->sub_item_column_width,
             'is_favorite' => false,
             'is_priority' => false,
             'position' => $position,
@@ -421,14 +459,48 @@ class WorkspaceNavigationItemController extends Controller
         ]);
 
         if ($item->type === WorkspaceNavigationItem::TYPE_LEAF) {
-            $this->duplication_service->duplicateAllViews($item, $copy, $created_by_id);
+            $this->duplication_service->duplicateAllViews($item, $copy, $created_by_id, $with_items, $with_updates);
+            $this->copyBoardTags($item, $copy);
         }
 
         foreach ($item->childrenRecursive as $child) {
-            $this->copySubtree($child, $copy->id, $child->position, $created_by_id);
+            $this->copySubtree($child, $copy->id, $child->position, $created_by_id, $with_items, $with_updates);
         }
 
         return $copy;
+    }
+
+    /**
+     * Tags are board wide, so the copy gets its own set and its Tags cells
+     * are pointed at them (they would otherwise keep the source board's ids).
+     */
+    private function copyBoardTags(WorkspaceNavigationItem $source, WorkspaceNavigationItem $copy): void
+    {
+        $tag_map = [];
+        foreach (BoardTag::where('board_id', $source->id)->orderBy('position')->get() as $tag) {
+            $tag_map[$tag->id] = BoardTag::create([
+                'board_id' => $copy->id,
+                'label' => $tag->label,
+                'color' => $tag->color,
+                'position' => $tag->position,
+            ])->id;
+        }
+
+        if ($tag_map === []) {
+            return;
+        }
+
+        $tag_column_ids = BoardColumn::where('board_id', $copy->id)->where('type', BoardColumn::TYPE_TAGS)->pluck('id');
+        BoardItemValue::whereIn('column_id', $tag_column_ids)->get()->each(function (BoardItemValue $value) use ($tag_map) {
+            if (! is_array($value->value)) {
+                return;
+            }
+            $value->value = array_values(array_filter(array_map(
+                fn ($id) => isset($tag_map[(int) $id]) ? (is_string($id) ? (string) $tag_map[(int) $id] : $tag_map[(int) $id]) : null,
+                $value->value
+            )));
+            $value->save();
+        });
     }
 
     /**

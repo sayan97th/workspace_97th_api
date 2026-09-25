@@ -57,6 +57,8 @@ use Illuminate\Support\Carbon;
     'view_type',
     'doc_content',
     'chart_config',
+    'workload_config',
+    'dashboard_config',
     'form_config',
     'form_token',
     'emoji',
@@ -170,6 +172,8 @@ class BoardView extends Model
             'pinned_column_ids' => 'array',
             'conditional_color_rules' => 'array',
             'chart_config' => 'array',
+            'workload_config' => 'array',
+            'dashboard_config' => 'array',
             'form_config' => 'array',
         ];
     }

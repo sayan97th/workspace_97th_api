@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Board;
 
+use App\Services\Board\DashboardDataService;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -46,6 +47,26 @@ class UpdateBoardViewRequest extends FormRequest
             'chart_config.aggregate_fn' => ['sometimes', 'nullable', 'string', Rule::in(['count', 'sum', 'average'])],
             'chart_config.value_column_id' => ['sometimes', 'nullable', 'string'],
             'chart_config.date_bucket' => ['sometimes', 'nullable', 'string', Rule::in(['day', 'week', 'month'])],
+            // People, date and effort columns plus capacity, for a `workload`-type view. See App\Services\Board\WorkloadDataService.
+            'workload_config' => ['sometimes', 'nullable', 'array'],
+            'workload_config.source_view_id' => ['sometimes', 'nullable', 'integer'],
+            'workload_config.people_column_id' => ['sometimes', 'nullable', 'string', 'max:40'],
+            'workload_config.date_column_id' => ['sometimes', 'nullable', 'string', 'max:40'],
+            'workload_config.effort_column_id' => ['sometimes', 'nullable', 'string', 'max:40'],
+            'workload_config.capacity' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:100000'],
+            'workload_config.bucket' => ['sometimes', 'nullable', 'string', Rule::in(['day', 'week'])],
+            'workload_config.capacity_overrides' => ['sometimes', 'nullable', 'array', 'max:500'],
+            'workload_config.capacity_overrides.*' => ['numeric', 'min:0', 'max:100000'],
+            // Widgets and their layout, for a `dashboard`-type view. See App\Services\Board\DashboardDataService.
+            'dashboard_config' => ['sometimes', 'nullable', 'array'],
+            'dashboard_config.widgets' => ['sometimes', 'array', 'max:'.DashboardDataService::MAX_WIDGETS],
+            'dashboard_config.widgets.*.id' => ['required', 'string', 'max:40'],
+            'dashboard_config.widgets.*.type' => ['required', 'string', Rule::in(DashboardDataService::WIDGET_TYPES)],
+            'dashboard_config.widgets.*.title' => ['sometimes', 'nullable', 'string', 'max:120'],
+            'dashboard_config.widgets.*.width' => ['sometimes', 'integer', 'min:1', 'max:3'],
+            'dashboard_config.widgets.*.source_board_id' => ['sometimes', 'nullable', 'integer'],
+            'dashboard_config.widgets.*.source_view_id' => ['sometimes', 'nullable', 'integer'],
+            'dashboard_config.widgets.*.config' => ['sometimes', 'nullable', 'array'],
         ];
     }
 }
