@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 
 /**
@@ -25,6 +26,8 @@ use Illuminate\Support\Carbon;
  * @property string $view_type
  * @property string|null $doc_content
  * @property array<string, mixed>|null $chart_config
+ * @property array<string, mixed>|null $form_config
+ * @property string|null $form_token
  * @property string|null $emoji
  * @property int $position
  * @property bool $is_primary
@@ -53,6 +56,8 @@ use Illuminate\Support\Carbon;
     'view_type',
     'doc_content',
     'chart_config',
+    'form_config',
+    'form_token',
     'emoji',
     'position',
     'is_primary',
@@ -138,6 +143,16 @@ class BoardView extends Model
     }
 
     /**
+     * This tab's public "Share view" link, when one was ever created.
+     *
+     * @return HasOne<BoardViewShareLink, $this>
+     */
+    public function shareLink(): HasOne
+    {
+        return $this->hasOne(BoardViewShareLink::class, 'board_view_id');
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
@@ -153,6 +168,7 @@ class BoardView extends Model
             'pinned_column_ids' => 'array',
             'conditional_color_rules' => 'array',
             'chart_config' => 'array',
+            'form_config' => 'array',
         ];
     }
 }

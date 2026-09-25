@@ -7,20 +7,27 @@ use App\Http\Requests\Board\DuplicateBoardColumnRequest;
 use App\Http\Requests\Board\MoveBoardColumnRequest;
 use App\Http\Requests\Board\ReorderBoardColumnsRequest;
 use App\Http\Requests\Board\StoreBoardColumnRequest;
+use App\Http\Requests\Board\UpdateBoardColumnPermissionsRequest;
 use App\Http\Requests\Board\UpdateBoardColumnRequest;
 use App\Http\Resources\BoardColumnResource;
 use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardViewResolver;
+use App\Services\Board\ColumnPermissionService;
+use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class BoardColumnController extends Controller
 {
-    public function __construct(private readonly BoardViewResolver $view_resolver) {}
+    public function __construct(
+        private readonly BoardViewResolver $view_resolver,
+        private readonly ColumnPermissionService $column_permissions,
+    ) {}
 
     /**
      * GET /api/boards/{item}/columns
@@ -40,6 +47,13 @@ class BoardColumnController extends Controller
             $columns = $columns->where('scope', $request->query('scope'))->values();
         }
 
+        // A column restricted from the viewer (column permissions) is hidden
+        // entirely, exactly like monday.com.
+        $hidden_ids = $this->column_permissions->hiddenColumnIds($item->id, $request->user());
+        if ($hidden_ids !== []) {
+            $columns = $columns->reject(fn (BoardColumn $column) => in_array($column->id, $hidden_ids, true))->values();
+        }
+
         return response()->json([
             'data' => BoardColumnResource::collection($columns),
         ]);
@@ -50,6 +64,8 @@ class BoardColumnController extends Controller
      */
     public function store(StoreBoardColumnRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorizeStructure($item, $request->user());
+
         $validated = $request->validated();
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
         $scope = $validated['scope'] ?? BoardColumn::SCOPE_ITEM;
@@ -97,10 +113,54 @@ class BoardColumnController extends Controller
     {
         $this->ensureColumnBelongsToBoard($item, $column);
 
-        $column->fill($request->validated())->save();
+        $validated = $request->validated();
+
+        // Resizing a column is part of everyday editing, so it only needs
+        // content access. Anything else changes the board's structure.
+        if (array_keys($validated) === ['width']) {
+            BoardEditGate::authorize($item, $request->user());
+        } else {
+            BoardEditGate::authorizeStructure($item, $request->user());
+        }
+
+        $column->fill($validated)->save();
 
         return response()->json([
             'message' => 'Column updated successfully.',
+            'column' => new BoardColumnResource($column->fresh()),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/columns/{column}/permissions
+     *
+     * Column menu's "Column permissions": restricts who can view and who can
+     * edit this column's values. `null` lifts a restriction. Only board
+     * owners may change it, and they always keep access themselves.
+     */
+    public function updatePermissions(UpdateBoardColumnPermissionsRequest $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
+    {
+        $this->ensureColumnBelongsToBoard($item, $column);
+
+        if (! BoardEditGate::isOwner($item, $request->user())) {
+            throw ValidationException::withMessages([
+                'board' => 'Only board owners can change column permissions.',
+            ])->status(403);
+        }
+
+        $validated = $request->validated();
+        $attributes = [];
+
+        foreach (['view_restriction', 'edit_restriction'] as $field) {
+            if (array_key_exists($field, $validated)) {
+                $attributes[$field] = ColumnPermissionService::normalize($validated[$field]);
+            }
+        }
+
+        $column->update($attributes);
+
+        return response()->json([
+            'message' => 'Column permissions updated successfully.',
             'column' => new BoardColumnResource($column->fresh()),
         ]);
     }
@@ -110,6 +170,7 @@ class BoardColumnController extends Controller
      */
     public function move(MoveBoardColumnRequest $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
     {
+        BoardEditGate::authorizeStructure($item, $request->user());
         $this->ensureColumnBelongsToBoard($item, $column);
 
         $column->position = $request->validated()['position'];
@@ -128,7 +189,7 @@ class BoardColumnController extends Controller
      * header) — resequences every column in `ordered_ids` to its index in
      * that list, scoped to one tab (`view_id`, defaulting to the primary
      * tab) and one column `scope`, mirroring
-     * {@see \App\Http\Controllers\Board\BoardItemController::reorder()}. Any
+     * {@see BoardItemController::reorder()}. Any
      * id that doesn't actually belong to the resolved view+scope is quietly
      * dropped rather than rejected outright, so a stale client-side column
      * list can't fail the whole drag. Declared before the `{column}`
@@ -137,6 +198,7 @@ class BoardColumnController extends Controller
      */
     public function reorder(ReorderBoardColumnsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorizeStructure($item, $request->user());
         $validated = $request->validated();
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
         $scope = $validated['scope'];
@@ -172,8 +234,9 @@ class BoardColumnController extends Controller
     /**
      * DELETE /api/boards/{item}/columns/{column}
      */
-    public function destroy(WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
+    public function destroy(Request $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
     {
+        BoardEditGate::authorizeStructure($item, $request->user());
         $this->ensureColumnBelongsToBoard($item, $column);
 
         $column->delete();
@@ -193,6 +256,7 @@ class BoardColumnController extends Controller
      */
     public function duplicate(DuplicateBoardColumnRequest $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
     {
+        BoardEditGate::authorizeStructure($item, $request->user());
         $this->ensureColumnBelongsToBoard($item, $column);
 
         $target_board_id = $request->integer('target_board_id') ?: null;

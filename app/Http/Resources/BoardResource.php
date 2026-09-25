@@ -25,6 +25,8 @@ class BoardResource extends JsonResource
     public function toArray(Request $request): array
     {
         $node = (new WorkspaceNavigationItemResource($this->resource))->toArray($request);
+        $user = $request->user();
+        $level = $user ? BoardEditGate::level($this->resource, $user) : BoardEditGate::LEVEL_NONE;
 
         return array_merge($node, [
             'workspace' => [
@@ -45,7 +47,15 @@ class BoardResource extends JsonResource
             // Drives whether the Table view renders read-only (a workspace
             // `viewer`, e.g. a board-invited guest, can open and browse but
             // never edit) — see BoardEditGate.
-            'can_edit' => $request->user() ? BoardEditGate::allows($this->resource, $request->user()) : false,
+            'can_edit' => $level !== BoardEditGate::LEVEL_NONE,
+            // Board permissions (see BoardEditGate): the board's mode, and
+            // what it resolves to for the viewer (`full`, `content`,
+            // `assigned` or `none`). `can_edit_structure` drives whether the
+            // column, group and view menus offer structural actions.
+            'edit_permission' => BoardEditGate::permission($this->resource)->value,
+            'permission_level' => $level,
+            'can_edit_structure' => $level === BoardEditGate::LEVEL_FULL,
+            'is_owner' => $user ? BoardEditGate::isOwner($this->resource, $user) : false,
         ]);
     }
 

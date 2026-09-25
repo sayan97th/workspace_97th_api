@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\BoardItem;
+use App\Services\Board\ColumnPermissionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -90,11 +91,32 @@ class BoardItemResource extends JsonResource
             // `BoardItemController`) is merged in the same shape so a Mirror
             // column's computed value shows up in `values` exactly like any
             // other column's, with no frontend special-casing needed.
+            //
+            // Values of a column the viewer may not see (column permissions,
+            // see `ColumnPermissionService`) are dropped here, so every
+            // endpoint returning this resource hides them the same way.
             'values' => $this->whenLoaded(
                 'values',
-                fn () => (object) (($this->mirror_values ?? []) + $this->values->mapWithKeys(fn ($value) => [(string) $value->column_id => $value->value])->all()),
-                (object) ($this->mirror_values ?? [])
+                fn () => (object) $this->visibleValues($request, ($this->mirror_values ?? []) + $this->values->mapWithKeys(fn ($value) => [(string) $value->column_id => $value->value])->all()),
+                (object) $this->visibleValues($request, $this->mirror_values ?? [])
             ),
         ];
+    }
+
+    /**
+     * Drops the values of every column the requesting user may not see.
+     *
+     * @param  array<int|string, mixed>  $values
+     * @return array<int|string, mixed>
+     */
+    private function visibleValues(Request $request, array $values): array
+    {
+        $hidden_ids = app(ColumnPermissionService::class)->hiddenColumnIds((int) $this->board_id, $request->user());
+
+        foreach ($hidden_ids as $column_id) {
+            unset($values[$column_id], $values[(string) $column_id]);
+        }
+
+        return $values;
     }
 }

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Concerns\BelongsToBoardView;
 use App\Services\Board\MirrorColumnResolver;
+use App\Support\FormulaReferences;
 use Database\Factories\BoardColumnFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Collection;
@@ -33,6 +34,8 @@ use Illuminate\Support\Carbon;
  * @property int $position
  * @property int $width
  * @property array<string, mixed>|null $config
+ * @property array{user_ids?: array<int, int>, team_ids?: array<int, int>}|null $edit_restriction
+ * @property array{user_ids?: array<int, int>, team_ids?: array<int, int>}|null $view_restriction
  * @property bool $hideable
  * @property bool $pinnable
  * @property Carbon|null $created_at
@@ -51,6 +54,8 @@ use Illuminate\Support\Carbon;
     'position',
     'width',
     'config',
+    'edit_restriction',
+    'view_restriction',
     'hideable',
     'pinnable',
 ])]
@@ -119,7 +124,7 @@ class BoardColumn extends Model
     /** A read-only sequential number assigned once, server-side, when the item is created — mirrors monday.com's "Item ID" column. Never editable from the cell. */
     public const TYPE_AUTO_NUMBER = 'auto_number';
 
-    /** A read-only value computed from other columns on the same item by the expression in `config.expression` (columns referenced by id, `{#12}`, see {@see \App\Support\FormulaReferences}). Older columns still carry `config.operation` (`sum`/`subtract`/`multiply`/`divide`/`concat`) applied to `config.source_column_ids`, which the frontend converts to an expression when it reads them. Never stores a {@see BoardItemValue} of its own; evaluated by the client on every render. */
+    /** A read-only value computed from other columns on the same item by the expression in `config.expression` (columns referenced by id, `{#12}`, see {@see FormulaReferences}). Older columns still carry `config.operation` (`sum`/`subtract`/`multiply`/`divide`/`concat`) applied to `config.source_column_ids`, which the frontend converts to an expression when it reads them. Never stores a {@see BoardItemValue} of its own; evaluated by the client on every render. */
     public const TYPE_FORMULA = 'formula';
 
     /** Links this item to one or more items on a *different* board (`config.linked_board_id`), stored as an array of that board's item ids, mirroring `TYPE_DEPENDENCY`'s value shape but cross-board. The prerequisite a `TYPE_MIRROR` column reads through. */
@@ -128,7 +133,7 @@ class BoardColumn extends Model
     /** A read-only value mirrored from the item(s) a `TYPE_CONNECT_BOARD` column (`config.source_column_id`) links to, reading `config.mirrored_column_id` off the linked board. Never stores a {@see BoardItemValue} of its own; resolved by {@see MirrorColumnResolver}. */
     public const TYPE_MIRROR = 'mirror';
 
-    /** A per-item checklist of sub-tasks, stored as an array of `{id, text, is_done}` — distinct from {@see \App\Models\BoardItemChecklistItem}, which is one fixed checklist per item shown in its drawer, not a column an item can have several of. */
+    /** A per-item checklist of sub-tasks, stored as an array of `{id, text, is_done}`, distinct from {@see BoardItemChecklistItem}, which is one fixed checklist per item shown in its drawer, not a column an item can have several of. */
     public const TYPE_CHECKLIST = 'checklist';
 
     /**
@@ -176,6 +181,8 @@ class BoardColumn extends Model
     {
         return [
             'config' => 'array',
+            'edit_restriction' => 'array',
+            'view_restriction' => 'array',
             'position' => 'integer',
             'width' => 'integer',
             'hideable' => 'boolean',

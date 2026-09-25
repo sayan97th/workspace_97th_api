@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Favorite\UserFavoriteService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -30,7 +31,8 @@ class WorkspaceContentItemResource extends JsonResource
             'display_style' => $this->display_style,
             'board_type' => $this->board_type,
             'icon' => $this->icon,
-            'is_favorite' => $this->is_favorite,
+            // Favorites are personal, see UserFavoriteService.
+            'is_favorite' => app(UserFavoriteService::class)->isFavorite((int) $this->id, $request->user()),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'creator' => $this->whenLoaded('creator', fn () => $this->creator ? [

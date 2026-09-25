@@ -7,7 +7,10 @@ use App\Http\Requests\Board\StoreBoardItemCellFileRequest;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\ColumnPermissionService;
+use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -33,6 +36,8 @@ class BoardItemCellFileController extends Controller
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
         $this->ensureColumnIsFilesType($item, $column);
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
+        app(ColumnPermissionService::class)->authorizeEdit($item, $request->user(), [$column->id]);
 
         $uploaded = collect($request->file('files', []))->map(function ($file) use ($board_item) {
             $extension = $file->getClientOriginalExtension();
@@ -68,10 +73,12 @@ class BoardItemCellFileController extends Controller
     /**
      * DELETE /api/boards/{item}/items/{board_item}/columns/{column}/files/{file_id}
      */
-    public function destroy(WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, string $file_id): JsonResponse
+    public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, string $file_id): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
         $this->ensureColumnIsFilesType($item, $column);
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
+        app(ColumnPermissionService::class)->authorizeEdit($item, $request->user(), [$column->id]);
 
         $existing = $this->currentFiles($board_item, $column);
         $target = $existing->firstWhere('id', $file_id);

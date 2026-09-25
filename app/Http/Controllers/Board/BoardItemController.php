@@ -17,13 +17,13 @@ use App\Http\Resources\BoardItemResource;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
-use App\Models\BoardItemValue;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardItemScopeConversionService;
 use App\Services\Board\BoardItemValueService;
 use App\Services\Board\BoardViewResolver;
+use App\Services\Board\ColumnPermissionService;
 use App\Services\Board\MirrorColumnResolver;
 use App\Services\Board\RecurringItemService;
 use App\Support\BoardEditGate;
@@ -42,6 +42,7 @@ class BoardItemController extends Controller
         private readonly BoardAutomationService $automation_service,
         private readonly BoardItemValueService $value_service,
         private readonly BoardItemScopeConversionService $scope_conversion_service,
+        private readonly ColumnPermissionService $column_permissions,
     ) {}
 
     /**
@@ -137,11 +138,25 @@ class BoardItemController extends Controller
      */
     public function store(StoreBoardItemRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
-
         $validated = $request->validated();
         $parent_id = $validated['parent_id'] ?? null;
         $after_item = isset($validated['after_item_id']) ? $item->items()->findOrFail($validated['after_item_id']) : null;
+
+        // A new subitem is part of its parent's work, so someone limited to
+        // their assigned items can still add subitems to one of them.
+        $parent_for_gate = $after_item?->parent_id !== null
+            ? BoardItem::find($after_item->parent_id)
+            : ($after_item === null && $parent_id !== null ? BoardItem::find($parent_id) : null);
+
+        if ($parent_for_gate !== null && $parent_for_gate->board_id === $item->id) {
+            BoardEditGate::authorizeItem($item, $request->user(), $parent_for_gate);
+        } else {
+            BoardEditGate::authorizeContent($item, $request->user());
+        }
+
+        if (! empty($validated['values'])) {
+            $this->column_permissions->authorizeEdit($item, $request->user(), array_keys($validated['values']));
+        }
 
         if ($after_item !== null) {
             $parent_id = $after_item->parent_id;
@@ -202,7 +217,7 @@ class BoardItemController extends Controller
     public function update(UpdateBoardItemRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $validated = $request->validated();
         $board_item->fill($validated)->save();
@@ -237,7 +252,7 @@ class BoardItemController extends Controller
     public function updateParent(UpdateBoardItemParentRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $validated = $request->validated();
         $parent_id = $validated['parent_id'] ?? null;
@@ -291,7 +306,7 @@ class BoardItemController extends Controller
     public function setRecurrence(SetBoardItemRecurrenceRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $validated = $request->validated();
         $today = Carbon::today();
@@ -325,7 +340,7 @@ class BoardItemController extends Controller
     public function clearRecurrence(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         BoardItemRecurrence::where('board_item_id', $board_item->id)->delete();
 
@@ -340,7 +355,8 @@ class BoardItemController extends Controller
     public function updateValues(UpdateBoardItemValuesRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
+        $this->column_permissions->authorizeEdit($item, $request->user(), array_keys($request->validated()['values']));
 
         $this->value_service->sync($item, $board_item, $request->validated()['values'], $request->user());
 
@@ -356,7 +372,7 @@ class BoardItemController extends Controller
     public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item): JsonResponse
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $this->deleteSubtree($board_item);
 
@@ -378,7 +394,7 @@ class BoardItemController extends Controller
      */
     public function bulkDuplicate(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeContent($item, $request->user());
 
         $originals = $item->items()->with(['values', 'childrenRecursive'])->whereIn('id', $request->validated()['item_ids'])->get();
         $with_subitems = $request->boolean('with_subitems', true);
@@ -409,7 +425,7 @@ class BoardItemController extends Controller
      */
     public function bulkMove(BulkMoveBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeContent($item, $request->user());
 
         $validated = $request->validated();
         $group_id = (int) $validated['group_id'];
@@ -441,10 +457,11 @@ class BoardItemController extends Controller
      */
     public function bulkSetValue(BulkSetColumnValueRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
-
         $validated = $request->validated();
         $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
+
+        $this->authorizeItems($item, $request, $items);
+        $this->column_permissions->authorizeEdit($item, $request->user(), [$validated['column_id']]);
 
         foreach ($items as $board_item) {
             $this->value_service->sync($item, $board_item, [$validated['column_id'] => $validated['value']], $request->user());
@@ -473,7 +490,7 @@ class BoardItemController extends Controller
      */
     public function reorder(ReorderBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeContent($item, $request->user());
 
         $validated = $request->validated();
         $touched_ids = [];
@@ -527,7 +544,7 @@ class BoardItemController extends Controller
      */
     public function bulkArchive(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
+        $this->authorizeItems($item, $request, $item->items()->whereIn('id', $request->validated()['item_ids'])->get());
 
         $item->items()->whereIn('id', $request->validated()['item_ids'])->update(['is_archived' => true]);
 
@@ -547,9 +564,8 @@ class BoardItemController extends Controller
      */
     public function bulkDestroy(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
-
         $items = $item->items()->whereIn('id', $request->validated()['item_ids'])->get();
+        $this->authorizeItems($item, $request, $items);
 
         foreach ($items as $board_item) {
             $this->deleteSubtree($board_item);
@@ -574,6 +590,28 @@ class BoardItemController extends Controller
     }
 
     /**
+     * Bulk counterpart of {@see BoardEditGate::authorizeItem()}: a member
+     * limited to their assigned items may only act on a selection made
+     * entirely of those items.
+     *
+     * @param  Collection<int, BoardItem>  $items
+     */
+    private function authorizeItems(WorkspaceNavigationItem $item, Request $request, Collection $items): void
+    {
+        if (BoardEditGate::allowsContent($item, $request->user())) {
+            return;
+        }
+
+        if ($items->isEmpty()) {
+            BoardEditGate::authorizeContent($item, $request->user());
+        }
+
+        foreach ($items as $board_item) {
+            BoardEditGate::authorizeItem($item, $request->user(), $board_item);
+        }
+    }
+
+    /**
      * Guard: abort with 404 when the item is not part of the board.
      */
     private function ensureItemBelongsToBoard(WorkspaceNavigationItem $item, BoardItem $board_item): void
@@ -582,34 +620,12 @@ class BoardItemController extends Controller
     }
 
     /**
-     * Assigns every Auto-number column in this item's scope its next
-     * sequential value (1, 2, 3, ...), scoped to that column alone — a
-     * board's second Auto-number column (if it ever added one) counts
-     * independently from the first. No-ops for a column the item already
-     * has a value for, so this is safe to call unconditionally from both
-     * `store()` (a client-supplied value never wins a race with this) and
-     * `copySubtree()` (after deliberately stripping the original's own
-     * auto-number value — see its own comment).
+     * Assigns every Auto-number column in this item's scope its next value,
+     * see {@see BoardItemValueService::assignAutoNumbers()}.
      */
     private function assignAutoNumberValues(BoardItem $board_item, string $scope): void
     {
-        $auto_number_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
-            ->where('scope', $scope)
-            ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
-            ->get(['id']);
-
-        foreach ($auto_number_columns as $column) {
-            if (BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->exists()) {
-                continue;
-            }
-
-            $next = BoardItemValue::where('column_id', $column->id)
-                ->pluck('value')
-                ->map(fn ($value) => is_numeric($value) ? (int) $value : 0)
-                ->max() ?? 0;
-
-            $board_item->values()->create(['column_id' => $column->id, 'value' => $next + 1]);
-        }
+        $this->value_service->assignAutoNumbers($board_item, $scope);
     }
 
     /**

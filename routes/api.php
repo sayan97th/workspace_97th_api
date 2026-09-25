@@ -27,6 +27,7 @@ use App\Http\Controllers\Board\BoardAutomationController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardExportController;
+use App\Http\Controllers\Board\BoardFormController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardImportController;
 use App\Http\Controllers\Board\BoardInvitationController;
@@ -44,15 +45,19 @@ use App\Http\Controllers\Board\BoardTrashController;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Board\BoardViewFileController;
 use App\Http\Controllers\Board\BoardViewImageController;
+use App\Http\Controllers\Board\BoardViewShareLinkController;
 use App\Http\Controllers\BrandingController as PublicBrandingController;
 use App\Http\Controllers\BroadcastAuthController;
 use App\Http\Controllers\Comment\SavedReplyController;
+use App\Http\Controllers\Favorite\FavoriteController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
+use App\Http\Controllers\Home\RecentBoardController;
 use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\SlackEventController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
 use App\Http\Controllers\Integration\SlackOAuthCallbackController;
+use App\Http\Controllers\MyWork\MyWorkController;
 use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\People\MentionTeamController;
 use App\Http\Controllers\People\PersonCardController;
@@ -64,6 +69,8 @@ use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Profile\SidebarPreferenceController;
 use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Controllers\Profile\WorkingStatusController;
+use App\Http\Controllers\PublicAccess\PublicFormController;
+use App\Http\Controllers\PublicAccess\PublicSharedViewController;
 use App\Http\Controllers\Search\GlobalSearchController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
@@ -135,7 +142,25 @@ Route::get('integrations/slack/callback', SlackOAuthCallbackController::class);
 Route::post('integrations/slack/events', SlackEventController::class)->middleware(['slack.signature', 'throttle:120,1']);
 
 // ─── Authenticated routes ───────────────────────────────────────────────────
+// Public, no account needed: a board form's respondents and the people a
+// board view was shared with through its read only link. Every token is an
+// unguessable random string, and both are throttled per IP.
+Route::prefix('public')->group(function () {
+    Route::get('forms/{token}', [PublicFormController::class, 'show'])->middleware('throttle:60,1');
+    Route::post('forms/{token}/submissions', [PublicFormController::class, 'submit'])->middleware('throttle:10,1');
+    Route::post('views/{token}', [PublicSharedViewController::class, 'show'])->middleware('throttle:30,1');
+});
+
 Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
+
+    // Personal navigation: the sidebar's Favorites, My Work, and the Home
+    // page's recently visited boards.
+    Route::get('favorites', [FavoriteController::class, 'index']);
+    Route::put('favorites/order', [FavoriteController::class, 'reorder']);
+    Route::put('favorites/{item}', [FavoriteController::class, 'store']);
+    Route::delete('favorites/{item}', [FavoriteController::class, 'destroy']);
+    Route::get('my-work', [MyWorkController::class, 'index']);
+    Route::get('home/recent-boards', [RecentBoardController::class, 'index']);
 
     // Broadcasting auth (JWT-based) — used by the frontend's Echo client to
     // subscribe to private channels, see routes/channels.php.
@@ -323,6 +348,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // exporting its primary (or a given) tab to Excel.
     Route::prefix('boards/{item}')->group(function () {
         Route::post('archive', [BoardController::class, 'archive']);
+        Route::patch('permissions', [BoardController::class, 'updatePermission']);
         Route::post('unarchive', [BoardController::class, 'unarchive']);
 
         Route::get('activity-log', [BoardActivityLogController::class, 'index']);
@@ -378,6 +404,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('reorder', [BoardColumnController::class, 'reorder']);
 
             Route::patch('{column}', [BoardColumnController::class, 'update']);
+            Route::patch('{column}/permissions', [BoardColumnController::class, 'updatePermissions']);
             Route::patch('{column}/move', [BoardColumnController::class, 'move']);
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
             Route::delete('{column}', [BoardColumnController::class, 'destroy']);
@@ -506,6 +533,16 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('{board_view}/chart-data', [BoardViewController::class, 'chartData']);
             Route::post('{board_view}/pin', [BoardViewController::class, 'togglePin']);
             Route::post('{board_view}/lock', [BoardViewController::class, 'toggleLock']);
+
+            Route::get('{board_view}/form', [BoardFormController::class, 'show']);
+            Route::patch('{board_view}/form', [BoardFormController::class, 'update']);
+            Route::post('{board_view}/form/regenerate-link', [BoardFormController::class, 'regenerateLink']);
+
+            Route::get('{board_view}/share-link', [BoardViewShareLinkController::class, 'show']);
+            Route::post('{board_view}/share-link', [BoardViewShareLinkController::class, 'store']);
+            Route::patch('{board_view}/share-link', [BoardViewShareLinkController::class, 'update']);
+            Route::delete('{board_view}/share-link', [BoardViewShareLinkController::class, 'destroy']);
+            Route::post('{board_view}/share-link/regenerate', [BoardViewShareLinkController::class, 'regenerate']);
             Route::post('{board_view}/images', [BoardViewImageController::class, 'store']);
 
             Route::prefix('{board_view}/files')->group(function () {

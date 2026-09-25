@@ -72,7 +72,7 @@ class BoardItemMoveController extends Controller
     {
         abort_if($board_item->board_id !== $item->id, 404);
         abort_if($board_item->parent_id !== null, 422, 'Only top-level items can be moved to another board.');
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $validated = $request->validated();
         abort_if((int) $validated['target_board_id'] === $item->id, 422, 'Use "Move to group" to move an item within the same board.');
@@ -81,7 +81,7 @@ class BoardItemMoveController extends Controller
             ->notArchived()
             ->where('workspace_id', $item->workspace_id)
             ->findOrFail($validated['target_board_id']);
-        BoardEditGate::authorize($target_board, $request->user());
+        BoardEditGate::authorizeContent($target_board, $request->user());
 
         $target_group = $target_board->groups()->findOrFail($validated['target_group_id']);
 

@@ -52,6 +52,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, WorkspaceNavigationItem> $childrenRecursive
  * @property-read User|null $creator
  * @property-read User|null $owner
+ * @property string $edit_permission
  * @property-read Collection<int, BoardColumn> $columns
  * @property-read Collection<int, BoardGroup> $groups
  * @property-read Collection<int, BoardItem> $items
@@ -71,6 +72,7 @@ use Illuminate\Support\Carbon;
     'href',
     'display_style',
     'board_type',
+    'edit_permission',
     'item_column_label',
     'item_column_width',
     'sub_item_column_width',

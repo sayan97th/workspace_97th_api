@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Favorite\UserFavoriteService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -32,7 +33,8 @@ class WorkspaceNavigationItemResource extends JsonResource
             'item_column_label' => $this->item_column_label,
             'item_column_width' => $this->item_column_width,
             'sub_item_column_width' => $this->sub_item_column_width,
-            'is_favorite' => $this->is_favorite,
+            // Favorites are personal, see UserFavoriteService.
+            'is_favorite' => app(UserFavoriteService::class)->isFavorite((int) $this->id, $request->user()),
             'is_priority' => $this->is_priority,
             'is_archived' => $this->is_archived,
             // Total updates (top-level + replies) on the board's discussion feed, powering the "Board updates"

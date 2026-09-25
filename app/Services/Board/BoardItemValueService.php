@@ -77,6 +77,37 @@ class BoardItemValueService
     }
 
     /**
+     * Assigns every Auto-number column in this item's scope its next
+     * sequential value (1, 2, 3, ...), scoped to that column alone, so a
+     * board's second Auto-number column (if it ever added one) counts
+     * independently from the first. No-ops for a column the item already
+     * has a value for, so this is safe to call unconditionally from
+     * item creation (a client-supplied value never wins a race with this),
+     * duplication (after deliberately stripping the original's own
+     * auto-number value) and form submissions.
+     */
+    public function assignAutoNumbers(BoardItem $board_item, string $scope): void
+    {
+        $auto_number_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
+            ->where('scope', $scope)
+            ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
+            ->get(['id']);
+
+        foreach ($auto_number_columns as $column) {
+            if (BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->exists()) {
+                continue;
+            }
+
+            $next = BoardItemValue::where('column_id', $column->id)
+                ->pluck('value')
+                ->map(fn ($value) => is_numeric($value) ? (int) $value : 0)
+                ->max() ?? 0;
+
+            $board_item->values()->create(['column_id' => $column->id, 'value' => $next + 1]);
+        }
+    }
+
+    /**
      * Notifies every person newly added to a people-type column value
      * (comparing against the currently-stored value), skipping self-assignment.
      * No-ops entirely when the column's own `config.notify_on_assignment` has

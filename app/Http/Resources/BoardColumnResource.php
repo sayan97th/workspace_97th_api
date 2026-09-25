@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\BoardColumn;
+use App\Services\Board\ColumnPermissionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -29,6 +30,25 @@ class BoardColumnResource extends JsonResource
             'config' => $this->config,
             'hideable' => $this->hideable,
             'pinnable' => $this->pinnable,
+            // Column permissions: `null` means everyone, otherwise
+            // `{user_ids, team_ids}` (board owners always pass).
+            'view_restriction' => $this->view_restriction,
+            'edit_restriction' => $this->edit_restriction,
+            'can_edit_values' => $this->canEditValues($request),
         ];
+    }
+
+    /**
+     * Whether the requesting user may change this column's cells.
+     */
+    private function canEditValues(Request $request): bool
+    {
+        if ($this->edit_restriction === null && $this->view_restriction === null) {
+            return true;
+        }
+
+        $board = $this->relationLoaded('board') ? $this->board : $this->board()->first();
+
+        return $board !== null && app(ColumnPermissionService::class)->canEdit($this->resource, $request->user(), $board);
     }
 }

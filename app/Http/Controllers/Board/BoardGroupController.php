@@ -69,7 +69,7 @@ class BoardGroupController extends Controller
      */
     public function store(StoreBoardGroupRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeStructure($item, $request->user());
 
         $validated = $request->validated();
         $view = $this->view_resolver->resolveForWrite($item, $validated['view_id'] ?? null);
@@ -144,7 +144,7 @@ class BoardGroupController extends Controller
     public function update(UpdateBoardGroupRequest $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeStructure($item, $request->user());
 
         $group->fill($request->validated())->save();
 
@@ -171,7 +171,7 @@ class BoardGroupController extends Controller
     public function move(MoveBoardGroupRequest $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeStructure($item, $request->user());
 
         DB::transaction(function () use ($group, $request) {
             $ordered_ids = BoardGroup::where('board_view_id', $group->board_view_id)
@@ -213,7 +213,7 @@ class BoardGroupController extends Controller
     public function archive(Request $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeStructure($item, $request->user());
 
         $group->update(['is_archived' => true, 'archived_at' => now()]);
 
@@ -231,7 +231,7 @@ class BoardGroupController extends Controller
     public function destroy(Request $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeStructure($item, $request->user());
 
         $group->delete();
 
@@ -254,7 +254,7 @@ class BoardGroupController extends Controller
     public function duplicate(DuplicateBoardGroupRequest $request, WorkspaceNavigationItem $item, BoardGroup $group): JsonResponse
     {
         $this->ensureGroupBelongsToBoard($item, $group);
-        BoardEditGate::authorize($item, $request->user());
+        BoardEditGate::authorizeStructure($item, $request->user());
 
         $copy = DB::transaction(function () use ($group) {
             BoardGroup::where('board_view_id', $group->board_view_id)

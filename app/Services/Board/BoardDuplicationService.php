@@ -2,6 +2,8 @@
 
 namespace App\Services\Board;
 
+use App\Http\Controllers\Board\BoardViewController;
+use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
@@ -12,10 +14,10 @@ use Illuminate\Support\Facades\DB;
  * Deep-copies a board view (tab) — its columns, groups, items and cell
  * values, plus its saved filter/sort/display state remapped onto the freshly
  * cloned columns — into a target board. The target is usually the same
- * board the source view belongs to ({@see \App\Http\Controllers\Board\BoardViewController::duplicate()},
+ * board the source view belongs to ({@see BoardViewController::duplicate()},
  * "Duplicate this view"), but is a brand-new board when the board options
  * menu's "Duplicate board" duplicates every one of a board's views in turn
- * (see {@see \App\Http\Controllers\Workspace\WorkspaceNavigationItemController::duplicate()}).
+ * (see {@see WorkspaceNavigationItemController::duplicate()}).
  */
 class BoardDuplicationService
 {
@@ -41,6 +43,9 @@ class BoardDuplicationService
                 'locked_by_id' => null,
                 'row_height' => $source->row_height,
                 'doc_content' => $source->doc_content,
+                // The builder settings are copied, the public token is not:
+                // the copy gets its own link the first time it is shared.
+                'form_config' => $source->form_config,
                 'created_by_id' => $created_by_id,
             ], $overrides));
 
@@ -53,6 +58,10 @@ class BoardDuplicationService
                     'position' => $column->position,
                     'width' => $column->width,
                     'config' => $column->config,
+                    // Column permissions travel with the copy, otherwise
+                    // duplicating a tab would expose restricted values.
+                    'edit_restriction' => $column->edit_restriction,
+                    'view_restriction' => $column->view_restriction,
                     'hideable' => $column->hideable,
                     'pinnable' => $column->pinnable,
                 ]);

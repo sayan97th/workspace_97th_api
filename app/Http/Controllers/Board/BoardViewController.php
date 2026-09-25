@@ -13,6 +13,7 @@ use App\Models\BoardViewUserOrder;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardDuplicationService;
 use App\Services\Board\ChartDataService;
+use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -72,6 +73,8 @@ class BoardViewController extends Controller
      */
     public function store(StoreBoardViewRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        BoardEditGate::authorizeStructure($item, $request->user());
+
         $validated = $request->validated();
 
         $view = $item->views()->create([
@@ -115,6 +118,7 @@ class BoardViewController extends Controller
     public function destroy(Request $request, WorkspaceNavigationItem $item, BoardView $board_view): JsonResponse
     {
         $this->ensureViewBelongsToBoard($item, $board_view);
+        BoardEditGate::authorizeStructure($item, $request->user());
         $this->ensureViewUnlocked($board_view);
 
         if ($board_view->is_primary) {
@@ -146,6 +150,7 @@ class BoardViewController extends Controller
     public function duplicate(Request $request, WorkspaceNavigationItem $item, BoardView $board_view, BoardDuplicationService $duplication_service): JsonResponse
     {
         $this->ensureViewBelongsToBoard($item, $board_view);
+        BoardEditGate::authorizeStructure($item, $request->user());
         $this->ensureViewUnlocked($board_view);
 
         $copy = $duplication_service->duplicateView(
@@ -267,5 +272,4 @@ class BoardViewController extends Controller
     {
         return (int) $item->views()->max('position') + 1;
     }
-
 }

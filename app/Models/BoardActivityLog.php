@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\BoardEditPermission;
 use App\Services\Board\RecurringItemService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
@@ -59,6 +60,9 @@ class BoardActivityLog extends Model
 
     /** A {@see BoardItemRecurrence} fired and recreated its item — see {@see RecurringItemService}. */
     public const ACTION_ITEM_RECURRED = 'item_recurred';
+
+    /** A board owner changed the board permission mode, see {@see BoardEditPermission}. */
+    public const ACTION_PERMISSIONS_CHANGED = 'permissions_changed';
 
     /**
      * @return BelongsTo<WorkspaceNavigationItem, $this>

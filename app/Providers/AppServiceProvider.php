@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Services\Board\ColumnPermissionService;
+use App\Services\Favorite\UserFavoriteService;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Support\Facades\Date;
@@ -17,7 +19,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Memoizes column permission lookups for the lifetime of one request.
+        $this->app->scoped(ColumnPermissionService::class);
+        $this->app->scoped(UserFavoriteService::class);
     }
 
     /**

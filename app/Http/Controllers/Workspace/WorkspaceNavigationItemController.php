@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Workspace;
 
 use App\Http\Controllers\Board\BoardGroupController;
+use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\ReorderWorkspaceNavigationItemsRequest;
@@ -16,6 +17,7 @@ use App\Models\WorkspaceNavCollapseState;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardDuplicationService;
+use App\Services\Favorite\UserFavoriteService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -27,6 +29,7 @@ class WorkspaceNavigationItemController extends Controller
     public function __construct(
         private readonly BoardDuplicationService $duplication_service,
         private readonly BoardActivityLogger $activity_logger,
+        private readonly UserFavoriteService $favorites,
     ) {}
 
     /**
@@ -95,11 +98,14 @@ class WorkspaceNavigationItemController extends Controller
             'href' => $validated['href'] ?? null,
             'display_style' => $validated['display_style'] ?? null,
             'board_type' => $validated['board_type'] ?? WorkspaceNavigationItem::BOARD_TYPE_MAIN,
-            'is_favorite' => $validated['is_favorite'] ?? false,
             'is_priority' => $validated['is_priority'] ?? false,
             'position' => $validated['position'] ?? $this->nextPosition($workspace, $parent_id),
             'created_by_id' => $request->user()?->id,
         ]);
+
+        if (! empty($validated['is_favorite']) && $request->user()) {
+            $this->favorites->set($request->user(), $item->id, true);
+        }
 
         return response()->json([
             'message' => 'Navigation item created successfully.',
@@ -152,6 +158,13 @@ class WorkspaceNavigationItemController extends Controller
         $validated = $request->validated();
         $previous_label = $item->label;
         $previous_board_type = $item->board_type;
+
+        // Starring is personal: it lands in the caller's own Favorites and
+        // never changes the item for anybody else.
+        if (array_key_exists('is_favorite', $validated)) {
+            $this->favorites->set($request->user(), $item->id, (bool) $validated['is_favorite']);
+            unset($validated['is_favorite']);
+        }
 
         if (array_key_exists('label', $validated)) {
             $item->slug = $this->uniqueSlug($workspace, $item->parent_id, $validated['label'], $item->id);
@@ -222,7 +235,7 @@ class WorkspaceNavigationItemController extends Controller
      * Sidebar drag-and-drop reordering (and the "Move up"/"Move down" quick
      * actions, which just submit a two-item swap) — the full new sibling
      * order for `target_parent_id` is resequenced server-side in one
-     * transaction, mirroring {@see \App\Http\Controllers\Board\BoardItemController::reorder()}.
+     * transaction, mirroring {@see BoardItemController::reorder()}.
      * `source_ordered_ids`/`source_parent_id` are only sent when the dragged
      * item changed folders, so the old parent's remaining children stay
      * contiguously ordered too.
