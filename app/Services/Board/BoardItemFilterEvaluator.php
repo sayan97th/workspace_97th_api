@@ -41,6 +41,9 @@ class BoardItemFilterEvaluator
 
     public const UPDATED_AT_FIELD_ID = '__updated_at__';
 
+    /** The row star (`board_items.is_priority`), filtered as a checkbox: starred or not. */
+    public const STARRED_FIELD_ID = '__starred__';
+
     private const SCOPE_ITEM = 'item';
 
     private const SCOPE_SUBITEM = 'subitem';
@@ -664,6 +667,7 @@ class BoardItemFilterEvaluator
             self::GROUP_FIELD_ID => self::KIND_GROUP,
             self::CREATED_BY_FIELD_ID => self::KIND_PEOPLE,
             self::CREATED_AT_FIELD_ID, self::UPDATED_AT_FIELD_ID => self::KIND_DATE,
+            self::STARRED_FIELD_ID => self::KIND_CHECKBOX,
             default => null,
         };
         if ($virtual_kind !== null) {
@@ -812,6 +816,10 @@ class BoardItemFilterEvaluator
      */
     private function checked(?BoardItem $item, array $field): bool
     {
+        if ($field['meta'] === self::STARRED_FIELD_ID) {
+            return (bool) $item?->is_priority;
+        }
+
         $value = $field['column'] ? $this->rawValue($item, $field['column']) : null;
 
         return $value === true || $value === 'true' || $value === 1 || $value === '1';

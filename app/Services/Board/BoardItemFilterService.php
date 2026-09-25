@@ -89,6 +89,7 @@ class BoardItemFilterService
                 'board_items.id',
                 'board_items.group_id',
                 'board_items.name',
+                'board_items.is_priority',
                 'board_items.created_by_id',
                 'board_items.created_at',
                 'board_items.updated_at',
