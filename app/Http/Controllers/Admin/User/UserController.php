@@ -12,38 +12,30 @@ use App\Jobs\SendEmailJob;
 use App\Mail\StaffInvitationMail;
 use App\Models\StaffInvitation;
 use App\Models\User;
+use App\Support\Admin\AdminUserQuery;
+use App\Support\Admin\UserManagementGate;
 use App\Support\AuditLogger;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
 
 class UserController extends Controller
 {
-    private const STAFF_ROLES = ['super_admin', 'admin', 'staff'];
-
-    private const ALLOWED_SORT_FIELDS = ['name', 'email', 'role', 'department', 'status', 'created_at'];
-
-    /** Highest-privilege first, used to rank a user's role for sorting when they hold more than one. */
-    private const ROLE_SORT_PRIORITY = ['super_admin', 'admin', 'staff', 'client'];
-
     private const DEFAULT_PER_PAGE = 25;
 
     private const MAX_PER_PAGE = 100;
 
     /**
      * GET /api/admin/users
+     *
+     * Filters are documented on {@see AdminUserQuery}, which the CSV export and the bulk
+     * actions share so every one of them agrees on which users a filter matches.
      */
     public function index(Request $request): JsonResponse
     {
         $type = $request->query('type');
-        $search = $request->query('search');
-        $role = $request->query('role');
         $sort_field = $request->query('sort_field', 'created_at');
         $sort_direction = $request->query('sort_direction', 'desc');
-        $email_status = $request->query('email_status');
-        $account_status = $request->query('account_status');
-        $department = $request->query('department');
 
         if ($type !== null && ! \in_array($type, ['staff', 'client'], true)) {
             return response()->json([
@@ -52,7 +44,7 @@ class UserController extends Controller
             ], 422);
         }
 
-        if (! \in_array($sort_field, self::ALLOWED_SORT_FIELDS, true)) {
+        if (! \in_array($sort_field, AdminUserQuery::ALLOWED_SORT_FIELDS, true)) {
             return response()->json([
                 'message' => 'The sort_field value is invalid.',
                 'errors' => ['sort_field' => ['The selected sort field is invalid.']],
@@ -63,56 +55,8 @@ class UserController extends Controller
             $sort_direction = 'asc';
         }
 
-        if ($role !== null && ! \in_array($role, self::STAFF_ROLES, true) && $role !== 'client') {
-            $role = null;
-        }
-
-        $query = User::with(['roles:id,name,display_name', 'department:id,name']);
-        $this->applySort($query, $sort_field, $sort_direction);
-
-        if ($type === 'staff') {
-            $query->whereHas('roles', fn ($q) => $q->whereIn('name', self::STAFF_ROLES));
-        } elseif ($type === 'client') {
-            $query->whereHas('roles', fn ($q) => $q->where('name', 'client'))
-                ->whereDoesntHave('roles', fn ($q) => $q->whereIn('name', self::STAFF_ROLES));
-        }
-
-        if ($role !== null) {
-            $query->whereHas('roles', fn ($q) => $q->where('name', $role));
-        }
-
-        if ($search !== null && $search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->where('first_name', 'LIKE', "%{$search}%")
-                    ->orWhere('last_name', 'LIKE', "%{$search}%")
-                    ->orWhere('email', 'LIKE', "%{$search}%");
-            });
-        }
-
-        if ($email_status === 'verified') {
-            $query->whereNotNull('email_verified_at');
-        } elseif ($email_status === 'unverified') {
-            $query->whereNull('email_verified_at');
-        }
-
-        if ($account_status === 'active') {
-            $query->where('is_active', true);
-        } elseif ($account_status === 'disabled') {
-            $query->where('is_active', false);
-        } elseif ($account_status === 'deleted') {
-            $query->onlyTrashed();
-        }
-
-        if ($department === 'unassigned') {
-            // Not just `whereNull('department_id')`: a department that's been soft-deleted
-            // still leaves its old members' `department_id` column set, but the `department`
-            // relation (and therefore `UserWithRolesResource`) already treats them as
-            // unassigned since the relation query excludes trashed rows — this filter needs
-            // to agree with what the UI actually shows.
-            $query->whereDoesntHave('department');
-        } elseif ($department !== null && ctype_digit($department)) {
-            $query->where('department_id', (int) $department);
-        }
+        $query = AdminUserQuery::fromRequest($request);
+        AdminUserQuery::applySort($query, $sort_field, $sort_direction);
 
         // Clamped to [1, MAX_PER_PAGE] so a stray 0/negative value never reaches paginate(),
         // and so the page size stays reasonable for a UI table regardless of what's requested.
@@ -382,66 +326,8 @@ class UserController extends Controller
         return ! in_array($role, ['super_admin', 'admin'], true);
     }
 
-    /**
-     * Determine if the acting user is allowed to change the target user's active status.
-     *
-     * Super admins can manage anyone; plain admins may only manage client-only accounts.
-     */
     private function actorCanManage(User $actor, User $target): bool
     {
-        if ($actor->hasRole('super_admin')) {
-            return true;
-        }
-
-        $target_roles = $target->roles->pluck('name');
-
-        return $target_roles->intersect(self::STAFF_ROLES)->isEmpty();
-    }
-
-    /**
-     * Orders the user list by one of the columns the "Users" table renders. `role` and
-     * `department` aren't plain columns on `users` (roles are a many-to-many relation,
-     * department names live on a soft-deletable related table), so each gets its own
-     * comparable expression rather than a plain `orderBy()`.
-     *
-     * @param  Builder<User>  $query
-     */
-    private function applySort(Builder $query, string $sort_field, string $sort_direction): void
-    {
-        switch ($sort_field) {
-            case 'name':
-                $query->orderBy('first_name', $sort_direction)->orderBy('last_name', $sort_direction);
-                break;
-
-            case 'status':
-                $query->orderBy('is_active', $sort_direction);
-                break;
-
-            case 'department':
-                // Left join (not the `department` relation) so users with no department, or
-                // whose department was soft-deleted, still appear, sorted by name being null.
-                $query->select('users.*')
-                    ->leftJoin('departments', function ($join) {
-                        $join->on('departments.id', '=', 'users.department_id')
-                            ->whereNull('departments.deleted_at');
-                    })
-                    ->orderBy('departments.name', $sort_direction);
-                break;
-
-            case 'role':
-                $case_when = collect(self::ROLE_SORT_PRIORITY)
-                    ->map(fn (string $role, int $index) => "WHEN EXISTS (SELECT 1 FROM user_role INNER JOIN roles ON roles.id = user_role.role_id WHERE user_role.user_id = users.id AND roles.name = '{$role}') THEN ".($index + 1))
-                    ->implode(' ');
-                $query->orderByRaw("(CASE {$case_when} ELSE ".(count(self::ROLE_SORT_PRIORITY) + 1).' END) '.$sort_direction);
-                break;
-
-            case 'email':
-                $query->orderBy('email', $sort_direction);
-                break;
-
-            default:
-                $query->orderBy('created_at', $sort_direction);
-                break;
-        }
+        return UserManagementGate::canManage($actor, $target);
     }
 }

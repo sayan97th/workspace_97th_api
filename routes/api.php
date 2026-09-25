@@ -2,17 +2,26 @@
 
 use App\Http\Controllers\AccountTeam\AccountTeamController;
 use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
+use App\Http\Controllers\Admin\AccountSetting\AccountPermissionsController;
 use App\Http\Controllers\Admin\AccountSetting\AccountSettingController;
 use App\Http\Controllers\Admin\AccountSetting\AdvancedSettingsController;
 use App\Http\Controllers\Admin\AccountSetting\AuthenticationSettingsController;
 use App\Http\Controllers\Admin\AccountSetting\BrandingController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\BoardOwnershipController;
+use App\Http\Controllers\Admin\Content\ContentDirectoryController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\Impersonation\ImpersonationController;
+use App\Http\Controllers\Admin\Invitation\StaffInvitationController as AdminStaffInvitationController;
+use App\Http\Controllers\Admin\ProfileField\UserProfileFieldController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\SessionController as AdminSessionController;
+use App\Http\Controllers\Admin\Usage\UsageStatsController;
+use App\Http\Controllers\Admin\User\UserBulkActionController;
 use App\Http\Controllers\Admin\User\UserController as AdminUserController;
+use App\Http\Controllers\Admin\User\UserDetailsController;
+use App\Http\Controllers\Admin\User\UserExportController;
+use App\Http\Controllers\Admin\User\UserProfileFieldValueController;
 use App\Http\Controllers\Admin\WebsocketTest\WebsocketTestController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\BoardInvitationController as AuthBoardInvitationController;
@@ -171,6 +180,10 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // staff, since the top bar shows it for everyone. Managed at `/admin/account-settings/*`.
     Route::get('branding', [PublicBrandingController::class, 'show']);
 
+    // The caller's own account permissions (Administration > Permissions), so the app can hide
+    // controls such as "New workspace" that the API would reject for their role.
+    Route::get('account-permissions/me', [AccountPermissionsController::class, 'mine']);
+
     // Top bar "Search for anything..." box, a typeahead so it is throttled more loosely than
     // most endpoints, the frontend already debounces and cancels stale requests.
     Route::get('search', GlobalSearchController::class)->middleware('throttle:120,1');
@@ -208,7 +221,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // "updates" (item- and board-level) the current user has visibility on.
     Route::prefix('feed')->group(function () {
         Route::get('updates', [FeedUpdateController::class, 'index']);
-        Route::get('updates/export', [FeedUpdateController::class, 'export'])->middleware('throttle:10,1');
+        Route::get('updates/export', [FeedUpdateController::class, 'export'])->middleware(['throttle:10,1', 'account.permission:export_data']);
         Route::get('boards', [FeedUpdateController::class, 'boards']);
         Route::get('boards/{board}/people', [FeedUpdateController::class, 'people']);
         Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
@@ -234,7 +247,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::prefix('integrations/slack')->group(function () {
         Route::get('/', [SlackIntegrationController::class, 'show']);
         Route::get('channels', [SlackIntegrationController::class, 'channels']);
-        Route::post('link-url', [SlackIntegrationController::class, 'linkUrl']);
+        Route::post('link-url', [SlackIntegrationController::class, 'linkUrl'])->middleware('account.permission:use_integrations');
         Route::delete('link', [SlackIntegrationController::class, 'unlink']);
         Route::post('link/test', [SlackIntegrationController::class, 'sendTest'])->middleware('throttle:6,1');
 
@@ -280,7 +293,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Workspaces — dynamic sidebar + nested navigation tree
     Route::prefix('workspaces')->group(function () {
         Route::get('/', [WorkspaceController::class, 'index']);
-        Route::post('/', [WorkspaceController::class, 'store']);
+        Route::post('/', [WorkspaceController::class, 'store'])->middleware('account.permission:create_workspaces');
 
         // Id-based lookup for the frontend's `/workspaces/{workspace_id}/...`
         // tab routes, which only have the numeric id from the URL — declared
@@ -302,7 +315,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::delete('{workspace}/members/{member}', [WorkspaceMemberController::class, 'destroy']);
         Route::get('{workspace}/invitations', [WorkspaceInvitationController::class, 'index']);
         Route::get('{workspace}/invitations/available-users', [WorkspaceInvitationController::class, 'availableUsers']);
-        Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store']);
+        Route::post('{workspace}/invitations', [WorkspaceInvitationController::class, 'store'])->middleware('account.permission:invite_members');
         Route::delete('{workspace}/invitations/{invitation:id}', [WorkspaceInvitationController::class, 'destroy']);
         Route::get('{workspace}/invite-link', [WorkspaceInviteLinkController::class, 'show']);
         Route::patch('{workspace}/invite-link', [WorkspaceInviteLinkController::class, 'update']);
@@ -324,7 +337,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
             Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
             Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate']);
-            Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy']);
+            Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy'])->middleware('account.permission:delete_boards');
         });
     });
 
@@ -339,7 +352,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // "Invite" dialog.
     Route::prefix('boards/{item}')->group(function () {
         Route::get('invitations', [BoardInvitationController::class, 'index']);
-        Route::post('invitations', [BoardInvitationController::class, 'store']);
+        Route::post('invitations', [BoardInvitationController::class, 'store'])->middleware('account.permission:invite_members');
         Route::delete('invitations/{invitation:id}', [BoardInvitationController::class, 'destroy']);
         Route::delete('collaborators/{collaborator}', [BoardInvitationController::class, 'removeCollaborator']);
     });
@@ -360,7 +373,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::patch('trash/groups/{group}/restore', [BoardTrashController::class, 'restoreGroup']);
         Route::delete('trash/groups/{group}', [BoardTrashController::class, 'forceDeleteGroup']);
 
-        Route::get('export', [BoardExportController::class, 'export']);
+        Route::get('export', [BoardExportController::class, 'export'])->middleware('account.permission:export_data');
     });
 
     // Board options menu's "Give feedback" — a free-form product note,
@@ -484,7 +497,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{board_item}/recurrence', [BoardItemController::class, 'setRecurrence']);
             Route::delete('{board_item}/recurrence', [BoardItemController::class, 'clearRecurrence']);
             Route::patch('{board_item}/board', [BoardItemMoveController::class, 'store']);
-            Route::get('{board_item}/updates/export', [BoardItemUpdatesExportController::class, 'export']);
+            Route::get('{board_item}/updates/export', [BoardItemUpdatesExportController::class, 'export'])->middleware('account.permission:export_data');
             Route::post('{board_item}/mute', [BoardItemNotificationMuteController::class, 'store']);
             Route::delete('{board_item}/mute', [BoardItemNotificationMuteController::class, 'destroy']);
             Route::delete('{board_item}', [BoardItemController::class, 'destroy']);
@@ -601,7 +614,43 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Admin — staff-level roles and above
     Route::middleware('role:super_admin,admin,staff')->prefix('admin')->group(function () {
         Route::get('users', [AdminUserController::class, 'index']);
+        // Literal segments ahead of `users/{user}` so they are not swallowed by model binding.
+        Route::get('users/export', UserExportController::class)->middleware('role:super_admin,admin');
+        Route::post('users/bulk', UserBulkActionController::class)->middleware('role:super_admin,admin');
         Route::get('users/{user}', [AdminUserController::class, 'show'])->withTrashed();
+        Route::get('users/{user}/details', UserDetailsController::class)->withTrashed();
+
+        // Account invitations sent from Administration > Users, with resend and cancel.
+        Route::get('invitations', [AdminStaffInvitationController::class, 'index']);
+        Route::middleware('role:super_admin,admin')->group(function () {
+            Route::post('invitations/{invitation:id}/resend', [AdminStaffInvitationController::class, 'resend']);
+            Route::delete('invitations/{invitation:id}', [AdminStaffInvitationController::class, 'destroy']);
+        });
+
+        // Custom user profile fields (Administration > Customization > Profile fields).
+        // Readable by staff since the Users table renders them as columns.
+        Route::get('profile-fields', [UserProfileFieldController::class, 'index']);
+        Route::middleware('role:super_admin,admin')->group(function () {
+            Route::post('profile-fields', [UserProfileFieldController::class, 'store']);
+            Route::put('profile-fields/order', [UserProfileFieldController::class, 'reorder']);
+            Route::patch('profile-fields/{field}', [UserProfileFieldController::class, 'update']);
+            Route::delete('profile-fields/{field}', [UserProfileFieldController::class, 'destroy']);
+            Route::put('users/{user}/profile-fields', UserProfileFieldValueController::class);
+        });
+
+        // Usage stats: KPI totals, daily active users and most active boards and people.
+        Route::get('usage', UsageStatsController::class);
+
+        // Content directory and Tidy up: every board in the account, with bulk archive,
+        // restore and owner reassignment. Admin+ only, it ignores board privacy.
+        Route::prefix('content')->middleware('role:super_admin,admin')->group(function () {
+            Route::get('/', [ContentDirectoryController::class, 'index']);
+            Route::get('filter-options', [ContentDirectoryController::class, 'filterOptions']);
+            Route::get('export', [ContentDirectoryController::class, 'export']);
+            Route::post('archive', [ContentDirectoryController::class, 'archive']);
+            Route::post('unarchive', [ContentDirectoryController::class, 'unarchive']);
+            Route::post('reassign', [ContentDirectoryController::class, 'reassign']);
+        });
 
         Route::middleware('role:super_admin,admin')->group(function () {
             Route::patch('users/{user}', [AdminUserController::class, 'update']);
@@ -639,10 +688,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         // Authentication policy, Advanced) — a single settings row, see AccountSetting::current().
         Route::prefix('account-settings')->group(function () {
             Route::get('/', [AccountSettingController::class, 'show']);
+            Route::get('permissions', [AccountPermissionsController::class, 'show']);
 
             Route::middleware('role:super_admin,admin')->group(function () {
                 Route::patch('profile', [AccountSettingController::class, 'updateProfile']);
                 Route::patch('preferences', [AccountSettingController::class, 'updatePreferences']);
+                Route::patch('defaults', [AccountSettingController::class, 'updateDefaults']);
+                Route::patch('permissions', [AccountPermissionsController::class, 'update']);
                 Route::post('logo', [BrandingController::class, 'storeLogo']);
                 Route::delete('logo', [BrandingController::class, 'destroyLogo']);
                 Route::post('email-header', [BrandingController::class, 'storeEmailHeader']);
@@ -689,6 +741,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         // Account-wide session management (view/revoke any user's active session).
         Route::prefix('sessions')->middleware('role:super_admin,admin')->group(function () {
             Route::get('/', [AdminSessionController::class, 'index']);
+            Route::delete('users/{user}', [AdminSessionController::class, 'destroyForUser']);
             Route::delete('{session}', [AdminSessionController::class, 'destroy']);
             Route::delete('/', [AdminSessionController::class, 'destroyAll']);
         });

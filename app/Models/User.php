@@ -84,6 +84,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Collection<int, AccountTeam> $accountTeams
  * @property-read Collection<int, UserSession> $sessions
  * @property-read Department|null $department
+ * @property-read Collection<int, UserProfileFieldValue> $profileFieldValues
  * @property-read SlackUserLink|null $slackLink
  */
 #[Fillable([
@@ -111,6 +112,35 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     protected $attributes = [
         'is_active' => true,
     ];
+
+    /**
+     * Account defaults (Administration > Account) a brand new user starts with. Only fills
+     * the locale preferences the creating code did not set itself, and never creates the
+     * settings row, so factories and tests without one keep the column defaults.
+     */
+    private const ACCOUNT_DEFAULT_ATTRIBUTES = [
+        'timezone' => 'default_timezone',
+        'language' => 'default_language',
+        'date_format' => 'default_date_format',
+        'time_format' => 'default_time_format',
+        'first_day_of_week' => 'default_first_day_of_week',
+    ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (User $user) {
+            $settings = AccountSetting::query()->first();
+            if (! $settings) {
+                return;
+            }
+
+            foreach (self::ACCOUNT_DEFAULT_ATTRIBUTES as $attribute => $setting_key) {
+                if ($user->getAttribute($attribute) === null && $settings->{$setting_key} !== null) {
+                    $user->setAttribute($attribute, $settings->{$setting_key});
+                }
+            }
+        });
+    }
 
     /**
      * Get the attributes that should be cast.
@@ -322,6 +352,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     public function sessions(): HasMany
     {
         return $this->hasMany(UserSession::class);
+    }
+
+    /**
+     * Values for the account's custom profile fields (Administration > Profile fields).
+     *
+     * @return HasMany<UserProfileFieldValue, $this>
+     */
+    public function profileFieldValues(): HasMany
+    {
+        return $this->hasMany(UserProfileFieldValue::class);
     }
 
     /**

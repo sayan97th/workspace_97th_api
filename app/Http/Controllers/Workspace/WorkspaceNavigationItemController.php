@@ -18,6 +18,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardDuplicationService;
 use App\Services\Favorite\UserFavoriteService;
+use App\Support\AccountPermissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -86,6 +87,12 @@ class WorkspaceNavigationItemController extends Controller
     {
         $validated = $request->validated();
         $parent_id = $validated['parent_id'] ?? null;
+
+        // Folders stay open to everyone, only new boards, docs and dashboards are gated by the
+        // account's "Create boards" permission (Administration > Permissions).
+        if ($validated['type'] === WorkspaceNavigationItem::TYPE_LEAF) {
+            AccountPermissions::authorize($request->user(), AccountPermissions::CREATE_BOARDS);
+        }
 
         $item = $workspace->navigationItems()->create([
             'parent_id' => $parent_id,

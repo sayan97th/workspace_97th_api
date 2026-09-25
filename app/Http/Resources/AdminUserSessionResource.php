@@ -24,12 +24,15 @@ class AdminUserSessionResource extends JsonResource
         return [
             'id' => $this->id,
             'device' => $this->device_label ?? UserAgentParser::parse($this->user_agent),
+            'device_type' => UserAgentParser::deviceType($this->user_agent),
+            'created_at' => $this->created_at,
             'ip_address' => $this->ip_address,
             'last_used_at' => $this->last_used_at,
             'is_revoked' => $this->revoked_at !== null,
             'user' => $this->whenLoaded('user', fn () => $this->user ? [
                 'id' => $this->user->id,
                 'full_name' => $this->user->full_name,
+                'email' => $this->user->email,
                 'profile_photo_url' => $this->user->profile_photo_url,
             ] : null),
         ];

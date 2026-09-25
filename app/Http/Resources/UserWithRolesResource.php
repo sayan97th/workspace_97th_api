@@ -5,6 +5,7 @@ namespace App\Http\Resources;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Carbon;
 
 /**
  * @mixin User
@@ -39,6 +40,16 @@ class UserWithRolesResource extends JsonResource
                 'id' => $this->department->id,
                 'name' => $this->department->name,
             ] : null),
+            'job_title' => $this->job_title,
+            // Only present on the Administration list, which adds it as a subselect.
+            'last_active_at' => $this->when(
+                array_key_exists('last_active_at', $this->resource->getAttributes()),
+                fn () => $this->resource->getAttribute('last_active_at') ? Carbon::parse($this->resource->getAttribute('last_active_at'))->toIso8601String() : null,
+            ),
+            // Custom profile field values keyed by field id (Administration > Profile fields).
+            'profile_fields' => $this->whenLoaded('profileFieldValues', fn () => (object) $this->profileFieldValues
+                ->mapWithKeys(fn ($value) => [(string) $value->field_id => $value->value])
+                ->all()),
         ];
     }
 }

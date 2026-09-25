@@ -48,4 +48,39 @@ class UserAgentParser
             default => null,
         };
     }
+
+    /**
+     * Coarse device class for Administration > Sessions' "Device type" filter. Kept in sync
+     * with the SQL `LIKE` patterns in {@see deviceTypeConditions()}.
+     */
+    public static function deviceType(?string $user_agent): string
+    {
+        if (! $user_agent) {
+            return 'desktop';
+        }
+
+        if (preg_match('/ipad|tablet/i', $user_agent) || (preg_match('/android/i', $user_agent) && ! preg_match('/mobile/i', $user_agent))) {
+            return 'tablet';
+        }
+
+        if (preg_match('/mobile|iphone|ipod/i', $user_agent)) {
+            return 'mobile';
+        }
+
+        return 'desktop';
+    }
+
+    /**
+     * SQL fragments (with bindings) matching {@see deviceType()}, for filtering sessions in
+     * the database instead of in PHP.
+     *
+     * @return array{tablet: string, mobile: string}
+     */
+    public static function deviceTypeConditions(string $column = 'user_agent'): array
+    {
+        $tablet = "({$column} LIKE '%iPad%' OR {$column} LIKE '%Tablet%' OR ({$column} LIKE '%Android%' AND {$column} NOT LIKE '%Mobile%'))";
+        $mobile = "(NOT {$tablet} AND ({$column} LIKE '%Mobile%' OR {$column} LIKE '%iPhone%' OR {$column} LIKE '%iPod%'))";
+
+        return ['tablet' => $tablet, 'mobile' => $mobile];
+    }
 }

@@ -43,12 +43,20 @@ use Illuminate\Support\Facades\Storage;
  * @property int|null $panic_mode_activated_by
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
+ * @property string|null $default_timezone
+ * @property string $default_language
+ * @property string $default_date_format
+ * @property string $default_time_format
+ * @property string $default_first_day_of_week
+ * @property array<string, array<string, bool>>|null $account_permissions
  * @property-read string|null $logo_url
  * @property-read string|null $email_header_url
  * @property-read User|null $panicModeActivator
  */
 #[Fillable([
     'account_name', 'account_url', 'weekend_start', 'show_weekends', 'home_page',
+    'default_timezone', 'default_language', 'default_date_format', 'default_time_format', 'default_first_day_of_week',
+    'account_permissions',
     'logo_path', 'email_header_path',
     'two_factor_enforced', 'google_sso_enabled', 'saml_sso_enabled', 'saml_metadata',
     'scim_enabled', 'scim_token', 'guest_approval_enabled', 'approved_domains',
@@ -77,6 +85,7 @@ class AccountSetting extends Model
             'saml_sso_enabled' => 'boolean',
             'panic_mode_active' => 'boolean',
             'panic_mode_activated_at' => 'datetime',
+            'account_permissions' => 'array',
         ];
     }
 
