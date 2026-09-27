@@ -153,9 +153,10 @@ test('auto-detects a sparsely-filled free-text column as long text instead of ta
     expect($description_value->value)->toBe('Reported after a client call on 2024-01-05, please verify with QA before shipping.');
 
     // The genuinely short, comma-separated "Tools" column is unaffected — it
-    // must still resolve to a real tags column with its options intact.
+    // must still resolve to a real multi-select (Dropdown, monday.com's own
+    // comma-separated export) with its options intact.
     $tools_column = $board->columns()->where('scope', BoardColumn::SCOPE_ITEM)->where('key', 'tools')->firstOrFail();
-    expect($tools_column->type)->toBe(BoardColumn::TYPE_TAGS);
+    expect($tools_column->type)->toBe(BoardColumn::TYPE_DROPDOWN);
     expect(collect($tools_column->config['options'])->pluck('label')->all())->toEqualCanonicalizing(['backend', 'urgent']);
 });
 

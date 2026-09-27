@@ -4,6 +4,7 @@ use App\Jobs\ProcessBoardImportJob;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardImportJob;
+use App\Models\BoardTag;
 use App\Models\BoardView;
 use App\Models\User;
 use App\Models\Workspace;
@@ -376,4 +377,85 @@ test('the cancel endpoint flags a still-processing job without touching a comple
     $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/{$completed_job->id}/cancel")
         ->assertOk()
         ->assertJsonPath('data.cancel_requested', false);
+});
+
+test('analyze explains why each column got its suggested type', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+
+    $csv = "Name,Contact,Brief,Done\nTask One,one@example.com,Spec - https://example.com/one,v\nTask Two,two@example.com,https://example.com/two,v\n";
+
+    $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", ['file' => fakeFlatCsvUpload($csv)])
+        ->assertOk()
+        ->assertJsonPath('source_columns.1.suggested_type', BoardColumn::TYPE_EMAIL)
+        ->assertJsonPath('source_columns.1.detection_reason', 'Values are email addresses')
+        ->assertJsonPath('source_columns.2.suggested_type', BoardColumn::TYPE_LINK)
+        ->assertJsonPath('source_columns.3.suggested_type', BoardColumn::TYPE_CHECKBOX)
+        ->assertJsonPath('source_columns.3.detection_reason', 'All 2 values are checkmarks');
+});
+
+test('commit writes link, email and tags values in the shapes their columns read', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+
+    $csv = "Name,Contact,Brief,Tags\nTask One,one@example.com,Spec - https://example.com/one,\"urgent, backend\"\n";
+
+    $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", ['file' => fakeFlatCsvUpload($csv)])->json();
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $analyze['import_token'],
+        'new_group_name' => 'Imported table',
+        'mappings' => createMappingsFor($analyze['source_columns']),
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
+
+    $item = BoardGroup::where('board_id', $board->id)->firstOrFail()->items()->firstOrFail();
+    $values = $item->values()->with('column')->get()->mapWithKeys(fn ($value) => [$value->column->label => $value->value]);
+
+    $tag_labels = BoardTag::where('board_id', $board->id)->pluck('label', 'id');
+
+    expect($values['Contact'])->toBe('one@example.com')
+        ->and($values['Brief'])->toBe(['url' => 'https://example.com/one', 'text' => 'Spec'])
+        ->and(collect($values['Tags'])->map(fn (string $id) => $tag_labels[$id])->all())->toBe(['urgent', 'backend']);
+});
+
+test('commit onto an existing status column adds labels the column does not have yet', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $status_column = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view->id,
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'key' => 'status',
+        'label' => 'Status',
+        'type' => BoardColumn::TYPE_STATUS,
+        'config' => ['options' => [['id' => 'done-id', 'label' => 'Done', 'color' => '#00c875', 'is_active' => true]]],
+    ]);
+
+    $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
+        'file' => fakeFlatCsvUpload("Name,Status\nTask One,done\nTask Two,Blocked\n"),
+        'view_id' => $view->id,
+    ])->json();
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $analyze['import_token'],
+        'view_id' => $view->id,
+        'new_group_name' => 'Imported table',
+        'mappings' => [
+            ['source_index' => 0, 'mode' => 'name'],
+            ['source_index' => 1, 'mode' => 'map', 'target_column_id' => $status_column->id],
+        ],
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
+
+    $options = collect($status_column->fresh()->config['options']);
+    $blocked_id = $options->firstWhere('label', 'Blocked')['id'] ?? null;
+
+    $group = BoardGroup::where('board_id', $board->id)->where('name', 'Imported table')->firstOrFail();
+    $stored = $group->items()->orderBy('position')->get()->map(fn ($item) => $item->values()->where('column_id', $status_column->id)->value('value'))->all();
+
+    expect($options->pluck('label')->all())->toBe(['Done', 'Blocked'])
+        // "done" matches the existing "Done" option case-insensitively instead of duplicating it.
+        ->and($stored)->toBe(['done-id', $blocked_id]);
 });

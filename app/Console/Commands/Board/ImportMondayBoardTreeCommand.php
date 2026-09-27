@@ -3,15 +3,18 @@
 namespace App\Console\Commands\Board;
 
 use App\Concerns\ImportsMondayBoardFiles;
+use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\MondayBoardImportService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Throwable;
 
 // php artisan board:import-monday-directory --force --updates=raw
+// php artisan board:import-monday-directory --dry-run --columns   (review every detected column type first)
 class ImportMondayBoardTreeCommand extends Command
 {
     use ImportsMondayBoardFiles;
@@ -21,6 +24,7 @@ class ImportMondayBoardTreeCommand extends Command
         {--workspace=fulfillment : Slug of the workspace to import every board into}
         {--force : Replace an existing board with the same name without prompting}
         {--dry-run : Walk the directory and print a summary without writing to the database}
+        {--columns : Print the detected columns of every board with their type and the reason each was chosen}
         {--updates-sheet=updates : Name of the sheet containing the item detail drawer\'s comment threads}
         {--updates=skip : How to handle that sheet — skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
 
@@ -74,6 +78,7 @@ class ImportMondayBoardTreeCommand extends Command
 
         /** @var array<string, int> $group_ids_by_path */
         $group_ids_by_path = [];
+        $users = User::all();
         $rows = [];
         $totals = [
             'created' => 0, 'replaced' => 0, 'skipped' => 0, 'failed' => 0,
@@ -87,7 +92,7 @@ class ImportMondayBoardTreeCommand extends Command
                 : implode(' / ', $file['folders']).' / '.basename($file['path']);
 
             try {
-                $outcome = $this->importOneFile($file, $workspace, $updates_mode, $dry_run, $force, $group_ids_by_path);
+                $outcome = $this->importOneFile($file, $workspace, $updates_mode, $dry_run, $force, $group_ids_by_path, $users);
             } catch (Throwable $e) {
                 $this->error("[FAIL] {$relative_label}: {$e->getMessage()}");
                 $totals['failed']++;
@@ -183,6 +188,7 @@ class ImportMondayBoardTreeCommand extends Command
      *
      * @param  array{path: string, folders: array<int, string>}  $file
      * @param  array<string, int>  $group_ids_by_path
+     * @param  Collection<int, User>  $users  matched against People-looking columns, loaded once for the whole batch
      * @return array{
      *     action: 'dry_run'|'created'|'replaced'|'skipped',
      *     title: string,
@@ -200,10 +206,16 @@ class ImportMondayBoardTreeCommand extends Command
         bool $dry_run,
         bool $force,
         array &$group_ids_by_path,
+        Collection $users,
     ): array {
         $spreadsheet = IOFactory::load($file['path']);
         $sheet = $spreadsheet->getSheet(0);
-        $parsed = $this->importer->parse($sheet);
+        $parsed = $this->importer->parse($sheet, $users);
+
+        if ($this->option('columns')) {
+            $this->line("Columns detected in \"{$parsed['title']}\":");
+            $this->renderColumnReport($parsed);
+        }
 
         $update_rows = [];
         if ($updates_mode !== MondayBoardImportService::UPDATES_MODE_SKIP) {

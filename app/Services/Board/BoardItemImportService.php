@@ -9,6 +9,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardImportJob;
 use App\Models\BoardItem;
+use App\Models\BoardTag;
 use App\Models\BoardView;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -90,23 +91,29 @@ class BoardItemImportService
      * {@see BoardColumn} type — feeds the "Map columns" step's column list
      * and its "create a new column" mapping mode's pre-filled type.
      *
+     * `detection_reason` is the human-readable "why" behind
+     * `suggested_type` (e.g. "100% of values are dates"), shown under the
+     * column in the wizard so a guess can be checked before importing.
+     *
      * @param  array<int, string>  $headers
      * @param  array<int, array<int, string>>  $rows
-     * @return array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string}>
+     * @return array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string, detection_reason: string}>
      */
     public function buildSourceColumns(array $headers, array $rows): array
     {
         $columns = [];
+        $users = User::all();
 
         foreach ($headers as $index => $label) {
             $non_empty = $this->columnValues($rows, $index);
-            [$type] = $this->inferColumnType($label, $non_empty);
+            [$type, , $reason] = $this->inferColumnType($label, $non_empty, $users);
 
             $columns[] = [
                 'index' => $index,
                 'label' => $label,
                 'sample_values' => array_slice(array_values(array_unique($non_empty)), 0, 4),
                 'suggested_type' => $type,
+                'detection_reason' => $reason,
             ];
         }
 
@@ -125,7 +132,7 @@ class BoardItemImportService
      * rather than being left unmapped. The user can still override any row
      * to "Don't import" themselves; nothing here is forced.
      *
-     * @param  array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string}>  $source_columns  {@see buildSourceColumns()}'s output — already carries each column's guessed type
+     * @param  array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string, detection_reason: string}>  $source_columns  {@see buildSourceColumns()}'s output — already carries each column's guessed type
      * @param  Collection<int, BoardColumn>  $existing_columns
      * @return array<int, array{source_index: int, mode: string, target_column_id: int|null, new_label: string|null, new_type: string|null}>
      */
@@ -340,7 +347,7 @@ class BoardItemImportService
             ? $this->buildExistingItemLookup($group, $match_index, $name_index, $index_to_column)
             : [];
 
-        $users = User::all();
+        $caster = new ImportedCellValueCaster($board, User::all());
         $created = 0;
         $updated = 0;
         $skipped = 0;
@@ -357,13 +364,13 @@ class BoardItemImportService
 
             DB::transaction(function () use (
                 $chunk, $board, $group, $name_index, $index_to_column, $duplicate_mode, $match_index,
-                &$existing_by_key, $users, &$created, &$updated, &$skipped, &$next_position,
+                &$existing_by_key, $caster, &$created, &$updated, &$skipped, &$next_position,
             ) {
                 foreach ($chunk as $row) {
                     $name_raw = trim($row[$name_index] ?? '');
                     [$name, $overflow] = $this->splitOverflowingName($name_raw !== '' ? $name_raw : 'Untitled item');
 
-                    $values = $this->castRowValues($index_to_column, $row, $users);
+                    $values = $this->castRowValues($index_to_column, $row, $caster);
 
                     $match_raw = $match_index === $name_index ? $name_raw : trim($row[$match_index] ?? '');
                     $match_key = $this->normalizeForMatch($match_raw);
@@ -454,21 +461,29 @@ class BoardItemImportService
     }
 
     /**
-     * The subset of {@see BoardColumn} types the "create a new column"
-     * mapping mode may target — every real type except `timeline`/
-     * `dependency`, which need more than one flat source column's worth of
-     * data to mean anything.
+     * The {@see BoardColumn} types the "create a new column" mapping mode may
+     * target — every type {@see ImportedCellValueCaster} can build from one
+     * flat source cell. A Timeline is included since a single cell can hold
+     * a whole "2024-01-01 - 2024-01-31" range; Vote/Dependency/Connect boards
+     * and the computed types are not, since an exported cell can't carry
+     * who voted or which item it links to.
      *
+     * @var array<int, string>
+     */
+    public const CREATABLE_COLUMN_TYPES = [
+        BoardColumn::TYPE_TEXT, BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL,
+        BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE, BoardColumn::TYPE_TAGS,
+        BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_CHECKBOX, BoardColumn::TYPE_PROGRESS,
+        BoardColumn::TYPE_RATING, BoardColumn::TYPE_PHONE, BoardColumn::TYPE_EMAIL, BoardColumn::TYPE_LINK,
+        BoardColumn::TYPE_FILES, BoardColumn::TYPE_TIME_TRACKING,
+    ];
+
+    /**
      * @return array<int, string>
      */
     public function creatableColumnTypes(): array
     {
-        return [
-            BoardColumn::TYPE_TEXT, BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL,
-            BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_DATE, BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN,
-            BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_CHECKBOX, BoardColumn::TYPE_PROGRESS, BoardColumn::TYPE_PHONE,
-            BoardColumn::TYPE_EMAIL,
-        ];
+        return self::CREATABLE_COLUMN_TYPES;
     }
 
     // ── Reading ──────────────────────────────────────────────────────────
@@ -509,13 +524,13 @@ class BoardItemImportService
         for ($row = $header_row + 1; $row <= $highest_row; $row++) {
             $id_value = $this->cell($sheet, $header['id_col'], $row);
 
-            // Every real item row carries monday.com's own numeric id in the
-            // header's trailing column — this single check is what tells an
-            // item row apart from a blank separator, a group-title row, a
-            // repeated header row for the next group, and (since a
-            // subitem's own id lives in a different column entirely) any
-            // subitem row, without tracking any of those states explicitly.
-            if ($id_value === '' || ! ctype_digit($id_value)) {
+            // Every real item row carries a name in column A and monday.com's
+            // own (long, numeric) id in the header's trailing column — this
+            // single check is what tells an item row apart from a blank
+            // separator, a group-title row, a repeated header row, a group's
+            // summary row and any subitem row (column A empty), without
+            // tracking any of those states explicitly.
+            if ($this->cell($sheet, 'A', $row) === '' || ! $this->isMondayId($id_value)) {
                 continue;
             }
 
@@ -700,7 +715,7 @@ class BoardItemImportService
                     'scope' => BoardColumn::SCOPE_ITEM,
                     'position' => $next_position++,
                     'width' => $this->widthForType($type),
-                    'config' => $this->configFor($type, $this->columnValues($rows, $index)),
+                    'config' => $this->initialColumnConfig($type, $this->optionLabelsFor($type, $this->columnValues($rows, $index))),
                 ]);
 
                 $index_to_column[$index] = $column;
@@ -730,12 +745,15 @@ class BoardItemImportService
         }
 
         $existing_items = $group->items()->whereNull('parent_id')->where('is_archived', false)->with('values')->get();
+        $tag_labels = $match_column?->type === BoardColumn::TYPE_TAGS
+            ? BoardTag::where('board_id', $group->board_id)->pluck('label', 'id')->all()
+            : [];
         $by_key = [];
 
         foreach ($existing_items as $existing_item) {
             $raw = $match_column === null
                 ? $existing_item->name
-                : $this->renderValueForMatch($match_column, $existing_item->values->firstWhere('column_id', $match_column->id)?->value);
+                : $this->renderValueForMatch($match_column, $existing_item->values->firstWhere('column_id', $match_column->id)?->value, $tag_labels);
 
             $key = $this->normalizeForMatch($raw);
             if ($key !== '') {
@@ -749,66 +767,21 @@ class BoardItemImportService
     /**
      * @param  array<int, BoardColumn>  $index_to_column
      * @param  array<int, string>  $row
-     * @param  Collection<int, User>  $users
      * @return array<int, array{column_id: int, value: mixed}>
      */
-    private function castRowValues(array $index_to_column, array $row, Collection $users): array
+    private function castRowValues(array $index_to_column, array $row, ImportedCellValueCaster $caster): array
     {
         $values = [];
 
         foreach ($index_to_column as $index => $column) {
-            $raw = trim($row[$index] ?? '');
-            if ($raw === '') {
-                continue;
+            $value = $caster->cast($column, $row[$index] ?? '');
+
+            if ($value !== null) {
+                $values[] = ['column_id' => $column->id, 'value' => $value];
             }
-
-            $value = match ($column->type) {
-                BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_PROGRESS => is_numeric($raw) ? (float) $raw : null,
-                BoardColumn::TYPE_CHECKBOX => true,
-                BoardColumn::TYPE_DATE => $this->parseDate($raw),
-                BoardColumn::TYPE_PEOPLE => $this->resolvePersonIds($raw, $users),
-                BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL => $this->findOptionId($column, $raw),
-                BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN => $this->optionIdsForLabels($column, $this->splitList($raw)),
-                BoardColumn::TYPE_TIMELINE, BoardColumn::TYPE_DEPENDENCY => null,
-                default => $raw,
-            };
-
-            if ($value === null || $value === []) {
-                continue;
-            }
-
-            $values[] = ['column_id' => $column->id, 'value' => $value];
         }
 
         return $values;
-    }
-
-    private function findOptionId(BoardColumn $column, string $label): ?string
-    {
-        foreach (data_get($column->config, 'options', []) as $option) {
-            if ($option['label'] === $label) {
-                return $option['id'];
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param  array<int, string>  $labels
-     * @return array<int, string>
-     */
-    private function optionIdsForLabels(BoardColumn $column, array $labels): array
-    {
-        $ids = [];
-        foreach ($labels as $label) {
-            $id = $this->findOptionId($column, $label);
-            if ($id !== null) {
-                $ids[] = $id;
-            }
-        }
-
-        return $ids;
     }
 
     private function optionLabelFor(BoardColumn $column, string $id): ?string
@@ -823,40 +796,14 @@ class BoardItemImportService
     }
 
     /**
-     * @param  Collection<int, User>  $users
-     * @return array<int, string>
-     */
-    private function resolvePersonIds(string $raw, Collection $users): array
-    {
-        $ids = [];
-
-        foreach ($this->splitList($raw) as $name) {
-            $haystack = ' '.mb_strtolower($name).' ';
-
-            $user = $users->first(function (User $user) use ($haystack) {
-                $first = mb_strtolower($user->first_name);
-                $last = mb_strtolower($user->last_name);
-
-                return $first !== '' && $last !== ''
-                    && str_contains($haystack, " {$first} ")
-                    && str_contains($haystack, " {$last} ");
-            });
-
-            if ($user !== null) {
-                $ids[] = (string) $user->id;
-            }
-        }
-
-        return array_values(array_unique($ids));
-    }
-
-    /**
      * The write-side counterpart of `castRowValues` — renders an already-
      * stored column value back into the same kind of plain string a raw
      * import cell would be, so an existing item's value can be compared
      * against an incoming row's raw text for dedupe matching.
+     *
+     * @param  array<int, string>  $tag_labels  board tag id => label, for a Tags column
      */
-    private function renderValueForMatch(BoardColumn $column, mixed $value): string
+    private function renderValueForMatch(BoardColumn $column, mixed $value, array $tag_labels = []): string
     {
         if ($value === null) {
             return '';
@@ -864,13 +811,18 @@ class BoardItemImportService
 
         return match ($column->type) {
             BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL => $this->optionLabelFor($column, (string) $value) ?? '',
-            BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN => implode(',', array_map(
+            BoardColumn::TYPE_TAGS => implode(',', array_map(
+                fn ($id) => is_numeric($id) ? ($tag_labels[(int) $id] ?? '') : '',
+                is_array($value) ? $value : []
+            )),
+            BoardColumn::TYPE_DROPDOWN => implode(',', array_map(
                 fn ($id) => $this->optionLabelFor($column, (string) $id) ?? '',
                 is_array($value) ? $value : []
             )),
             BoardColumn::TYPE_PEOPLE => implode(',', is_array($value) ? $value : []),
             BoardColumn::TYPE_CHECKBOX => $value ? '1' : '',
-            BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_PROGRESS => is_numeric($value) ? (string) (float) $value : (string) $value,
+            BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_PROGRESS, BoardColumn::TYPE_RATING => is_numeric($value) ? (string) (float) $value : (string) $value,
+            BoardColumn::TYPE_LINK => is_array($value) ? (string) ($value['url'] ?? '') : (string) $value,
             default => is_scalar($value) ? (string) $value : '',
         };
     }
@@ -881,47 +833,27 @@ class BoardItemImportService
     }
 
     /**
+     * The option labels a freshly-created Status/Label/Dropdown column starts
+     * with: each distinct cell for a single-select, each distinct
+     * comma-separated token for a Dropdown.
+     *
      * @param  array<int, string>  $values  every non-empty raw cell collected under this column
-     * @return array<string, mixed>|null
+     * @return array<int, string>
      */
-    private function configFor(string $type, array $values): ?array
+    private function optionLabelsFor(string $type, array $values): array
     {
-        if (! in_array($type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN], true)) {
-            return null;
-        }
-
-        if (in_array($type, [BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN], true)) {
+        if ($type === BoardColumn::TYPE_DROPDOWN) {
             $tokens = [];
             foreach ($values as $value) {
                 foreach ($this->splitList($value) as $token) {
                     $tokens[$token] = true;
                 }
             }
-            $labels = array_keys($tokens);
-        } else {
-            $labels = array_values(array_unique($values));
+
+            return array_keys($tokens);
         }
 
-        if ($labels === []) {
-            return null;
-        }
-
-        return ['options' => $this->buildOptions(array_slice($labels, 0, 60))];
-    }
-
-    private function widthForType(string $type): int
-    {
-        return match ($type) {
-            BoardColumn::TYPE_PEOPLE => 160,
-            BoardColumn::TYPE_STATUS => 170,
-            BoardColumn::TYPE_LABEL => 130,
-            BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_PROGRESS => 110,
-            BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN => 200,
-            BoardColumn::TYPE_DATE => 150,
-            BoardColumn::TYPE_CHECKBOX => 90,
-            BoardColumn::TYPE_LONG_TEXT => 240,
-            default => 160,
-        };
+        return array_values(array_unique($values));
     }
 
     private function uniqueColumnKey(BoardView $view, string $label): string

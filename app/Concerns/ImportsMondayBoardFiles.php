@@ -93,6 +93,38 @@ trait ImportsMondayBoardFiles
         return count(array_filter($rows, fn (array $row) => $row['parent_post_id'] === ''));
     }
 
+    /**
+     * Prints every column {@see MondayBoardImportService::parse()} found, with the type it will
+     * be created as and why — the `--columns` flag's output, so a run can be checked before (with
+     * `--dry-run`) or after it writes anything.
+     *
+     * @param  array<string, mixed>  $parsed  the array returned by {@see MondayBoardImportService::parse()}
+     */
+    private function renderColumnReport(array $parsed): void
+    {
+        $rows = [];
+
+        foreach (['item_columns' => 'Item', 'subitem_columns' => 'Subitem'] as $key => $scope_label) {
+            foreach ($parsed[$key] as $definition) {
+                $rows[] = [
+                    $scope_label,
+                    $definition['label'],
+                    $definition['type'],
+                    $definition['options'] === [] ? '-' : count($definition['options']),
+                    $definition['reason'],
+                ];
+            }
+        }
+
+        if ($rows === []) {
+            $this->line('  (no columns besides the item name)');
+
+            return;
+        }
+
+        $this->table(['Scope', 'Column', 'Type', 'Options', 'Detected because'], $rows);
+    }
+
     private function createBoard(Workspace $workspace, string $label, ?int $parent_id, ?string $description): WorkspaceNavigationItem
     {
         $next_position = (int) $workspace->navigationItems()->where('parent_id', $parent_id)->max('position') + 1;

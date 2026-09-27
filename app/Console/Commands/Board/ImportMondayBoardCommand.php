@@ -19,6 +19,7 @@ class ImportMondayBoardCommand extends Command
         {--workspace=fulfillment : Slug of the workspace to import the board into}
         {--force : Replace an existing board with the same name without prompting}
         {--dry-run : Parse the file and print a summary without writing to the database}
+        {--columns : Print every detected column with its type and the reason it was chosen}
         {--updates-sheet=updates : Name of the sheet containing the item detail drawer\'s comment threads}
         {--updates=skip : How to handle that sheet — skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
 
@@ -70,6 +71,10 @@ class ImportMondayBoardCommand extends Command
 
         $this->info("Board: {$parsed['title']}");
         $this->line("Groups: {$group_count} | Items: {$item_count} | Subitems: {$subitem_count}");
+
+        if ($this->option('columns')) {
+            $this->renderColumnReport($parsed);
+        }
 
         $update_rows = [];
         if ($updates_mode !== MondayBoardImportService::UPDATES_MODE_SKIP) {

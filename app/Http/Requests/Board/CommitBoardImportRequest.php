@@ -2,8 +2,8 @@
 
 namespace App\Http\Requests\Board;
 
-use App\Models\BoardColumn;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardItemImportService;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -42,21 +42,7 @@ class CommitBoardImportRequest extends FormRequest
             'mappings.*.mode' => ['required', 'string', Rule::in(['name', 'map', 'create', 'skip'])],
             'mappings.*.target_column_id' => ['sometimes', 'nullable', 'integer'],
             'mappings.*.new_label' => ['sometimes', 'nullable', 'string', 'max:255'],
-            'mappings.*.new_type' => ['sometimes', 'nullable', 'string', Rule::in([
-                BoardColumn::TYPE_TEXT,
-                BoardColumn::TYPE_LONG_TEXT,
-                BoardColumn::TYPE_STATUS,
-                BoardColumn::TYPE_LABEL,
-                BoardColumn::TYPE_PEOPLE,
-                BoardColumn::TYPE_DATE,
-                BoardColumn::TYPE_TAGS,
-                BoardColumn::TYPE_DROPDOWN,
-                BoardColumn::TYPE_NUMBER,
-                BoardColumn::TYPE_CHECKBOX,
-                BoardColumn::TYPE_PROGRESS,
-                BoardColumn::TYPE_PHONE,
-                BoardColumn::TYPE_EMAIL,
-            ])],
+            'mappings.*.new_type' => ['sometimes', 'nullable', 'string', Rule::in(BoardItemImportService::CREATABLE_COLUMN_TYPES)],
 
             'duplicate_mode' => ['required', 'string', Rule::in(['add', 'skip', 'update'])],
             'match_source_index' => ['sometimes', 'nullable', 'integer', 'min:0'],
