@@ -115,7 +115,7 @@ class BoardColumn extends Model
     /** A clickable URL with its own display text, stored as `{url, text}` — distinct from a plain Text column, which has no separate display label. */
     public const TYPE_LINK = 'link';
 
-    /** One or more files attached directly to this cell (not the item as a whole — see `BoardItemAttachment` for that), stored as an array of `{id, file_name, url, mime_type, size_bytes}`. */
+    /** One or more files or external links attached directly to this cell (not the item as a whole, see `BoardItemAttachment` for that), stored as an array of `{id, kind, file_name, url, mime_type, size_bytes}`, where `kind` is `file` or `link`. */
     public const TYPE_FILES = 'files';
 
     /** A start/stop timer, stored as `{seconds, running_since}` — `running_since` is the ISO timestamp the timer was last started, or null while stopped; the displayed duration is `seconds` plus elapsed time since `running_since` when running. */

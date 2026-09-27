@@ -536,11 +536,12 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::delete('{attachment}', [BoardItemAttachmentController::class, 'destroy']);
             });
 
-            // Files cell (a `files`-type column) — distinct from
+            // Files cell (a `files`-type column), distinct from
             // `{board_item}/attachments` above, which attaches to the item as
             // a whole rather than one specific column's cell.
             Route::prefix('{board_item}/columns/{column}/files')->group(function () {
                 Route::post('/', [BoardItemCellFileController::class, 'store']);
+                Route::post('link', [BoardItemCellFileController::class, 'storeLink']);
                 Route::delete('{file_id}', [BoardItemCellFileController::class, 'destroy']);
             });
         });
