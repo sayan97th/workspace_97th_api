@@ -15,7 +15,6 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
-use App\Services\Board\CommentAssignmentService;
 use App\Services\Board\CommentThreadActionsService;
 use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
@@ -33,7 +32,6 @@ class BoardItemCommentController extends Controller
         private readonly FeedService $feed_service,
         private readonly CommentThreadActionsService $comment_actions,
         private readonly BoardAutomationService $automation_service,
-        private readonly CommentAssignmentService $assignment_service,
         private readonly ScheduledCommentService $scheduled_comments,
     ) {}
 
@@ -71,15 +69,6 @@ class BoardItemCommentController extends Controller
         $validated = $request->validated();
 
         $scheduled_at = $validated['scheduled_at'] ?? null;
-        $assign_user_ids = collect($validated['assign_user_ids'] ?? [])->map(fn ($user_id) => (int) $user_id)->unique()->values();
-        $assign_due_date = $validated['assign_due_date'] ?? null;
-        $is_assigning = $assign_user_ids->isNotEmpty() || $assign_due_date !== null;
-
-        // Checked before anything is created, so a comment that cannot become a task is not posted half done.
-        if ($is_assigning) {
-            BoardEditGate::authorize($item, $request->user());
-            $this->assignment_service->resolveColumns($board_item, $assign_user_ids->isNotEmpty(), $assign_due_date !== null);
-        }
 
         $comment = $board_item->comments()->create([
             'parent_id' => $validated['parent_id'] ?? null,
@@ -117,10 +106,6 @@ class BoardItemCommentController extends Controller
                         action_target: sprintf('on "%s"', $board_item->name),
                         board_item: $board_item,
                     );
-                }
-
-                if ($is_assigning) {
-                    $this->assignment_service->assign($item, $board_item, $assign_user_ids, $assign_due_date, $actor);
                 }
             }
 

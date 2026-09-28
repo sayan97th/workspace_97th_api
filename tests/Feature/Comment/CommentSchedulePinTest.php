@@ -87,16 +87,13 @@ test('a scheduled comment can be rescheduled by its author only and goes live wh
         ->and(Notification::where('user_id', $other->id)->where('type', Notification::TYPE_NOTIFIED)->count())->toBe(1);
 });
 
-test('a comment cannot be scheduled in the past or combined with an assignment', function () {
-    [$item] = createCollaborationItem(true);
+test('a comment cannot be scheduled in the past', function () {
+    [$item] = createCollaborationItem();
     $author = User::factory()->create();
-    $url = "/api/boards/{$item->board_id}/items/{$item->id}/comments";
 
-    $this->actingAs($author, 'api')->postJson($url, ['body' => 'x', 'scheduled_at' => now()->subHour()->toIso8601String()])->assertUnprocessable();
-    $this->actingAs($author, 'api')->postJson($url, [
+    $this->actingAs($author, 'api')->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments", [
         'body' => 'x',
-        'scheduled_at' => now()->addHour()->toIso8601String(),
-        'assign_user_ids' => [$author->id],
+        'scheduled_at' => now()->subHour()->toIso8601String(),
     ])->assertUnprocessable();
 });
 
@@ -117,54 +114,29 @@ test('the discussion drawer schedules and cancels an update', function () {
     $this->actingAs($author, 'api')->getJson("/api/boards/{$item->board_id}/comments/scheduled")->assertOk()->assertJsonCount(0, 'data');
 });
 
-test('a comment can assign people and a due date to the item', function () {
+test('a comment no longer assigns people or a due date to the item', function () {
     [$item, $workspace] = createCollaborationItem(true);
     $author = User::factory()->create();
-    $assignee = User::factory()->create();
-    $outsider = User::factory()->create();
-    $workspace->users()->attach([$author->id => ['role' => 'member'], $assignee->id => ['role' => 'member']]);
+    $workspace->users()->attach($author->id, ['role' => 'member']);
 
-    $this->actingAs($author, 'api')->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments", [
-        'body' => 'Please handle this',
-        'assign_user_ids' => [$assignee->id, $outsider->id],
-        'assign_due_date' => '2030-01-15',
-    ])->assertCreated();
-
-    $people_column = BoardColumn::where('board_id', $item->board_id)->where('type', BoardColumn::TYPE_PEOPLE)->first();
-    $date_column = BoardColumn::where('board_id', $item->board_id)->where('type', BoardColumn::TYPE_DATE)->first();
-
-    // Only workspace members are assigned, and the assignee is told through the usual notification.
-    expect($item->values()->where('column_id', $people_column->id)->first()->value)->toBe([$assignee->id])
-        ->and($item->values()->where('column_id', $date_column->id)->first()->value)->toBe('2030-01-15')
-        ->and(Notification::where('user_id', $assignee->id)->where('type', Notification::TYPE_ASSIGNED)->count())->toBe(1);
-
-    $this->assertDatabaseHas('board_item_activities', ['item_id' => $item->id, 'column_type' => 'date', 'new_display' => 'Jan 15, 2030']);
-    $this->assertDatabaseHas('board_item_activities', ['item_id' => $item->id, 'column_type' => 'people', 'new_display' => $assignee->full_name]);
-});
-
-test('an assignment on a board without a People column fails before the comment is posted', function () {
-    [$item] = createCollaborationItem();
-    $author = User::factory()->create();
-
+    // The composer's "Assign" action was removed, so the old fields are dropped by validation and change nothing.
     $this->actingAs($author, 'api')->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments", [
         'body' => 'Please handle this',
         'assign_user_ids' => [$author->id],
-    ])->assertUnprocessable()->assertJsonValidationErrors('assign_user_ids');
+        'assign_due_date' => '2030-01-15',
+    ])->assertCreated();
 
-    expect(BoardItemComment::count())->toBe(0);
+    expect($item->values()->count())->toBe(0)
+        ->and(Notification::where('user_id', $author->id)->where('type', Notification::TYPE_ASSIGNED)->count())->toBe(0);
 });
 
-test('a read-only workspace member cannot pin or assign', function () {
-    [$item, $workspace] = createCollaborationItem(true);
+test('a read-only workspace member cannot pin', function () {
+    [$item, $workspace] = createCollaborationItem();
     $viewer = User::factory()->create();
     $workspace->users()->attach($viewer->id, ['role' => 'viewer']);
     $comment = BoardItemComment::create(['item_id' => $item->id, 'user_id' => $viewer->id, 'body' => 'Hi']);
 
     $this->actingAs($viewer, 'api')->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments/{$comment->id}/pin")->assertForbidden();
-    $this->actingAs($viewer, 'api')->postJson("/api/boards/{$item->board_id}/items/{$item->id}/comments", [
-        'body' => 'Assign me',
-        'assign_user_ids' => [$viewer->id],
-    ])->assertForbidden();
 
     expect($comment->fresh()->pinned)->toBeFalse();
 });
