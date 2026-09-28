@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Integration;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Integration\SlackChannelIndexRequest;
 use App\Http\Requests\Integration\SlackChannelTestRequest;
 use App\Http\Requests\Integration\SlackConnectRequest;
 use App\Http\Requests\Integration\SlackUserTestRequest;
@@ -80,9 +81,11 @@ class SlackIntegrationController extends Controller
     /**
      * GET /api/integrations/slack/channels
      *
-     * Channels the app can post to, for the automation builder's channel picker.
+     * Channels the app can post to, for the automation builder's channel picker. Every
+     * public channel, plus the private channels the app was invited to. `?refresh=1`
+     * reads them from Slack again instead of the short lived cache.
      */
-    public function channels(): JsonResponse
+    public function channels(SlackChannelIndexRequest $request): JsonResponse
     {
         $installation = SlackInstallation::current();
 
@@ -91,7 +94,7 @@ class SlackIntegrationController extends Controller
         }
 
         try {
-            return response()->json(['data' => $this->slack_service->listChannels($installation)]);
+            return response()->json(['data' => $this->slack_service->listChannels($installation, $request->wantsFreshChannels())]);
         } catch (SlackException $exception) {
             return $this->errorResponse($exception);
         }

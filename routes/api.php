@@ -248,7 +248,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // every member links their own Slack account to receive notifications as direct messages.
     Route::prefix('integrations/slack')->group(function () {
         Route::get('/', [SlackIntegrationController::class, 'show']);
-        Route::get('channels', [SlackIntegrationController::class, 'channels']);
+        Route::get('channels', [SlackIntegrationController::class, 'channels'])->middleware('throttle:30,1');
         Route::post('link-url', [SlackIntegrationController::class, 'linkUrl'])->middleware('account.permission:use_integrations');
         Route::delete('link', [SlackIntegrationController::class, 'unlink']);
         Route::post('link/test', [SlackIntegrationController::class, 'sendTest'])->middleware('throttle:6,1');

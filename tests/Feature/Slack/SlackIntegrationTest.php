@@ -14,6 +14,7 @@ use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Sleep;
 
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
@@ -264,6 +265,61 @@ test('channels are listed alphabetically across pages and cached', function () {
         ->and($first->json('data.2.is_private'))->toBeTrue();
 
     Http::assertSentCount(2);
+});
+
+test('refresh skips the channel cache so a newly created channel shows at once', function () {
+    makeSlackInstallation();
+    Cache::flush();
+    Http::fakeSequence('slack.com/api/conversations.list*')
+        ->push(['ok' => true, 'channels' => [['id' => 'C1', 'name' => 'general']], 'response_metadata' => ['next_cursor' => '']])
+        ->push(['ok' => true, 'channels' => [['id' => 'C1', 'name' => 'general'], ['id' => 'C9', 'name' => 'launch']], 'response_metadata' => ['next_cursor' => '']]);
+
+    $user = User::factory()->create();
+
+    $this->actingAs($user, 'api')->getJson('/api/integrations/slack/channels')->assertOk()->assertJsonCount(1, 'data');
+    $this->actingAs($user, 'api')->getJson('/api/integrations/slack/channels')->assertJsonCount(1, 'data');
+    $this->actingAs($user, 'api')->getJson('/api/integrations/slack/channels?refresh=1')->assertOk()->assertJsonCount(2, 'data');
+
+    Http::assertSentCount(2);
+});
+
+test('a rate limited page is retried instead of hiding the remaining channels', function () {
+    makeSlackInstallation();
+    Cache::flush();
+    Sleep::fake();
+    Http::fakeSequence('slack.com/api/conversations.list*')
+        ->push(['ok' => true, 'channels' => [['id' => 'C1', 'name' => 'general']], 'response_metadata' => ['next_cursor' => 'page2']])
+        ->push(['ok' => false, 'error' => 'ratelimited'], 429, ['Retry-After' => '2'])
+        ->push(['ok' => true, 'channels' => [['id' => 'C2', 'name' => 'design'], ['id' => 'C1', 'name' => 'general']], 'response_metadata' => ['next_cursor' => '']]);
+
+    $response = $this->actingAs(User::factory()->create(), 'api')->getJson('/api/integrations/slack/channels')->assertOk();
+
+    expect(array_column($response->json('data'), 'name'))->toBe(['design', 'general']);
+    Http::assertSentCount(3);
+    Sleep::assertSleptTimes(1);
+});
+
+test('a long rate limit wait fails the channel list with a readable message', function () {
+    makeSlackInstallation();
+    Cache::flush();
+    Sleep::fake();
+    Http::fake(['slack.com/api/conversations.list*' => Http::response(['ok' => false, 'error' => 'ratelimited'], 429, ['Retry-After' => '60'])]);
+
+    $this->actingAs(User::factory()->create(), 'api')->getJson('/api/integrations/slack/channels')
+        ->assertStatus(503)
+        ->assertJsonPath('message', 'Slack is busy right now. Please try again in a moment.');
+
+    Sleep::assertNeverSlept();
+});
+
+test('a revoked bot token explains how to reconnect instead of listing no channels', function () {
+    makeSlackInstallation();
+    Cache::flush();
+    Http::fake(['slack.com/api/conversations.list*' => Http::response(['ok' => false, 'error' => 'invalid_auth'])]);
+
+    $this->actingAs(User::factory()->create(), 'api')->getJson('/api/integrations/slack/channels')
+        ->assertStatus(422)
+        ->assertJsonPath('message', 'The Slack connection is no longer valid. Reconnect Slack from Administration.');
 });
 
 test('the test message goes straight to the linked member and surfaces slack errors', function () {

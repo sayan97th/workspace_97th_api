@@ -292,7 +292,7 @@ class SlackDiagnosticsService
         $label = 'Bot can list channels';
 
         try {
-            $channel_count = count($this->slack_service->listChannels($installation));
+            $channel_count = count($this->slack_service->listChannels($installation, fresh: true));
         } catch (SlackException $exception) {
             return $this->result('channels', $label, self::STATUS_FAILED, "Slack returned an error ({$exception->error_code}).");
         }

@@ -7,6 +7,8 @@ use App\Models\SlackUserLink;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 
 /**
@@ -34,7 +36,13 @@ class SlackService
 
     private const CHANNEL_CACHE_SECONDS = 60;
 
-    private const CHANNEL_PAGE_LIMIT = 10;
+    /** 200 channels per page, so up to 10,000 channels, more than any workspace we serve. */
+    private const CHANNEL_PAGE_LIMIT = 50;
+
+    /** How long a rate limited page may wait before retrying, longer waits fail the request instead. */
+    private const RATE_LIMIT_MAX_WAIT_SECONDS = 5;
+
+    private const RATE_LIMIT_MAX_RETRIES = 3;
 
     public function __construct(private readonly SlackClient $client) {}
 
@@ -215,39 +223,85 @@ class SlackService
 
     /**
      * Channels the bot can post to, alphabetical, cached briefly since the automation
-     * picker asks for them every time it opens.
+     * picker asks for them every time it opens. `$fresh` skips the cache, for the picker's
+     * "Refresh" button and for diagnostics, so a channel created or joined a moment ago shows.
+     *
+     * With a bot token Slack returns every public channel, but only the private channels the
+     * app was invited to. That is also exactly where the bot is allowed to post.
      *
      * @return array<int, array{id: string, name: string, is_private: bool}>
      *
      * @throws SlackException
      */
-    public function listChannels(SlackInstallation $installation): array
+    public function listChannels(SlackInstallation $installation, bool $fresh = false): array
     {
-        return Cache::remember($this->channelCacheKey($installation), self::CHANNEL_CACHE_SECONDS, function () use ($installation) {
-            $channels = [];
-            $cursor = null;
+        $cache_key = $this->channelCacheKey($installation);
 
-            for ($page = 0; $page < self::CHANNEL_PAGE_LIMIT; $page++) {
+        if ($fresh) {
+            Cache::forget($cache_key);
+        }
+
+        return Cache::remember($cache_key, self::CHANNEL_CACHE_SECONDS, fn () => $this->fetchAllChannels($installation));
+    }
+
+    /**
+     * Walks every page of `conversations.list`. Slack may return fewer channels than the
+     * page limit, and even an empty page, while more remain, so only a missing cursor ends
+     * the walk. A rate limited page is retried after the wait Slack asks for, so one busy
+     * moment does not hide every channel after the first pages.
+     *
+     * @return array<int, array{id: string, name: string, is_private: bool}>
+     *
+     * @throws SlackException
+     */
+    private function fetchAllChannels(SlackInstallation $installation): array
+    {
+        $channels_by_id = [];
+        $cursor = null;
+        $retries_left = self::RATE_LIMIT_MAX_RETRIES;
+
+        for ($page = 0; $page < self::CHANNEL_PAGE_LIMIT; $page++) {
+            try {
                 $payload = $this->client->listChannels($installation->bot_token, $cursor);
+            } catch (SlackException $exception) {
+                $wait_seconds = $exception->retry_after ?? self::RATE_LIMIT_MAX_WAIT_SECONDS;
 
-                foreach ($payload['channels'] ?? [] as $channel) {
-                    $channels[] = [
-                        'id' => (string) $channel['id'],
-                        'name' => (string) ($channel['name'] ?? $channel['id']),
-                        'is_private' => (bool) ($channel['is_private'] ?? false),
-                    ];
+                if (! $exception->isRateLimited() || $retries_left === 0 || $wait_seconds > self::RATE_LIMIT_MAX_WAIT_SECONDS) {
+                    throw $exception;
                 }
 
-                $cursor = $payload['response_metadata']['next_cursor'] ?? null;
-                if (! $cursor) {
-                    break;
-                }
+                $retries_left--;
+                $page--;
+                Sleep::for(max(1, $wait_seconds))->seconds();
+
+                continue;
             }
 
-            usort($channels, fn (array $a, array $b) => strcasecmp($a['name'], $b['name']));
+            foreach ($payload['channels'] ?? [] as $channel) {
+                $channel_id = (string) $channel['id'];
 
-            return $channels;
-        });
+                // Keyed by id, a channel created while paging can shift into the next page twice.
+                $channels_by_id[$channel_id] = [
+                    'id' => $channel_id,
+                    'name' => (string) ($channel['name'] ?? $channel_id),
+                    'is_private' => (bool) ($channel['is_private'] ?? false),
+                ];
+            }
+
+            $cursor = $payload['response_metadata']['next_cursor'] ?? null;
+            if (! $cursor) {
+                break;
+            }
+        }
+
+        if ($cursor) {
+            Log::warning('Slack channel list truncated after the page limit.', ['installation_id' => $installation->id, 'channel_count' => count($channels_by_id)]);
+        }
+
+        $channels = array_values($channels_by_id);
+        usort($channels, fn (array $a, array $b) => strcasecmp($a['name'], $b['name']));
+
+        return $channels;
     }
 
     private function issueState(string $purpose, User $user, ?string $return_path = null): string
