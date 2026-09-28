@@ -125,6 +125,23 @@ trait ImportsMondayBoardFiles
         $this->table(['Scope', 'Column', 'Type', 'Options', 'Detected because'], $rows);
     }
 
+    /**
+     * Lists the item names Dependency cells referenced that matched no item on the imported board.
+     *
+     * @param  array<int, string>  $names
+     */
+    private function renderUnmatchedLinks(array $names): void
+    {
+        if ($names === []) {
+            return;
+        }
+
+        $this->warn('Item names from Dependency cells that did not match an imported item (left unlinked):');
+        foreach ($names as $name) {
+            $this->line("  - {$name}");
+        }
+    }
+
     private function createBoard(Workspace $workspace, string $label, ?int $parent_id, ?string $description): WorkspaceNavigationItem
     {
         $next_position = (int) $workspace->navigationItems()->where('parent_id', $parent_id)->max('position') + 1;
@@ -171,7 +188,7 @@ trait ImportsMondayBoardFiles
      * @return array{
      *     action: 'created'|'replaced'|'skipped',
      *     board: WorkspaceNavigationItem|null,
-     *     summary: array{groups: int, items: int, subitems: int, unmatched_people: array<int, string>, item_ids_by_monday_id: array<string, int>}|null,
+     *     summary: array{groups: int, items: int, subitems: int, linked_cells: int, unmatched_people: array<int, string>, unmatched_links: array<int, string>, item_ids_by_monday_id: array<string, int>}|null,
      *     updates_summary: array{comments: int, replies: int, skipped_no_item: int, skipped_secret: int, unmatched_authors: array<int, string>}|null,
      * }
      */

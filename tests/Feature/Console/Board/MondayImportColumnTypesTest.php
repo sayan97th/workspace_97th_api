@@ -135,7 +135,6 @@ test('detects each column type from its values rather than its header alone', fu
     [$board] = importTypedMondayFixture($this);
 
     expect($board->columns()->where('scope', BoardColumn::SCOPE_ITEM)->pluck('type', 'key')->all())->toBe([
-        'timeline' => BoardColumn::TYPE_TIMELINE,
         // Named like a person column, but its values are statuses.
         'owner' => BoardColumn::TYPE_STATUS,
         'status' => BoardColumn::TYPE_STATUS,
@@ -149,6 +148,8 @@ test('detects each column type from its values rather than its header alone', fu
         'files' => BoardColumn::TYPE_FILES,
         'product_s' => BoardColumn::TYPE_DROPDOWN,
         'tags' => BoardColumn::TYPE_TAGS,
+        // Merged from the "Timeline - Start" / "Timeline - End" pair, kept where that pair sits in the sheet.
+        'timeline' => BoardColumn::TYPE_TIMELINE,
         'legacy_id' => BoardColumn::TYPE_TEXT,
     ]);
 });
@@ -217,4 +218,78 @@ test('--columns prints each detected column with the reason it was chosen', func
     @unlink($path);
 
     expect(WorkspaceNavigationItem::where('workspace_id', $workspace->id)->exists())->toBeFalse();
+});
+
+/**
+ * A monday.com export exercising the column types added after the first
+ * importer: a subitem checklist spread over repeated "Task | Status" pairs
+ * (the Client Hub layout), a Dependency column naming other items, a
+ * "Last Updated" activity log, a Time Tracking duration and a "Tasks
+ * Status" mirror that repeats its linked items' statuses.
+ */
+function writeLinkedMondayFixture(string $path): void
+{
+    $spreadsheet = new Spreadsheet;
+    $spreadsheet->getActiveSheet()->fromArray([
+        ['Linked Types Board'],
+        ['Group One'],
+        ['Name', 'Subitems', 'Depends On', 'Last Updated', 'Tracked', 'Tasks Status', 'Notes', 'Item ID (auto generated)'],
+        ['Alpha', '', '', 'Sam May 8, 2026 4:43 PM', '01:30:00', 'Done, Done, Stuck', 'Shared note', '1000000001'],
+        ['Subitems', 'Name', 'Task', 'Status', 'Task', 'Status', 'Task', 'Checkbox', 'Item ID (auto generated)'],
+        ['', 'Sales', 'Contract Signed', 'v', 'Kickoff Scheduled', '', '', '', '1000000002'],
+        ['', 'VP', '', '', 'Send recap - https://example.com/recap', 'v', 'Connect on LinkedIn', 'v', '1000000003'],
+        ['Beta', '', 'Alpha', 'Jane Doe Aug 14, 2026 12:20 PM', '00:45:00', 'Done', 'Shared note', '1000000004'],
+        ['Gamma', '', 'Alpha, Beta, Missing step', 'Jane Doe Aug 15, 2026 9:00 AM', '02:00:00', 'Stuck, Stuck', 'Shared note', '1000000005'],
+    ], null, 'A1', true);
+
+    (new Xlsx($spreadsheet))->save($path);
+}
+
+function importLinkedMondayFixture(object $test): WorkspaceNavigationItem
+{
+    $workspace = Workspace::factory()->create();
+
+    $path = sys_get_temp_dir().'/monday-linked-import-'.uniqid().'.xlsx';
+    writeLinkedMondayFixture($path);
+
+    $test->artisan('board:import-monday', ['file' => $path, '--workspace' => $workspace->slug])
+        ->expectsOutputToContain('Missing step')
+        ->assertExitCode(0);
+
+    @unlink($path);
+
+    return WorkspaceNavigationItem::where('workspace_id', $workspace->id)->where('label', 'Linked Types Board')->firstOrFail();
+}
+
+test('detects checklist, dependency, activity log and duration columns', function () {
+    $board = importLinkedMondayFixture($this);
+
+    expect($board->columns()->where('scope', BoardColumn::SCOPE_ITEM)->pluck('type', 'label')->all())->toBe([
+        'Depends On' => BoardColumn::TYPE_DEPENDENCY,
+        'Last Updated' => BoardColumn::TYPE_DATE,
+        'Tracked' => BoardColumn::TYPE_TIME_TRACKING,
+        // Repeats its linked items' statuses, so it can't be a single Status.
+        'Tasks Status' => BoardColumn::TYPE_TEXT,
+        // A header naming free-form text is never promoted to a Status.
+        'Notes' => BoardColumn::TYPE_TEXT,
+    ])->and($board->columns()->where('scope', BoardColumn::SCOPE_SUBITEM)->pluck('type', 'label')->all())->toBe([
+        // Three "Task | Status/Checkbox" pairs collapse into one checklist instead of six columns.
+        'Tasks' => BoardColumn::TYPE_CHECKLIST,
+    ]);
+});
+
+test('stores checklist entries, linked dependencies, activity timestamps and durations', function () {
+    $board = importLinkedMondayFixture($this);
+
+    $items = $board->items()->get()->keyBy('name');
+    $checklist = fn (string $name) => collect(importedValue($items[$name], importedColumn($board, 'tasks', BoardColumn::SCOPE_SUBITEM)))
+        ->map(fn (array $entry) => [$entry['text'], $entry['is_done']])->all();
+
+    expect($checklist('Sales'))->toBe([['Contract Signed', true], ['Kickoff Scheduled', false]])
+        ->and($checklist('VP'))->toBe([['Send recap - https://example.com/recap', true], ['Connect on LinkedIn', true]])
+        ->and(importedValue($items['Beta'], importedColumn($board, 'depends_on')))->toBe([(string) $items['Alpha']->id])
+        // "Missing step" matches no item: the rest still link, and the command lists it.
+        ->and(importedValue($items['Gamma'], importedColumn($board, 'depends_on')))->toBe([(string) $items['Alpha']->id, (string) $items['Beta']->id])
+        ->and(importedValue($items['Alpha'], importedColumn($board, 'last_updated')))->toBe('2026-05-08T16:43')
+        ->and(importedValue($items['Alpha'], importedColumn($board, 'tracked')))->toBe(['seconds' => 5400, 'running_since' => null]);
 });

@@ -43,8 +43,10 @@ class BoardImportController extends Controller
      * Step 1 ("Upload")'s submit — parses the dropped file, caches it to
      * disk under a fresh `import_token`, and returns everything the "Map
      * columns" step needs to render: each source column's label/sample
-     * values/guessed type, a pre-filled best-guess mapping, and the target
-     * tab's own existing columns + tables (for the "Add items to" picker).
+     * values/guessed type (plus every type its values fit, and which source
+     * columns a merged Timeline/checklist column was built from), a
+     * pre-filled best-guess mapping, and the target tab's own existing
+     * columns + tables (for the "Add items to" picker).
      */
     public function analyze(AnalyzeBoardImportRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -69,7 +71,7 @@ class BoardImportController extends Controller
 
         $existing_columns = $view->columns()->where('scope', BoardColumn::SCOPE_ITEM)->orderBy('position')->get();
         $groups = $view->groups()->orderBy('position')->get();
-        $source_columns = $this->importer->buildSourceColumns($parsed['headers'], $parsed['rows']);
+        $source_columns = $this->importer->buildSourceColumns($parsed['headers'], $parsed['rows'], $parsed['combined_from']);
 
         return response()->json([
             'import_token' => $import_token,

@@ -2,9 +2,13 @@
 
 namespace App\Services\Board;
 
+use App\Concerns\CombinesSplitImportColumns;
 use App\Concerns\InfersBoardColumnTypes;
 use App\Http\Controllers\Board\BoardItemCellFileController;
 use App\Models\BoardColumn;
+use App\Models\BoardGroup;
+use App\Models\BoardItem;
+use App\Models\BoardItemValue;
 use App\Models\BoardTag;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -24,6 +28,12 @@ use Illuminate\Support\Str;
  * Status/Label/Dropdown labels a column doesn't have yet (possible when the
  * wizard maps a file onto an *existing* column) are appended to the column's
  * options rather than silently dropped.
+ *
+ * Dependency and Connect boards cells name other items, which may not exist
+ * yet while rows are still being written (row 3 can depend on row 40). The
+ * caller hands those cells to {@see deferLinkedItems()} once the item exists,
+ * and {@see resolveLinkedItems()} matches every name to an item id after the
+ * last row is in.
  */
 class ImportedCellValueCaster
 {
@@ -35,6 +45,12 @@ class ImportedCellValueCaster
     /** @var array<int, string> */
     private array $unmatched_people = [];
 
+    /** @var array<int, array{item_id: int, column: BoardColumn, raw: string}> */
+    private array $deferred_links = [];
+
+    /** @var array<int, string> */
+    private array $unmatched_links = [];
+
     /**
      * @param  Collection<int, User>  $users
      */
@@ -44,13 +60,14 @@ class ImportedCellValueCaster
     ) {}
 
     /**
-     * @param  string|null  $end_raw  a Timeline column's second source cell ("- End"), when it was split in two
+     * The value `$raw` stores as under `$column`, or null when there's nothing
+     * to store. Always null for a type {@see defersLinkedItems()} covers.
      */
-    public function cast(BoardColumn $column, string $raw, ?string $end_raw = null): mixed
+    public function cast(BoardColumn $column, string $raw): mixed
     {
         $raw = trim($raw);
 
-        if ($raw === '' && trim((string) $end_raw) === '') {
+        if ($raw === '') {
             return null;
         }
 
@@ -61,9 +78,9 @@ class ImportedCellValueCaster
             BoardColumn::TYPE_PROGRESS => $this->parsePercent($raw),
             BoardColumn::TYPE_RATING => $this->castRating($raw),
             BoardColumn::TYPE_CHECKBOX => $this->isUncheckedToken($raw) ? null : true,
-            BoardColumn::TYPE_DATE => $this->parseDate($raw),
-            BoardColumn::TYPE_TIMELINE => $this->castTimeline($raw, $end_raw),
-            BoardColumn::TYPE_PEOPLE => $this->castPeople($raw),
+            BoardColumn::TYPE_DATE => $this->parseDate($raw) ?? $this->parseActivityLogDate($raw),
+            BoardColumn::TYPE_TIMELINE => $this->castTimeline($raw),
+            BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_VOTE => $this->castPeople($raw),
             BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL => $this->resolveOptionId($column, $raw),
             BoardColumn::TYPE_DROPDOWN => $this->nonEmpty(array_values(array_unique(array_map(
                 fn (string $label) => $this->resolveOptionId($column, $label),
@@ -78,10 +95,133 @@ class ImportedCellValueCaster
             BoardColumn::TYPE_LINK => $this->castLink($raw),
             BoardColumn::TYPE_FILES => $this->castFiles($raw),
             BoardColumn::TYPE_TIME_TRACKING => $this->castTimeTracking($raw),
-            // Vote (who voted), Dependency/Connect boards (ids on this or another board) and the
-            // computed types can't be reconstructed from an exported cell's display text.
+            BoardColumn::TYPE_CHECKLIST => $this->castChecklist($raw),
+            // Dependency/Connect boards are resolved later (see `deferLinkedItems()`), and the
+            // computed types (Formula, Mirror, Auto-number) never store an imported value.
             default => null,
         };
+    }
+
+    /** True for the column types whose cells name other items and are resolved after every row is written. */
+    public function defersLinkedItems(BoardColumn $column): bool
+    {
+        return in_array($column->type, [BoardColumn::TYPE_DEPENDENCY, BoardColumn::TYPE_CONNECT_BOARD], true);
+    }
+
+    /** Queues a Dependency/Connect boards cell for {@see resolveLinkedItems()}. */
+    public function deferLinkedItems(int $item_id, BoardColumn $column, string $raw): void
+    {
+        $raw = trim($raw);
+
+        if ($raw !== '' && $this->defersLinkedItems($column)) {
+            $this->deferred_links[] = ['item_id' => $item_id, 'column' => $column, 'raw' => $raw];
+        }
+    }
+
+    /**
+     * Matches every queued cell's item names (case-insensitive) against the
+     * items it may link to, and stores the matched ids: any item or subitem on
+     * the column's own tab for a Dependency (never the item itself), any item
+     * on the linked board for Connect boards. Names that match nothing are
+     * remembered for {@see unmatchedLinkedItems()}.
+     *
+     * @return int how many cells got at least one link
+     */
+    public function resolveLinkedItems(): int
+    {
+        $linked_cells = 0;
+        /** @var array<int, array<string, array<int, string>>> $ids_by_name_by_column */
+        $ids_by_name_by_column = [];
+
+        foreach ($this->deferred_links as $entry) {
+            $column = $entry['column'];
+            $ids_by_name = $ids_by_name_by_column[$column->id] ??= $this->linkCandidatesFor($column);
+
+            $ids = [];
+            foreach ($this->linkedItemNames($entry['raw'], $ids_by_name) as $name) {
+                $candidates = array_values(array_filter(
+                    $ids_by_name[mb_strtolower($name)] ?? [],
+                    fn (string $id) => $id !== (string) $entry['item_id'],
+                ));
+
+                if ($candidates === []) {
+                    $this->unmatched_links[] = $name;
+
+                    continue;
+                }
+
+                $ids[] = $candidates[0];
+            }
+
+            $ids = array_values(array_unique($ids));
+
+            if ($ids === []) {
+                continue;
+            }
+
+            BoardItemValue::updateOrCreate(
+                ['item_id' => $entry['item_id'], 'column_id' => $column->id],
+                ['value' => $ids],
+            );
+            $linked_cells++;
+        }
+
+        $this->deferred_links = [];
+
+        return $linked_cells;
+    }
+
+    /**
+     * Every item name a Dependency/Connect boards cell referenced that didn't match an item, deduplicated.
+     *
+     * @return array<int, string>
+     */
+    public function unmatchedLinkedItems(): array
+    {
+        return array_values(array_unique($this->unmatched_links));
+    }
+
+    /**
+     * Lower-cased item name => ids of every item carrying that name, among the items `$column` may link to.
+     *
+     * @return array<string, array<int, string>>
+     */
+    private function linkCandidatesFor(BoardColumn $column): array
+    {
+        $query = BoardItem::query()->where('is_archived', false);
+
+        if ($column->type === BoardColumn::TYPE_DEPENDENCY) {
+            $query->whereIn('group_id', BoardGroup::where('board_view_id', $column->board_view_id)->select('id'));
+        } else {
+            $linked_board_id = data_get($column->config, 'linked_board_id');
+
+            if (! is_numeric($linked_board_id)) {
+                return [];
+            }
+
+            $query->where('board_id', (int) $linked_board_id)->whereNull('parent_id');
+        }
+
+        $ids_by_name = [];
+
+        foreach ($query->orderBy('position')->get(['id', 'name']) as $item) {
+            $ids_by_name[mb_strtolower(trim($item->name))][] = (string) $item->id;
+        }
+
+        return $ids_by_name;
+    }
+
+    /**
+     * The item names one cell references: the whole cell when it's a single
+     * name (item names may contain commas themselves), otherwise each
+     * comma-separated token.
+     *
+     * @param  array<string, array<int, string>>  $ids_by_name
+     * @return array<int, string>
+     */
+    private function linkedItemNames(string $raw, array $ids_by_name): array
+    {
+        return isset($ids_by_name[mb_strtolower($raw)]) ? [$raw] : $this->splitList($raw);
     }
 
     /**
@@ -113,25 +253,20 @@ class ImportedCellValueCaster
     }
 
     /**
+     * Reads a "start - end" range (see {@see CombinesSplitImportColumns} for how a
+     * split "- Start"/"- End" pair becomes one) or a single date, kept as a one-day range.
+     *
      * @return array{start: string, end: string}|null
      */
-    private function castTimeline(string $start_raw, ?string $end_raw): ?array
+    private function castTimeline(string $raw): ?array
     {
-        if ($end_raw === null) {
-            return $this->parseDateRange($start_raw) ?? $this->singleDayRange($this->parseDate($start_raw));
+        $range = $this->parseDateRange($raw);
+
+        if ($range === null) {
+            return $this->singleDayRange($this->parseDate($raw));
         }
 
-        $start = $this->parseDate($start_raw);
-        $end = $this->parseDate($end_raw);
-
-        if ($start === null || $end === null) {
-            // monday.com lets a Timeline hold just one side — keep that day rather than losing it.
-            return $this->singleDayRange($start ?? $end);
-        }
-
-        [$start, $end] = [substr($start, 0, 10), substr($end, 0, 10)];
-
-        return $start <= $end ? ['start' => $start, 'end' => $end] : ['start' => $end, 'end' => $start];
+        return $range['start'] <= $range['end'] ? $range : ['start' => $range['end'], 'end' => $range['start']];
     }
 
     /**
@@ -199,15 +334,32 @@ class ImportedCellValueCaster
      */
     private function castTimeTracking(string $raw): ?array
     {
-        if (preg_match('/^(\d+):([0-5]\d)(?::([0-5]\d))?$/', $raw, $matches) === 1) {
-            $seconds = ((int) $matches[1] * 3600) + ((int) $matches[2] * 60) + (int) ($matches[3] ?? 0);
+        $seconds = $this->parseDuration($raw) ?? $this->parseDuration("{$raw}:00");
 
+        if ($seconds !== null) {
             return ['seconds' => $seconds, 'running_since' => null];
         }
 
         $hours = $this->parseNumber($raw);
 
         return $hours === null ? null : ['seconds' => (int) round($hours * 3600), 'running_since' => null];
+    }
+
+    /**
+     * Each sub-task becomes an entry of the Checklist column's own
+     * `{id, text, is_done}` shape, see {@see parseChecklistEntries()}.
+     *
+     * @return array<int, array{id: string, text: string, is_done: bool}>|null
+     */
+    private function castChecklist(string $raw): ?array
+    {
+        $entries = array_map(fn (array $entry) => [
+            'id' => (string) Str::uuid(),
+            'text' => Str::limit($entry['text'], 500, ''),
+            'is_done' => $entry['is_done'],
+        ], $this->parseChecklistEntries($raw));
+
+        return $this->nonEmpty($entries);
     }
 
     /**

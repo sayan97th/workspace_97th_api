@@ -459,3 +459,123 @@ test('commit onto an existing status column adds labels the column does not have
         // "done" matches the existing "Done" option case-insensitively instead of duplicating it.
         ->and($stored)->toBe(['done-id', $blocked_id]);
 });
+
+test('analyze merges a split timeline pair into one column and lists the types its values fit', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+
+    $csv = "Name,Timeline - Start,Timeline - End,Hours\nTask One,2024-01-01,2024-01-31,3\nTask Two,2024-02-10,,5\n";
+
+    $response = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", ['file' => fakeFlatCsvUpload($csv)]);
+
+    $response->assertOk()
+        ->assertJsonCount(3, 'source_columns')
+        ->assertJsonPath('source_columns.1.label', 'Timeline')
+        ->assertJsonPath('source_columns.1.suggested_type', BoardColumn::TYPE_TIMELINE)
+        ->assertJsonPath('source_columns.1.combined_from', ['Timeline - Start', 'Timeline - End'])
+        ->assertJsonPath('source_columns.2.combined_from', []);
+
+    expect($response->json('source_columns.2.compatible_types'))->toContain(BoardColumn::TYPE_NUMBER)
+        ->not->toContain(BoardColumn::TYPE_DATE)
+        ->and($response->json('creatable_column_types'))->toContain(BoardColumn::TYPE_CHECKLIST, BoardColumn::TYPE_DEPENDENCY);
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $response->json('import_token'),
+        'new_group_name' => 'Imported table',
+        'mappings' => createMappingsFor($response->json('source_columns')),
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
+
+    $timeline = BoardColumn::where('board_id', $board->id)->where('label', 'Timeline')->firstOrFail();
+    $items = BoardGroup::where('board_id', $board->id)->firstOrFail()->items()->orderBy('position')->get();
+
+    expect($items->map(fn ($item) => $item->values()->where('column_id', $timeline->id)->value('value'))->all())->toBe([
+        ['start' => '2024-01-01', 'end' => '2024-01-31'],
+        // Only one side filled: kept as a one-day range.
+        ['start' => '2024-02-10', 'end' => '2024-02-10'],
+    ]);
+});
+
+test('commit writes checklist, dependency and activity log values in the shapes their columns read', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+
+    $csv = "Name,Checklist,Depends On,Last Updated\n"
+        ."Design,\"[x] Wireframes\n[ ] Final mockups\",,\"Sam May 8, 2026 4:43 PM\"\n"
+        ."Build,\"Setup repo, Write API (auth, users)\",Design,\"Jane Doe Aug 14, 2026 12:20 PM\"\n"
+        ."Launch,,\"Design, Build, Missing step\",\n";
+
+    $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", ['file' => fakeFlatCsvUpload($csv)])->json();
+    $types = collect($analyze['source_columns'])->pluck('suggested_type', 'label')->all();
+
+    expect($types)->toBe([
+        'Name' => BoardColumn::TYPE_TEXT,
+        'Checklist' => BoardColumn::TYPE_CHECKLIST,
+        'Depends On' => BoardColumn::TYPE_DEPENDENCY,
+        'Last Updated' => BoardColumn::TYPE_DATE,
+    ]);
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $analyze['import_token'],
+        'new_group_name' => 'Imported table',
+        'mappings' => createMappingsFor($analyze['source_columns']),
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
+
+    $items = BoardGroup::where('board_id', $board->id)->firstOrFail()->items()->orderBy('position')->get()->keyBy('name');
+    $valueOf = fn (string $item, string $label) => $items[$item]->values()
+        ->where('column_id', BoardColumn::where('board_id', $board->id)->where('label', $label)->value('id'))
+        ->value('value');
+
+    $checklist = fn (string $item) => collect($valueOf($item, 'Checklist'))->map(fn (array $entry) => [$entry['text'], $entry['is_done']])->all();
+
+    expect($checklist('Design'))->toBe([['Wireframes', true], ['Final mockups', false]])
+        // Commas inside parentheses don't split an entry.
+        ->and($checklist('Build'))->toBe([['Setup repo', false], ['Write API (auth, users)', false]])
+        ->and($valueOf('Build', 'Depends On'))->toBe([(string) $items['Design']->id])
+        ->and($valueOf('Launch', 'Depends On'))->toBe([(string) $items['Design']->id, (string) $items['Build']->id])
+        ->and($valueOf('Design', 'Last Updated'))->toBe('2026-05-08T16:43');
+});
+
+test('commit numbers new items on an existing auto-number column after its highest number', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $auto_number = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view->id,
+        'scope' => BoardColumn::SCOPE_ITEM,
+        'key' => 'ticket',
+        'label' => 'Ticket',
+        'type' => BoardColumn::TYPE_AUTO_NUMBER,
+    ]);
+    $existing_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id]);
+    $existing_item = $board->items()->create(['group_id' => $existing_group->id, 'name' => 'Existing', 'position' => 1]);
+    $existing_item->values()->create(['column_id' => $auto_number->id, 'value' => 7]);
+
+    $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
+        'file' => fakeFlatCsvUpload("Name,Ticket\nTask One,T-100\nTask Two,T-101\n"),
+        'view_id' => $view->id,
+    ])->json();
+
+    // A same-named read-only column is never auto-matched: the file's own ids go to a new column instead.
+    expect($analyze['suggested_mappings'][1]['mode'])->toBe('create');
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $analyze['import_token'],
+        'view_id' => $view->id,
+        'new_group_name' => 'Imported table',
+        'mappings' => [
+            ['source_index' => 0, 'mode' => 'name'],
+            // Mapping onto a read-only column is ignored rather than overwriting its numbers.
+            ['source_index' => 1, 'mode' => 'map', 'target_column_id' => $auto_number->id],
+        ],
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
+
+    $group = BoardGroup::where('board_id', $board->id)->where('name', 'Imported table')->firstOrFail();
+    $numbers = $group->items()->orderBy('position')->get()
+        ->map(fn ($item) => $item->values()->where('column_id', $auto_number->id)->value('value'))->all();
+
+    expect($numbers)->toBe([8, 9]);
+});

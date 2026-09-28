@@ -82,9 +82,10 @@ class ImportMondayBoardTreeCommand extends Command
         $rows = [];
         $totals = [
             'created' => 0, 'replaced' => 0, 'skipped' => 0, 'failed' => 0,
-            'groups' => 0, 'items' => 0, 'subitems' => 0, 'comments' => 0, 'replies' => 0,
+            'groups' => 0, 'items' => 0, 'subitems' => 0, 'linked_cells' => 0, 'comments' => 0, 'replies' => 0,
         ];
         $unmatched_people = [];
+        $unmatched_links = [];
 
         foreach ($files as $file) {
             $relative_label = $file['folders'] === []
@@ -125,7 +126,9 @@ class ImportMondayBoardTreeCommand extends Command
             $totals['groups'] += $summary['groups'];
             $totals['items'] += $summary['items'];
             $totals['subitems'] += $summary['subitems'];
+            $totals['linked_cells'] += $summary['linked_cells'];
             array_push($unmatched_people, ...$summary['unmatched_people']);
+            array_push($unmatched_links, ...$summary['unmatched_links']);
 
             if ($updates_summary !== null) {
                 $totals['comments'] += $updates_summary['comments'];
@@ -159,10 +162,10 @@ class ImportMondayBoardTreeCommand extends Command
         $this->info('Import complete.');
         $this->table(['File', 'Result', 'Groups', 'Items', 'Subitems'], $rows);
         $this->table(
-            ['Created', 'Replaced', 'Skipped', 'Failed', 'Total groups', 'Total items', 'Total subitems', 'Comments', 'Replies'],
+            ['Created', 'Replaced', 'Skipped', 'Failed', 'Total groups', 'Total items', 'Total subitems', 'Linked cells', 'Comments', 'Replies'],
             [[
                 $totals['created'], $totals['replaced'], $totals['skipped'], $totals['failed'],
-                $totals['groups'], $totals['items'], $totals['subitems'], $totals['comments'], $totals['replies'],
+                $totals['groups'], $totals['items'], $totals['subitems'], $totals['linked_cells'], $totals['comments'], $totals['replies'],
             ]],
         );
 
@@ -173,6 +176,8 @@ class ImportMondayBoardTreeCommand extends Command
                 $this->line("  - {$name}");
             }
         }
+
+        $this->renderUnmatchedLinks(array_values(array_unique($unmatched_links)));
 
         if ($totals['failed'] > 0 && $totals['created'] === 0 && $totals['replaced'] === 0) {
             return self::FAILURE;
@@ -195,7 +200,7 @@ class ImportMondayBoardTreeCommand extends Command
      *     groups: int,
      *     items: int,
      *     subitems: int,
-     *     summary: array{groups: int, items: int, subitems: int, unmatched_people: array<int, string>, item_ids_by_monday_id: array<string, int>}|null,
+     *     summary: array{groups: int, items: int, subitems: int, linked_cells: int, unmatched_people: array<int, string>, unmatched_links: array<int, string>, item_ids_by_monday_id: array<string, int>}|null,
      *     updates_summary: array{comments: int, replies: int, skipped_no_item: int, skipped_secret: int, unmatched_authors: array<int, string>}|null,
      * }
      */

@@ -74,6 +74,17 @@ trait InfersBoardColumnTypes
         'interviewer', 'designer', 'epic owner', 'creative owner', 'expert', 'members', 'team members',
     ];
 
+    /**
+     * Header labels (case-insensitive, exact) that name a free-form text
+     * column, so a handful of repeated values under them never gets promoted
+     * to a Status column.
+     *
+     * @var array<int, string>
+     */
+    private const TEXT_LABELS = [
+        'text', 'notes', 'note', 'comments', 'comment', 'details', 'summary', 'description', 'remarks',
+    ];
+
     /** How monday.com's export writes a ticked Checkbox cell (a lone "v"), plus the usual spreadsheet spellings of "yes". */
     private const CHECKED_TOKENS = ['v', '✓', '✔', '☑', 'x', 'yes', 'y', 'true', 'checked'];
 
@@ -85,6 +96,19 @@ trait InfersBoardColumnTypes
 
     /** Share of a column's values that must agree before a value-based guess wins. */
     private const DETECTION_THRESHOLD = 0.9;
+
+    /**
+     * A monday.com "Last updated" / "Creation log" cell: who, then when, e.g.
+     * "Catherine Tandy Aug 30, 2026 11:01 AM". Only the timestamp is kept, since
+     * a Date column has nowhere to store the person.
+     */
+    private const ACTIVITY_LOG_PATTERN = '/^(?<person>\p{L}[\p{L}\'.\-]*(?:\s+\p{L}[\p{L}\'.\-]*){0,3})\s+(?<date>(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}(?:\s+\d{1,2}:\d{2}\s*[AP]M)?)$/u';
+
+    /** A checklist line: an optional bullet, then a "[x]" / "[ ]" / "☑" / "☐" style marker, then the sub-task's text. */
+    private const CHECKLIST_LINE_PATTERN = '/^\s*(?:[-*•]\s*)?(?<marker>\[(?:\s|x|X|✓|✔)?\]|☐|☑|✅|✓|✔)\s*(?<text>.+)$/u';
+
+    /** A Time Tracking cell as monday.com exports it: "HH:MM:SS". */
+    private const DURATION_PATTERN = '/^(\d+):([0-5]\d):([0-5]\d)$/';
 
     /**
      * Date (and date-time) layouts monday.com and common spreadsheets export,
@@ -124,8 +148,17 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_CHECKBOX, [], $hint === BoardColumn::TYPE_CHECKBOX ? 'Header names a checkbox' : "All {$count} values are checkmarks"];
         }
 
+        $checklist_share = $this->shareMatching($values, fn (string $value) => $this->isChecklistCell($value));
+        if ($checklist_share >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_CHECKLIST, [], 'Values are checklists of done/not done sub-tasks'];
+        }
+
         if ($this->shareMatching($values, fn (string $value) => $this->parseNumber($value) !== null) === 1.0) {
             return $this->detectNumericColumn($values, $hint, $label_lower);
+        }
+
+        if ($this->shareMatching($values, fn (string $value) => $this->parseDuration($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_TIME_TRACKING, [], 'Values are tracked durations (hh:mm:ss)'];
         }
 
         if ($hint === BoardColumn::TYPE_PROGRESS && $this->shareMatching($values, fn (string $value) => $this->parsePercent($value) !== null) === 1.0) {
@@ -153,13 +186,35 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_DATE, [], sprintf('%d%% of values are dates', (int) round($date_share * 100))];
         }
 
+        if ($this->shareMatching($values, fn (string $value) => $this->parseActivityLogDate($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_DATE, [], 'Values are "person + timestamp" activity entries, kept as the timestamp'];
+        }
+
+        if ($hint === BoardColumn::TYPE_CHECKLIST) {
+            return [BoardColumn::TYPE_CHECKLIST, [], 'Header names a checklist, each line or comma-separated entry becomes a sub-task'];
+        }
+
         if ($this->shareMatching($values, fn (string $value) => $this->parseLinks($value) !== null) >= 0.8) {
             return $this->detectLinkColumn($values, $hint);
+        }
+
+        if ($hint === BoardColumn::TYPE_DEPENDENCY) {
+            return [BoardColumn::TYPE_DEPENDENCY, [], 'Header names a dependency, item names are linked once every row is imported'];
         }
 
         $people = $this->detectPeopleColumn($values, $hint, $users);
         if ($people !== null) {
             return $people;
+        }
+
+        if ($hint === BoardColumn::TYPE_TEXT) {
+            return $this->detectTextColumn($values, 'Header names free-form text');
+        }
+
+        // A cell repeating the same token ("Done, Done, Stuck") is a mirror or
+        // rollup of linked items' values, not a set of picked options.
+        if ($this->shareMatching($values, fn (string $value) => $this->hasRepeatedTokens($value)) > 0) {
+            return $this->detectTextColumn($values, 'Cells repeat values from linked items (a mirror or rollup), kept as text');
         }
 
         if ($hint === BoardColumn::TYPE_LABEL) {
@@ -183,11 +238,66 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_STATUS, $distinct, sprintf('%d values repeat across %d rows', count($distinct), $count)];
         }
 
+        return $this->detectTextColumn($values);
+    }
+
+    /**
+     * Text or Long text, depending on how long the values run.
+     *
+     * @param  array<int, string>  $values
+     * @return array{0: string, 1: array<int, string>, 2: string}
+     */
+    private function detectTextColumn(array $values, ?string $reason = null): array
+    {
         if ($this->maxLength($values) > 150 || $this->averageLength($values) > 80 || $this->shareMatching($values, fn (string $value) => str_contains($value, "\n")) > 0) {
-            return [BoardColumn::TYPE_LONG_TEXT, [], 'Values are long or span several lines'];
+            return [BoardColumn::TYPE_LONG_TEXT, [], $reason ?? 'Values are long or span several lines'];
         }
 
-        return [BoardColumn::TYPE_TEXT, [], 'Free-form text'];
+        return [BoardColumn::TYPE_TEXT, [], $reason ?? 'Free-form text'];
+    }
+
+    /**
+     * Every column type that can store (nearly) all of these values without
+     * losing them, in {@see BoardColumn} type order: the wizard's "Map
+     * columns" step recommends these and warns when a column is pointed at a
+     * type outside the list. With no values at all, every type fits.
+     *
+     * @param  array<int, string>  $candidate_types
+     * @param  array<int, string>  $raw_values
+     * @param  Collection<int, User>|null  $users
+     * @return array<int, string>
+     */
+    private function compatibleColumnTypes(array $candidate_types, array $raw_values, ?Collection $users = null): array
+    {
+        $values = array_values(array_filter(array_map('trim', $raw_values), fn (string $value) => $value !== ''));
+
+        if ($values === []) {
+            return array_values($candidate_types);
+        }
+
+        $fits = fn (callable $matches) => $this->shareMatching($values, $matches) >= self::DETECTION_THRESHOLD;
+        $max_length = $this->maxLength($values);
+
+        $compatible = array_filter($candidate_types, fn (string $type) => match ($type) {
+            BoardColumn::TYPE_TEXT => $max_length <= 2000 && $this->shareMatching($values, fn (string $value) => str_contains($value, "\n")) === 0.0,
+            BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_CHECKLIST, BoardColumn::TYPE_DEPENDENCY => true,
+            BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL => $max_length <= 255 && count(array_unique($values)) <= 60,
+            BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_TAGS => $fits(fn (string $value) => $this->maxLength($this->splitList($value)) <= 255),
+            BoardColumn::TYPE_NUMBER => $fits(fn (string $value) => $this->parseNumber($value) !== null),
+            BoardColumn::TYPE_PROGRESS => $fits(fn (string $value) => $this->parsePercent($value) !== null),
+            BoardColumn::TYPE_RATING => $fits(fn (string $value) => ($number = $this->parseNumber($value)) !== null && $number >= 0 && $number <= 5),
+            BoardColumn::TYPE_CHECKBOX => $fits(fn (string $value) => $this->isCheckedToken($value) || $this->isUncheckedToken($value)),
+            BoardColumn::TYPE_DATE => $fits(fn (string $value) => $this->parseDate($value) !== null || $this->parseActivityLogDate($value) !== null),
+            BoardColumn::TYPE_TIMELINE => $fits(fn (string $value) => $this->parseDateRange($value) !== null || $this->parseDate($value) !== null),
+            BoardColumn::TYPE_EMAIL => $fits(fn (string $value) => $this->extractEmails($value) !== []),
+            BoardColumn::TYPE_PHONE => $fits(fn (string $value) => $this->isPhone($value)),
+            BoardColumn::TYPE_LINK, BoardColumn::TYPE_FILES => $fits(fn (string $value) => $this->parseLinks($value) !== null),
+            BoardColumn::TYPE_TIME_TRACKING => $fits(fn (string $value) => $this->parseDuration($value) !== null || $this->parseNumber($value) !== null),
+            BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_VOTE => $users !== null && $this->detectPeopleColumn($values, BoardColumn::TYPE_PEOPLE, $users) !== null,
+            default => false,
+        });
+
+        return array_values($compatible);
     }
 
     /**
@@ -201,12 +311,18 @@ trait InfersBoardColumnTypes
             return BoardColumn::TYPE_PEOPLE;
         }
 
+        if (in_array($label_lower, self::TEXT_LABELS, true)) {
+            return BoardColumn::TYPE_TEXT;
+        }
+
         $keyword_hints = [
             BoardColumn::TYPE_CHECKBOX => ['checkbox'],
+            BoardColumn::TYPE_CHECKLIST => ['checklist', 'to do', 'to-do', 'todo', 'todos', 'subtasks', 'sub tasks', 'sub-tasks', 'action items'],
+            BoardColumn::TYPE_DEPENDENCY => ['dependency', 'dependencies', 'depends on', 'dependent on', 'blocked by', 'predecessor', 'predecessors'],
             BoardColumn::TYPE_RATING => ['rating'],
             BoardColumn::TYPE_PROGRESS => ['progress', 'percent', 'completion %'],
             BoardColumn::TYPE_VOTE => ['vote'],
-            BoardColumn::TYPE_TIME_TRACKING => ['time tracking'],
+            BoardColumn::TYPE_TIME_TRACKING => ['time tracking', 'duration'],
             BoardColumn::TYPE_EMAIL => ['email', 'e-mail'],
             BoardColumn::TYPE_PHONE => ['phone', 'mobile'],
             BoardColumn::TYPE_FILES => ['files', 'file', 'attachment'],
@@ -357,11 +473,8 @@ trait InfersBoardColumnTypes
         // A cell repeating the same token ("Done, Done, Stuck") is a rollup/
         // mirror of other items' values, not a set of picked options — keeping
         // it as text is the only way to keep those counts.
-        foreach ($with_comma as $value) {
-            $cell_tokens = array_map('mb_strtolower', $this->splitList($value));
-            if (count($cell_tokens) !== count(array_unique($cell_tokens))) {
-                return null;
-            }
+        if ($this->shareMatching($with_comma, fn (string $value) => $this->hasRepeatedTokens($value)) > 0) {
+            return null;
         }
 
         $tokens = [];
@@ -516,6 +629,134 @@ trait InfersBoardColumnTypes
         }
 
         return null;
+    }
+
+    /**
+     * The timestamp of a monday.com "Last updated" / "Creation log" cell
+     * ("Sam May 8, 2026 4:43 PM"), normalized the same way {@see parseDate()}
+     * normalizes a plain date. Null for anything else.
+     */
+    private function parseActivityLogDate(string $raw): ?string
+    {
+        if (preg_match(self::ACTIVITY_LOG_PATTERN, trim($raw), $matches) !== 1) {
+            return null;
+        }
+
+        return $this->parseDate($matches['date']);
+    }
+
+    /** Reads a monday.com Time Tracking cell ("01:30:00") into seconds; null for anything else. */
+    private function parseDuration(string $raw): ?int
+    {
+        if (preg_match(self::DURATION_PATTERN, trim($raw), $matches) !== 1) {
+            return null;
+        }
+
+        return ((int) $matches[1] * 3600) + ((int) $matches[2] * 60) + (int) $matches[3];
+    }
+
+    /** True when every line of the cell carries a checklist marker ("[x] Send recap", "☐ Book call"). */
+    private function isChecklistCell(string $value): bool
+    {
+        $lines = array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $value) ?: []), fn (string $line) => $line !== '');
+
+        if ($lines === []) {
+            return false;
+        }
+
+        foreach ($lines as $line) {
+            if (preg_match(self::CHECKLIST_LINE_PATTERN, $line) !== 1) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Splits a checklist cell into its sub-tasks. Each line is one entry when
+     * the cell spans several lines; otherwise commas separate entries, except
+     * inside parentheses, so "CRUD (Create, Read)" stays one sub-task. A
+     * "[x]" / "☑" / "✓" marker ticks an entry; anything else starts unticked.
+     *
+     * @return array<int, array{text: string, is_done: bool}>
+     */
+    private function parseChecklistEntries(string $raw): array
+    {
+        $raw = trim($raw);
+
+        if ($raw === '') {
+            return [];
+        }
+
+        $parts = preg_match('/\r\n|\r|\n/', $raw) === 1
+            ? preg_split('/\r\n|\r|\n/', $raw) ?: [$raw]
+            : $this->splitOutsideParentheses($raw);
+
+        $entries = [];
+
+        foreach ($parts as $part) {
+            $part = trim($part);
+
+            if ($part === '') {
+                continue;
+            }
+
+            if (preg_match(self::CHECKLIST_LINE_PATTERN, $part, $matches) === 1) {
+                $marker = mb_strtolower($matches['marker']);
+                $is_done = ! in_array($marker, ['[]', '[ ]', '☐'], true);
+                $entries[] = ['text' => trim($matches['text']), 'is_done' => $is_done];
+
+                continue;
+            }
+
+            $entries[] = ['text' => ltrim($part, "-*• \t"), 'is_done' => false];
+        }
+
+        return array_values(array_filter($entries, fn (array $entry) => $entry['text'] !== ''));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function splitOutsideParentheses(string $raw): array
+    {
+        $parts = [];
+        $current = '';
+        $depth = 0;
+
+        foreach (mb_str_split($raw) as $character) {
+            if ($character === '(') {
+                $depth++;
+            } elseif ($character === ')') {
+                $depth = max(0, $depth - 1);
+            }
+
+            if ($character === ',' && $depth === 0) {
+                $parts[] = $current;
+                $current = '';
+
+                continue;
+            }
+
+            $current .= $character;
+        }
+
+        $parts[] = $current;
+
+        return $parts;
+    }
+
+    /** True for a comma-separated cell that repeats a token ("Done, Done, Stuck"). */
+    private function hasRepeatedTokens(string $value): bool
+    {
+        if (! str_contains($value, ',')) {
+            return false;
+        }
+
+        $tokens = array_map('mb_strtolower', $this->splitList($value));
+
+        return count($tokens) !== count(array_unique($tokens));
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Services\Board;
 
+use App\Concerns\CombinesSplitImportColumns;
 use App\Concerns\InfersBoardColumnTypes;
 use App\Concerns\ReadsSpreadsheetSheets;
 use App\Jobs\ProcessBoardImportJob;
@@ -9,6 +10,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardImportJob;
 use App\Models\BoardItem;
+use App\Models\BoardItemValue;
 use App\Models\BoardTag;
 use App\Models\BoardView;
 use App\Models\User;
@@ -48,7 +50,7 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
  */
 class BoardItemImportService
 {
-    use InfersBoardColumnTypes, ReadsSpreadsheetSheets;
+    use CombinesSplitImportColumns, InfersBoardColumnTypes, ReadsSpreadsheetSheets;
 
     /** How many rows deep to scan for a monday.com-style "Name | ... | Item ID" header before giving up and treating row 1 as a plain header. */
     private const HEADER_SCAN_LIMIT = 60;
@@ -66,8 +68,12 @@ class BoardItemImportService
      * header + row-value grid, auto-detecting whether it's a raw monday.com
      * board export (title/description/group-title rows, one repeated "Name |
      * ... | Item ID" header per group) or a plain table (row 1 = header).
+     * Columns one value was split across (a Timeline's "- Start"/"- End"
+     * pair, a checklist's repeated "Task | Status" pairs) come back merged
+     * into one column, see {@see CombinesSplitImportColumns}; `combined_from`
+     * lists, per merged column index, the source labels it was built from.
      *
-     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>}
+     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>, combined_from: array<int, array<int, string>>}
      */
     public function readSpreadsheet(UploadedFile $file): array
     {
@@ -81,9 +87,11 @@ class BoardItemImportService
 
         $header_row = $this->findMondayHeaderRow($sheet);
 
-        return $header_row !== null
+        $parsed = $header_row !== null
             ? $this->readMondayStyleSheet($sheet, $header_row)
             : $this->readFlatSheet($sheet);
+
+        return $this->combineSplitColumns($parsed['headers'], $parsed['rows']);
     }
 
     /**
@@ -94,12 +102,18 @@ class BoardItemImportService
      * `detection_reason` is the human-readable "why" behind
      * `suggested_type` (e.g. "100% of values are dates"), shown under the
      * column in the wizard so a guess can be checked before importing.
+     * `compatible_types` lists every creatable type that can hold (nearly)
+     * all of the column's values, so the wizard can recommend those and warn
+     * when a column is pointed at a type that would drop values.
+     * `combined_from` names the source columns a merged column was built from
+     * (empty for an ordinary column).
      *
      * @param  array<int, string>  $headers
      * @param  array<int, array<int, string>>  $rows
-     * @return array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string, detection_reason: string}>
+     * @param  array<int, array<int, string>>  $combined_from  {@see readSpreadsheet()}'s own `combined_from`
+     * @return array<int, array{index: int, label: string, sample_values: array<int, string>, suggested_type: string, detection_reason: string, compatible_types: array<int, string>, combined_from: array<int, string>, filled_count: int}>
      */
-    public function buildSourceColumns(array $headers, array $rows): array
+    public function buildSourceColumns(array $headers, array $rows, array $combined_from = []): array
     {
         $columns = [];
         $users = User::all();
@@ -111,9 +125,15 @@ class BoardItemImportService
             $columns[] = [
                 'index' => $index,
                 'label' => $label,
-                'sample_values' => array_slice(array_values(array_unique($non_empty)), 0, 4),
+                'sample_values' => array_map(
+                    fn (string $value) => Str::limit(str_replace(["\r\n", "\r", "\n"], ' · ', $value), 120),
+                    array_slice(array_values(array_unique($non_empty)), 0, 4),
+                ),
                 'suggested_type' => $type,
                 'detection_reason' => $reason,
+                'compatible_types' => $this->compatibleColumnTypes(self::CREATABLE_COLUMN_TYPES, $non_empty, $users),
+                'combined_from' => $combined_from[$index] ?? [],
+                'filled_count' => count($non_empty),
             ];
         }
 
@@ -146,7 +166,11 @@ class BoardItemImportService
             }
         }
 
-        $columns_by_label = $existing_columns->keyBy(fn (BoardColumn $column) => mb_strtolower(trim($column->label)));
+        // A read-only column (Formula, Mirror, Auto-number) can never store an
+        // imported value, so a same-named one is never auto-matched.
+        $columns_by_label = $existing_columns
+            ->reject(fn (BoardColumn $column) => in_array($column->type, BoardColumn::READ_ONLY_TYPES, true))
+            ->keyBy(fn (BoardColumn $column) => mb_strtolower(trim($column->label)));
         $creatable_types = $this->creatableColumnTypes();
 
         $mappings = [];
@@ -348,6 +372,7 @@ class BoardItemImportService
             : [];
 
         $caster = new ImportedCellValueCaster($board, User::all());
+        $auto_number_counters = $this->autoNumberCounters($view);
         $created = 0;
         $updated = 0;
         $skipped = 0;
@@ -364,13 +389,13 @@ class BoardItemImportService
 
             DB::transaction(function () use (
                 $chunk, $board, $group, $name_index, $index_to_column, $duplicate_mode, $match_index,
-                &$existing_by_key, $caster, &$created, &$updated, &$skipped, &$next_position,
+                &$existing_by_key, $caster, &$auto_number_counters, &$created, &$updated, &$skipped, &$next_position,
             ) {
                 foreach ($chunk as $row) {
                     $name_raw = trim($row[$name_index] ?? '');
                     [$name, $overflow] = $this->splitOverflowingName($name_raw !== '' ? $name_raw : 'Untitled item');
 
-                    $values = $this->castRowValues($index_to_column, $row, $caster);
+                    [$values, $linked_cells] = $this->castRowValues($index_to_column, $row, $caster);
 
                     $match_raw = $match_index === $name_index ? $name_raw : trim($row[$match_index] ?? '');
                     $match_key = $this->normalizeForMatch($match_raw);
@@ -389,6 +414,10 @@ class BoardItemImportService
                             $existing_item->values()->updateOrCreate(['column_id' => $entry['column_id']], ['value' => $entry['value']]);
                         }
 
+                        foreach ($linked_cells as [$column, $raw]) {
+                            $caster->deferLinkedItems($existing_item->id, $column, $raw);
+                        }
+
                         $updated++;
 
                         continue;
@@ -401,8 +430,20 @@ class BoardItemImportService
                         'position' => $next_position++,
                     ]);
 
+                    // Auto-number columns are numbered here in memory rather than
+                    // through `BoardItemValueService::assignAutoNumbers()`, which
+                    // re-reads the column's highest number once per item.
+                    foreach ($auto_number_counters as $column_id => $last_number) {
+                        $auto_number_counters[$column_id] = $last_number + 1;
+                        $values[] = ['column_id' => $column_id, 'value' => $last_number + 1];
+                    }
+
                     if ($values !== []) {
                         $item->values()->createMany($values);
+                    }
+
+                    foreach ($linked_cells as [$column, $raw]) {
+                        $caster->deferLinkedItems($item->id, $column, $raw);
                     }
 
                     $created++;
@@ -412,6 +453,10 @@ class BoardItemImportService
             $processed += count($chunk);
             $onChunkProcessed($processed, $total);
         }
+
+        // Dependency cells name other rows of this same file, so they can only
+        // be linked once every row (up to a cancel) has been written.
+        DB::transaction(fn () => $caster->resolveLinkedItems());
 
         return [
             'created' => $created,
@@ -464,9 +509,13 @@ class BoardItemImportService
      * The {@see BoardColumn} types the "create a new column" mapping mode may
      * target — every type {@see ImportedCellValueCaster} can build from one
      * flat source cell. A Timeline is included since a single cell can hold
-     * a whole "2024-01-01 - 2024-01-31" range; Vote/Dependency/Connect boards
-     * and the computed types are not, since an exported cell can't carry
-     * who voted or which item it links to.
+     * a whole "2024-01-01 - 2024-01-31" range, a Checklist since each line
+     * (or comma-separated entry) becomes a sub-task, a Vote since its cell
+     * names the voters, and a Dependency since the items it names are linked
+     * by name once every row is in. Connect boards is not, since a new column
+     * has no linked board to match names against yet, and neither are the
+     * computed types (Formula, Mirror, Auto-number), which never store an
+     * imported value.
      *
      * @var array<int, string>
      */
@@ -475,7 +524,8 @@ class BoardItemImportService
         BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE, BoardColumn::TYPE_TAGS,
         BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_CHECKBOX, BoardColumn::TYPE_PROGRESS,
         BoardColumn::TYPE_RATING, BoardColumn::TYPE_PHONE, BoardColumn::TYPE_EMAIL, BoardColumn::TYPE_LINK,
-        BoardColumn::TYPE_FILES, BoardColumn::TYPE_TIME_TRACKING,
+        BoardColumn::TYPE_FILES, BoardColumn::TYPE_TIME_TRACKING, BoardColumn::TYPE_CHECKLIST, BoardColumn::TYPE_VOTE,
+        BoardColumn::TYPE_DEPENDENCY,
     ];
 
     /**
@@ -694,6 +744,7 @@ class BoardItemImportService
                 $column = BoardColumn::where('id', $mapping['target_column_id'])
                     ->where('board_view_id', $view->id)
                     ->where('scope', BoardColumn::SCOPE_ITEM)
+                    ->whereNotIn('type', BoardColumn::READ_ONLY_TYPES)
                     ->first();
 
                 if ($column !== null) {
@@ -765,23 +816,121 @@ class BoardItemImportService
     }
 
     /**
+     * Casts one row's mapped cells. Dependency/Connect boards cells come back
+     * separately, raw, since they can only be linked once the row's own item
+     * exists (see {@see ImportedCellValueCaster::deferLinkedItems()}).
+     *
      * @param  array<int, BoardColumn>  $index_to_column
      * @param  array<int, string>  $row
-     * @return array<int, array{column_id: int, value: mixed}>
+     * @return array{0: array<int, array{column_id: int, value: mixed}>, 1: array<int, array{0: BoardColumn, 1: string}>}
      */
     private function castRowValues(array $index_to_column, array $row, ImportedCellValueCaster $caster): array
     {
         $values = [];
+        $linked_cells = [];
 
         foreach ($index_to_column as $index => $column) {
-            $value = $caster->cast($column, $row[$index] ?? '');
+            $raw = $row[$index] ?? '';
+
+            if ($caster->defersLinkedItems($column)) {
+                $linked_cells[] = [$column, $raw];
+
+                continue;
+            }
+
+            $value = $caster->cast($column, $raw);
 
             if ($value !== null) {
                 $values[] = ['column_id' => $column->id, 'value' => $value];
             }
         }
 
-        return $values;
+        return [$values, $linked_cells];
+    }
+
+    /**
+     * The highest number each of the tab's item-scope Auto-number columns has
+     * handed out so far, keyed by column id: `commit()` numbers every item it
+     * creates on from there, the same way creating an item by hand would.
+     *
+     * @return array<int, int>
+     */
+    private function autoNumberCounters(BoardView $view): array
+    {
+        $counters = [];
+
+        $column_ids = $view->columns()
+            ->where('scope', BoardColumn::SCOPE_ITEM)
+            ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
+            ->pluck('id');
+
+        foreach ($column_ids as $column_id) {
+            $counters[$column_id] = (int) BoardItemValue::where('column_id', $column_id)
+                ->pluck('value')
+                ->map(fn ($value) => is_numeric($value) ? (int) $value : 0)
+                ->max();
+        }
+
+        return $counters;
+    }
+
+    /**
+     * Merges the columns {@see findSplitColumnGroups()} recognizes into one
+     * column each, placed where the group's first member was.
+     *
+     * @param  array<int, string>  $headers
+     * @param  array<int, array<int, string>>  $rows
+     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>, combined_from: array<int, array<int, string>>}
+     */
+    private function combineSplitColumns(array $headers, array $rows): array
+    {
+        $groups = $this->findSplitColumnGroups(array_map(
+            fn (int $index) => ['label' => $headers[$index], 'values' => $this->columnValues($rows, $index)],
+            array_keys($headers),
+        ));
+
+        if ($groups === []) {
+            return ['headers' => $headers, 'rows' => $rows, 'combined_from' => []];
+        }
+
+        $group_by_first_member = [];
+        $consumed = [];
+        foreach ($groups as $group) {
+            $group_by_first_member[$group['members'][0]] = $group;
+            foreach ($group['members'] as $member) {
+                $consumed[$member] = true;
+            }
+        }
+
+        $new_headers = [];
+        $combined_from = [];
+        /** @var array<int, array{type: string, label: string, members: array<int, int>, reason: string}|int> $layout each new column: a merged group, or the old index it copies */
+        $layout = [];
+
+        foreach ($headers as $index => $label) {
+            if (isset($group_by_first_member[$index])) {
+                $group = $group_by_first_member[$index];
+                $combined_from[count($new_headers)] = array_map(fn (int $member) => $headers[$member], $group['members']);
+                $new_headers[] = $group['label'];
+                $layout[] = $group;
+
+                continue;
+            }
+
+            if (! isset($consumed[$index])) {
+                $new_headers[] = $label;
+                $layout[] = $index;
+            }
+        }
+
+        $new_rows = array_map(fn (array $row) => array_map(
+            fn (array|int $source) => is_int($source)
+                ? ($row[$source] ?? '')
+                : $this->combineSplitCells($source['type'], array_map(fn (int $member) => $row[$member] ?? '', $source['members'])),
+            $layout,
+        ), $rows);
+
+        return ['headers' => $new_headers, 'rows' => $new_rows, 'combined_from' => $combined_from];
     }
 
     private function optionLabelFor(BoardColumn $column, string $id): ?string
@@ -823,6 +972,7 @@ class BoardItemImportService
             BoardColumn::TYPE_CHECKBOX => $value ? '1' : '',
             BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_PROGRESS, BoardColumn::TYPE_RATING => is_numeric($value) ? (string) (float) $value : (string) $value,
             BoardColumn::TYPE_LINK => is_array($value) ? (string) ($value['url'] ?? '') : (string) $value,
+            BoardColumn::TYPE_TIMELINE => is_array($value) ? trim(($value['start'] ?? '').' - '.($value['end'] ?? ''), ' -') : '',
             default => is_scalar($value) ? (string) $value : '',
         };
     }

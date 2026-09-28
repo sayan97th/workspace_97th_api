@@ -2,6 +2,7 @@
 
 namespace App\Services\Board;
 
+use App\Concerns\CombinesSplitImportColumns;
 use App\Concerns\InfersBoardColumnTypes;
 use App\Concerns\ReadsSpreadsheetSheets;
 use App\Console\Commands\Board\ImportMondayBoardCommand;
@@ -35,9 +36,13 @@ use Throwable;
  * header, since a subitem header only lists the columns that item's subitems
  * use) and {@see InfersBoardColumnTypes::inferColumnType()} guesses each
  * one's {@see BoardColumn} type from its label and the values underneath it,
- * so any board's export imports with its own columns intact.
+ * so any board's export imports with its own columns intact. Values split
+ * across several source columns (a Timeline's "- Start"/"- End" pair, a
+ * checklist's repeated "Task | Status" pairs) collapse back into one column
+ * first, see {@see CombinesSplitImportColumns}.
  * {@see ImportedCellValueCaster} then writes every cell in the exact shape
- * its column type stores.
+ * its column type stores, linking Dependency cells by item name once every
+ * item exists.
  *
  * Used by {@see ImportMondayBoardCommand} (one file) and
  * {@see ImportMondayBoardTreeCommand} (a whole directory of files), which own
@@ -46,7 +51,7 @@ use Throwable;
  */
 class MondayBoardImportService
 {
-    use InfersBoardColumnTypes, ReadsSpreadsheetSheets;
+    use CombinesSplitImportColumns, InfersBoardColumnTypes, ReadsSpreadsheetSheets;
 
     /** Import the "updates" sheet's comment threads without any credential handling. */
     public const UPDATES_MODE_SKIP = 'skip';
@@ -208,7 +213,7 @@ class MondayBoardImportService
      * Creates the board's columns, groups, items and subitems from a parsed tree.
      *
      * @param  array<string, mixed>  $parsed  the array returned by {@see parse()}
-     * @return array{groups: int, items: int, subitems: int, unmatched_people: array<int, string>, item_ids_by_monday_id: array<string, int>}
+     * @return array{groups: int, items: int, subitems: int, linked_cells: int, unmatched_people: array<int, string>, unmatched_links: array<int, string>, item_ids_by_monday_id: array<string, int>}
      */
     public function import(WorkspaceNavigationItem $board, BoardView $view, array $parsed): array
     {
@@ -263,11 +268,15 @@ class MondayBoardImportService
             }
         }
 
+        $linked_cells = $caster->resolveLinkedItems();
+
         return [
             'groups' => $group_count,
             'items' => $item_count,
             'subitems' => $subitem_count,
+            'linked_cells' => $linked_cells,
             'unmatched_people' => $caster->unmatchedPeople(),
+            'unmatched_links' => $caster->unmatchedLinkedItems(),
             'item_ids_by_monday_id' => $item_ids_by_monday_id,
         ];
     }
@@ -509,11 +518,11 @@ class MondayBoardImportService
     }
 
     /**
-     * Turns the header columns into {@see BoardColumn} definitions: a "Timeline - Start" /
-     * "Timeline - End" (or "Date - Start" / "Date - End", ...) pair collapses into one
-     * {@see BoardColumn::TYPE_TIMELINE} column, and every other column gets its type guessed by
-     * {@see InfersBoardColumnTypes::inferColumnType()} from its label and the values collected
-     * under it.
+     * Turns the header columns into {@see BoardColumn} definitions: columns a
+     * value was split across (see {@see CombinesSplitImportColumns}) collapse
+     * into one definition listing every source key, and every other column
+     * gets its type guessed by {@see InfersBoardColumnTypes::inferColumnType()}
+     * from its label and the values collected under it.
      *
      * @param  array<int, array{label: string, key: string}>  $header_columns
      * @param  array<string, array<int, string>>  $collected_values
@@ -522,42 +531,46 @@ class MondayBoardImportService
      */
     private function inferColumns(array $header_columns, array $collected_values, Collection $users): array
     {
+        $split_groups = $this->findSplitColumnGroups(array_map(fn (array $column) => [
+            'label' => $column['label'],
+            'values' => $collected_values[$column['key']] ?? [],
+        ], $header_columns));
+
+        $group_by_first_member = [];
         $consumed = [];
-        $definitions = [];
-
-        foreach ($header_columns as $column) {
-            if (preg_match('/^(.*?)\s*-\s*start$/i', $column['label'], $matches) !== 1) {
-                continue;
+        foreach ($split_groups as $group) {
+            $group_by_first_member[$group['members'][0]] = $group;
+            foreach ($group['members'] as $member) {
+                $consumed[$member] = true;
             }
-
-            $prefix = trim($matches[1]);
-            $end_column = $this->findColumnByLabel($header_columns, ($prefix !== '' ? $prefix.' ' : '').'- End');
-
-            if ($end_column === null) {
-                continue;
-            }
-
-            $definitions[] = [
-                'key' => $this->columnKey($prefix !== '' ? $prefix : 'Timeline', $definitions),
-                'label' => $prefix !== '' ? $prefix : 'Timeline',
-                'type' => BoardColumn::TYPE_TIMELINE,
-                'options' => [],
-                'source' => [$column['key'], $end_column['key']],
-                'reason' => "Built from the \"{$column['label']}\" / \"{$end_column['label']}\" pair",
-            ];
-            $consumed[$column['key']] = true;
-            $consumed[$end_column['key']] = true;
         }
 
-        foreach ($header_columns as $column) {
-            if (isset($consumed[$column['key']])) {
+        $definitions = [];
+
+        foreach ($header_columns as $position => $column) {
+            if (isset($group_by_first_member[$position])) {
+                $group = $group_by_first_member[$position];
+
+                $definitions[] = [
+                    'key' => $this->columnKey($group['label'], $definitions),
+                    'label' => $group['label'],
+                    'type' => $group['type'],
+                    'options' => [],
+                    'source' => array_map(fn (int $member) => $header_columns[$member]['key'], $group['members']),
+                    'reason' => $group['reason'],
+                ];
+
+                continue;
+            }
+
+            if (isset($consumed[$position])) {
                 continue;
             }
 
             [$type, $options, $reason] = $this->inferColumnType($column['label'], $collected_values[$column['key']] ?? [], $users);
 
             $definitions[] = [
-                'key' => $column['key'],
+                'key' => $this->columnKey($column['key'], $definitions),
                 'label' => $column['label'],
                 'type' => $type,
                 'options' => $options,
@@ -567,21 +580,6 @@ class MondayBoardImportService
         }
 
         return $definitions;
-    }
-
-    /**
-     * @param  array<int, array{label: string, key: string}>  $header_columns
-     * @return array{label: string, key: string}|null
-     */
-    private function findColumnByLabel(array $header_columns, string $label): ?array
-    {
-        foreach ($header_columns as $column) {
-            if (strcasecmp(trim($column['label']), $label) === 0) {
-                return $column;
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -610,6 +608,7 @@ class MondayBoardImportService
 
     /**
      * Casts and writes one item/subitem's cell values — see {@see ImportedCellValueCaster}.
+     * Dependency cells are only queued here; `import()` links them once every item exists.
      *
      * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string}>  $definitions
      * @param  array<string, BoardColumn>  $columns
@@ -621,10 +620,16 @@ class MondayBoardImportService
 
         foreach ($definitions as $definition) {
             $column = $columns[$definition['key']];
-            $source = $definition['source'];
-            $end_raw = isset($source[1]) ? ($data[$source[1]] ?? '') : null;
+            $cells = array_map(fn (string $key) => $data[$key] ?? '', $definition['source']);
+            $raw = count($cells) > 1 ? $this->combineSplitCells($column->type, $cells) : $cells[0];
 
-            $value = $caster->cast($column, $data[$source[0]] ?? '', $end_raw);
+            if ($caster->defersLinkedItems($column)) {
+                $caster->deferLinkedItems($item->id, $column, $raw);
+
+                continue;
+            }
+
+            $value = $caster->cast($column, $raw);
 
             if ($value !== null) {
                 $values[] = ['column_id' => $column->id, 'value' => $value];

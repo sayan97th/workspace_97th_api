@@ -122,8 +122,8 @@ class ImportMondayBoardCommand extends Command
         $this->newLine();
         $this->info('Import complete.');
         $this->table(
-            ['Groups', 'Items', 'Subitems'],
-            [[$summary['groups'], $summary['items'], $summary['subitems']]],
+            ['Groups', 'Items', 'Subitems', 'Linked cells'],
+            [[$summary['groups'], $summary['items'], $summary['subitems'], $summary['linked_cells']]],
         );
 
         $unmatched_people = $summary['unmatched_people'];
@@ -142,6 +142,8 @@ class ImportMondayBoardCommand extends Command
                 $this->line("  - {$name}");
             }
         }
+
+        $this->renderUnmatchedLinks($summary['unmatched_links']);
 
         return self::SUCCESS;
     }
