@@ -23,6 +23,7 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -89,12 +90,16 @@ class BoardAutomationService
     /** Set while {@see retryRun()} runs, every run log written meanwhile points back at the failed one. */
     private ?int $retry_of_id = null;
 
+    /** @var array<string, string> run id => `failed` once a step of that run failed, `success` once one succeeded */
+    private array $run_outcomes = [];
+
     public function __construct(
         private readonly BoardAutomationActionRunner $action_runner,
         private readonly BoardAutomationMessageRenderer $renderer,
         private readonly NotificationService $notification_service,
         private readonly AutomationRunContext $run_context,
         private readonly BoardAutomationHealthChecker $health_checker,
+        private readonly AutomationConditionEvaluator $condition_evaluator,
     ) {}
 
     // ── Column triggers ───────────────────────────────────────────────────────
@@ -112,6 +117,9 @@ class BoardAutomationService
             $this->handleAllGroupItemsStatus($item, $column, $old_value, $new_value, $actor);
         } elseif ($column->type === BoardColumn::TYPE_PEOPLE) {
             $this->handlePersonAssigned($item, $column, $old_value, $new_value, $actor);
+            $this->handlePersonUnassigned($item, $column, $old_value, $new_value, $actor);
+        } elseif ($column->type === BoardColumn::TYPE_FILES) {
+            $this->handleFilesAdded($item, $column, $old_value, $new_value, $actor);
         } elseif (in_array($column->type, [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE], true)) {
             $this->handleDateChanged($item, $column, $old_value, $new_value, $actor);
         } elseif (in_array($column->type, BoardAutomation::triggerColumnTypes(BoardAutomation::TRIGGER_NUMBER_THRESHOLD) ?? [], true)) {
@@ -336,7 +344,12 @@ class BoardAutomationService
         }
 
         foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_COLUMN_CHANGED, $column->id) as $automation) {
-            if ($automation->trigger_value !== null && ! $this->valueMatches($column, $new_value, $automation->trigger_value)) {
+            $match = $automation->trigger_config['match'] ?? null;
+            if (is_array($match) && ! empty($match['operator'])) {
+                if (! $this->changeMatches($column, $old_value, $new_value, $match)) {
+                    continue;
+                }
+            } elseif ($automation->trigger_value !== null && ! $this->valueMatches($column, $new_value, $automation->trigger_value)) {
                 continue;
             }
 
@@ -388,6 +401,58 @@ class BoardAutomationService
             $watched_user_id = $automation->trigger_value;
             if ($watched_user_id === null || in_array((string) $watched_user_id, $newly_added_ids, true)) {
                 $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, $old_value, $new_value));
+            }
+        }
+    }
+
+    /**
+     * Fires once for every person just removed from a `people` column, a `trigger_value` of null
+     * watches for anyone being removed, a specific user id only for that person.
+     */
+    private function handlePersonUnassigned(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
+        $old_ids = array_map('strval', is_array($old_value) ? $old_value : []);
+        $new_ids = array_map('strval', is_array($new_value) ? $new_value : []);
+        $removed_ids = array_values(array_diff($old_ids, $new_ids));
+
+        if ($removed_ids === []) {
+            return;
+        }
+
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_PERSON_UNASSIGNED, $column->id) as $automation) {
+            $watched_user_id = $automation->trigger_value;
+            if ($watched_user_id === null || in_array((string) $watched_user_id, $removed_ids, true)) {
+                $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, $old_value, $new_value));
+            }
+        }
+    }
+
+    /**
+     * Fires once a `files` column gains a file or link, compared by entry id. `trigger_config.extensions`
+     * narrows it to files of those types (`pdf`, `png`...), a link only counts when its address ends with one.
+     */
+    private function handleFilesAdded(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
+        $key = fn (mixed $entry) => is_array($entry) ? (string) ($entry['id'] ?? ($entry['url'] ?? ($entry['file_name'] ?? ''))) : '';
+        $old_keys = array_map($key, is_array($old_value) ? $old_value : []);
+        $added = array_values(array_filter(is_array($new_value) ? $new_value : [], fn ($entry) => is_array($entry) && ! in_array($key($entry), $old_keys, true)));
+
+        if ($added === []) {
+            return;
+        }
+
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_FILE_UPLOADED, $column->id) as $automation) {
+            $extensions = array_map(fn ($extension) => ltrim(mb_strtolower(trim((string) $extension)), '.'), (array) ($automation->trigger_config['extensions'] ?? []));
+            $extensions = array_values(array_filter($extensions));
+            $matching = $extensions === [] ? $added : array_values(array_filter($added, function (array $entry) use ($extensions) {
+                $name = mb_strtolower((string) (($entry['file_name'] ?? '') ?: ($entry['url'] ?? '')));
+                $path = parse_url($name, PHP_URL_PATH);
+
+                return in_array(pathinfo(is_string($path) && $path !== '' ? $path : $name, PATHINFO_EXTENSION), $extensions, true);
+            }));
+
+            if ($matching !== []) {
+                $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, null, array_map(fn (array $entry) => (string) ($entry['file_name'] ?? ''), $matching)));
             }
         }
     }
@@ -629,6 +694,91 @@ class BoardAutomationService
     }
 
     /**
+     * Runs every `item_overdue` automation whose items became overdue: the date (or the timeline's
+     * end) is before today in the automation's time zone, the configured time of day has passed and
+     * the item is not done (see {@see BoardAutomation::TRIGGER_ITEM_OVERDUE}). Each item fires once
+     * per due date, recorded in {@see BoardAutomationRun} under that date, so moving the date and
+     * missing it again fires again. Dates before the automation was created are left alone.
+     *
+     * @return int How many (automation, item) pairs ran.
+     */
+    public function runOverdueTriggers(?CarbonInterface $now = null): int
+    {
+        $now = CarbonImmutable::instance($now ?? Carbon::now());
+        $ran_count = 0;
+
+        $automations = BoardAutomation::query()
+            ->where('is_enabled', true)
+            ->where('trigger_type', BoardAutomation::TRIGGER_ITEM_OVERDUE)
+            ->whereNotNull('trigger_column_id')
+            ->with(['triggerColumn', 'board', 'creator', 'owner'])
+            ->get();
+
+        foreach ($automations as $automation) {
+            $column = $automation->triggerColumn;
+            if (! $column || $this->isBoardPaused($automation->board_id)) {
+                continue;
+            }
+
+            $config = (array) ($automation->trigger_config ?? []);
+            $local_now = $now->setTimezone(AutomationSchedule::timezone($config['timezone'] ?? null));
+            if (! $this->timeHasPassed($local_now, (string) ($config['time'] ?? self::DEFAULT_DATE_TRIGGER_TIME))) {
+                continue;
+            }
+
+            $today = $local_now->toDateString();
+            $earliest = CarbonImmutable::instance($automation->created_at ?? $now)->setTimezone($local_now->getTimezone())->toDateString();
+            $status_column_id = isset($config['status_column_id']) ? (int) $config['status_column_id'] : null;
+            $done_values = array_map('strval', (array) ($config['done_values'] ?? []));
+
+            $values = BoardItemValue::where('column_id', $column->id)->with('item.group', 'item.values')->get();
+            foreach ($values as $value) {
+                $due = $this->dueDateOf($column, $value->value);
+                if ($due === null || $due >= $today || $due < $earliest) {
+                    continue;
+                }
+
+                $item = $value->item;
+                if (! $item || $item->is_archived || $item->group?->board_view_id !== $automation->board_view_id) {
+                    continue;
+                }
+                if ($status_column_id !== null && $done_values !== []) {
+                    $status = $item->values->firstWhere('column_id', $status_column_id)?->value;
+                    if (in_array((string) $status, $done_values, true)) {
+                        continue;
+                    }
+                }
+
+                if (BoardAutomationRun::where('automation_id', $automation->id)->where('board_item_id', $item->id)->whereDate('ran_on', $due)->exists()) {
+                    continue;
+                }
+                try {
+                    // The unique index claims the pair, so an overlapping scheduler tick never runs it twice.
+                    BoardAutomationRun::create(['automation_id' => $automation->id, 'board_item_id' => $item->id, 'ran_on' => $due]);
+                } catch (UniqueConstraintViolationException) {
+                    continue;
+                }
+
+                $this->executeAutomation($automation, $item, null, $this->changeContext($column, null, $value->value));
+                $ran_count++;
+            }
+        }
+
+        return $ran_count;
+    }
+
+    /**
+     * The day a date or timeline value is due, `YYYY-MM-DD`, the timeline's end.
+     */
+    private function dueDateOf(BoardColumn $column, mixed $value): ?string
+    {
+        $raw = $column->type === BoardColumn::TYPE_TIMELINE ? (is_array($value) ? ($value['end'] ?? $value['start'] ?? null) : null) : $value;
+        $day = is_string($raw) ? substr($raw, 0, 10) : '';
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) === 1 ? $day : null;
+    }
+
+    /**
      * Narrows a date cell query to one day (`$to` null) or to a range of days, whether the value
      * is a plain date or carries a time.
      *
@@ -757,7 +907,7 @@ class BoardAutomationService
             $run_uuid = (string) Str::uuid();
             $branch = 'then';
 
-            if ($item !== null && ! $is_prechecked && ! $this->conditionsMatch($automation, $item)) {
+            if ($item !== null && ! $is_prechecked && ! $this->conditionsMatch($automation, $item, $actor)) {
                 if ($automation->resolvedElseActions() === []) {
                     $this->recordRun($automation, $item, $actor, $this->firstActionType($automation), BoardAutomationActionOutcome::skipped('The conditions were not met.'), $run_uuid);
 
@@ -767,6 +917,7 @@ class BoardAutomationService
             }
 
             $this->runBranch($automation, $branch, 0, $item, $actor, $context, $run_uuid);
+            $this->settleRunHealth($automation, $run_uuid);
         });
     }
 
@@ -821,6 +972,7 @@ class BoardAutomationService
     {
         $actions = $automation->branchActions($branch);
         $subject = $item;
+        $this->run_context->bindRun($run_uuid);
 
         for ($index = $start_index; $index < count($actions); $index++) {
             $action = $actions[$index];
@@ -962,14 +1114,16 @@ class BoardAutomationService
 
             return;
         }
-        if ($delayed->recheck_conditions && $item !== null && ! $this->conditionsMatch($automation, $item)) {
+        if ($delayed->recheck_conditions && $item !== null && ! $this->conditionsMatch($automation, $item, $actor)) {
             $cancel('The item no longer met the conditions after the wait.');
 
             return;
         }
 
         $this->guarded($automation, $item, $actor, function () use ($automation, $delayed, $item, $actor) {
-            $this->runBranch($automation, $delayed->branch, $delayed->next_action_index, $item, $actor, $this->unserializeContext((array) ($delayed->context ?? [])), $delayed->run_uuid ?? (string) Str::uuid());
+            $run_uuid = $delayed->run_uuid ?? (string) Str::uuid();
+            $this->runBranch($automation, $delayed->branch, $delayed->next_action_index, $item, $actor, $this->unserializeContext((array) ($delayed->context ?? [])), $run_uuid);
+            $this->settleRunHealth($automation, $run_uuid);
         });
     }
 
@@ -985,7 +1139,9 @@ class BoardAutomationService
         $this->retry_of_id = $log->id;
         try {
             $this->guarded($automation, $item, $actor, function () use ($automation, $log, $item, $actor) {
-                $this->runBranch($automation, $log->branch ?: 'then', (int) ($log->step_index ?? 0), $item, $actor, $this->unserializeContext((array) ($log->context ?? [])), (string) Str::uuid());
+                $run_uuid = (string) Str::uuid();
+                $this->runBranch($automation, $log->branch ?: 'then', (int) ($log->step_index ?? 0), $item, $actor, $this->unserializeContext((array) ($log->context ?? [])), $run_uuid);
+                $this->settleRunHealth($automation, $run_uuid);
             });
         } finally {
             $this->retry_of_id = null;
@@ -1132,13 +1288,13 @@ class BoardAutomationService
         $groups = [];
         if ($item !== null) {
             foreach (array_values((array) ($automation->conditions ?? [])) as $index => $rule) {
-                $conditions[] = ['index' => $index, 'passes' => is_array($rule) && $this->rulesMatch($automation, $item, ['advanced_filter_rows' => [$rule]])];
+                $conditions[] = ['index' => $index, 'passes' => is_array($rule) && $this->rulesMatch($automation, $item, $actor, ['advanced_filter_rows' => [$rule]])];
             }
             foreach (array_values((array) ($automation->condition_groups ?? [])) as $index => $group) {
-                $groups[] = ['index' => $index, 'passes' => is_array($group) && $this->rulesMatch($automation, $item, ['advanced_filter_groups' => [$group]])];
+                $groups[] = ['index' => $index, 'passes' => is_array($group) && $this->rulesMatch($automation, $item, $actor, ['advanced_filter_groups' => [$group]])];
             }
         }
-        $passes = $item === null || $this->conditionsMatch($automation, $item);
+        $passes = $item === null || $this->conditionsMatch($automation, $item, $actor);
         $branch = $passes ? 'then' : ($automation->resolvedElseActions() !== [] ? 'else' : null);
 
         $this->test_outcomes = [];
@@ -1179,37 +1335,26 @@ class BoardAutomationService
 
     /**
      * Whether `$item` passes the "and only if" rules and groups, combined with And or Or,
-     * evaluated by the same engine the board's Advanced filters use. A rule on a column that no
-     * longer exists is ignored.
+     * evaluated by the same engine the board's Advanced filters use, plus the fields only
+     * automations have ({@see AutomationConditionEvaluator}). `$actor` is whoever set the
+     * automation off, for "the person who made the change is". A rule on a column that no longer
+     * exists is ignored.
      */
-    public function conditionsMatch(BoardAutomation $automation, BoardItem $item): bool
+    public function conditionsMatch(BoardAutomation $automation, BoardItem $item, ?User $actor = null): bool
     {
         if (! $automation->hasConditions()) {
             return true;
         }
 
-        return $this->rulesMatch($automation, $item, $automation->conditionFilterState());
+        return $this->rulesMatch($automation, $item, $actor, $automation->conditionFilterState());
     }
 
     /**
      * @param  array<string, mixed>  $filter_state  `advanced_filter_rows`, `advanced_filter_groups` and `advanced_filter_operator`
      */
-    private function rulesMatch(BoardAutomation $automation, BoardItem $item, array $filter_state): bool
+    private function rulesMatch(BoardAutomation $automation, BoardItem $item, ?User $actor, array $filter_state): bool
     {
-        $scope = $item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
-        $columns = BoardColumn::where('board_view_id', $automation->board_view_id)
-            ->where('scope', $scope)
-            ->get()
-            ->keyBy(fn (BoardColumn $column) => (string) $column->id);
-
-        $evaluator = new BoardItemFilterEvaluator($columns, null, Carbon::today()->toDateString());
-
-        return $evaluator->matches($item->relationLoaded('values') ? $item : $item->load('values'), [
-            'advanced_filter_rows' => [],
-            'advanced_filter_groups' => [],
-            'advanced_filter_operator' => 'and',
-            ...$filter_state,
-        ]);
+        return $this->condition_evaluator->matches($automation, $item, $actor, $filter_state);
     }
 
     /**
@@ -1228,6 +1373,10 @@ class BoardAutomationService
             ];
 
             return;
+        }
+
+        if ($run_uuid !== null && $outcome->status !== BoardAutomationRunLog::STATUS_SKIPPED && ($this->run_outcomes[$run_uuid] ?? null) !== BoardAutomationRunLog::STATUS_FAILED) {
+            $this->run_outcomes[$run_uuid] = $outcome->status;
         }
 
         try {
@@ -1269,6 +1418,37 @@ class BoardAutomationService
         }
 
         return $serialized;
+    }
+
+    /**
+     * Keeps count of how many runs in a row failed: a run with a failed step adds one, a run that
+     * did something without failing starts the count again, a run that only skipped leaves it.
+     * Once the count reaches the board's `auto_pause_after_failures` the automation is paused and
+     * its owner told, see {@see BoardAutomationSetting::autoPauseThreshold()}.
+     */
+    private function settleRunHealth(BoardAutomation $automation, string $run_uuid): void
+    {
+        $outcome = $this->run_outcomes[$run_uuid] ?? null;
+        unset($this->run_outcomes[$run_uuid]);
+        if ($outcome === null || $this->run_context->isDryRun() || ! $automation->exists) {
+            return;
+        }
+
+        if ($outcome === BoardAutomationRunLog::STATUS_SUCCESS) {
+            if ($automation->consecutive_failures > 0) {
+                $automation->forceFill(['consecutive_failures' => 0])->saveQuietly();
+            }
+
+            return;
+        }
+
+        $failures = (int) $automation->consecutive_failures + 1;
+        $automation->forceFill(['consecutive_failures' => $failures, 'last_failed_at' => now()])->saveQuietly();
+
+        $threshold = BoardAutomationSetting::forBoard($automation->board_id)->autoPauseThreshold();
+        if ($threshold > 0 && $failures >= $threshold && $automation->is_enabled) {
+            $this->pause($automation, "It failed {$failures} runs in a row. Check the run history, fix the problem, then turn it back on.");
+        }
     }
 
     /**
@@ -1354,6 +1534,79 @@ class BoardAutomationService
         [$hour, $minute] = AutomationSchedule::parseTime($time);
 
         return $local_now->greaterThanOrEqualTo($local_now->setTime($hour, $minute));
+    }
+
+    /**
+     * Whether a change passes a `column_changed` trigger's `trigger_config.match`, read the way the
+     * column's type stores its value:
+     *
+     * - Text like columns: `is`, `contains`, `not_contains`, `starts_with`, `ends_with`, and
+     *   `is_empty`/`is_not_empty` for a value that was just cleared or just filled in.
+     * - Numbers, ratings and progress: `equals`, `greater_than`, `less_than`, `between` (`values`).
+     * - Dropdown, tags, people and votes: `added` (one of `values`, any when empty, was just added),
+     *   `removed` (was just removed) or `holds` (the new value holds one of `values`).
+     * - Checkbox: `is_checked`, `is_unchecked`. Date: `is`, `before`, `after`, `is_empty`.
+     * - Status and label: `is` or `is_not` one of `values`.
+     *
+     * @param  array<string, mixed>  $match  `{operator, value, values}`
+     */
+    public function changeMatches(BoardColumn $column, mixed $old_value, mixed $new_value, array $match): bool
+    {
+        $operator = (string) ($match['operator'] ?? '');
+        $value = (string) ($match['value'] ?? '');
+        $values = array_map('strval', array_values(array_filter((array) ($match['values'] ?? []), 'is_scalar')));
+        $is_blank = fn (mixed $entry) => $entry === null || $entry === '' || $entry === [];
+
+        if ($operator === 'is_empty') {
+            return $is_blank($new_value);
+        }
+        if ($operator === 'is_not_empty') {
+            return ! $is_blank($new_value);
+        }
+
+        switch ($column->type) {
+            case BoardColumn::TYPE_CHECKBOX:
+                $is_checked = in_array($new_value, [true, 1, '1', 'true'], true);
+
+                return $operator === 'is_unchecked' ? ! $is_checked : $is_checked;
+            case BoardColumn::TYPE_NUMBER:
+            case BoardColumn::TYPE_RATING:
+            case BoardColumn::TYPE_PROGRESS:
+                $number = is_numeric($new_value) ? (float) $new_value : null;
+
+                return (bool) BoardItemFilterEvaluator::evaluateNumberRule($number, $operator, $value, $values);
+            case BoardColumn::TYPE_DROPDOWN:
+            case BoardColumn::TYPE_TAGS:
+            case BoardColumn::TYPE_PEOPLE:
+            case BoardColumn::TYPE_VOTE:
+                $old_ids = array_map('strval', array_filter((array) ($old_value ?? []), 'is_scalar'));
+                $new_ids = array_map('strval', array_filter((array) ($new_value ?? []), 'is_scalar'));
+                $changed = match ($operator) {
+                    'added' => array_values(array_diff($new_ids, $old_ids)),
+                    'removed' => array_values(array_diff($old_ids, $new_ids)),
+                    default => $new_ids,
+                };
+
+                return $changed !== [] && ($values === [] || array_intersect($changed, $values) !== []);
+            case BoardColumn::TYPE_STATUS:
+            case BoardColumn::TYPE_LABEL:
+                $holds = in_array((string) $new_value, $values, true);
+
+                return $operator === 'is_not' ? ! $holds : $holds;
+            case BoardColumn::TYPE_DATE:
+                $day = is_string($new_value) ? substr($new_value, 0, 10) : '';
+                if ($day === '' || $value === '') {
+                    return false;
+                }
+
+                return match ($operator) {
+                    'before' => $day < $value,
+                    'after' => $day > $value,
+                    default => $day === substr($value, 0, 10),
+                };
+            default:
+                return (bool) BoardItemFilterEvaluator::evaluateTextOperator($this->renderer->displayValue($column, $new_value), $operator, $value);
+        }
     }
 
     /**

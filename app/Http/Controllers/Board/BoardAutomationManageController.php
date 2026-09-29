@@ -14,9 +14,12 @@ use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationHealthChecker;
+use App\Services\Board\BoardAutomationRunUndoer;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardAutomationVersionRecorder;
+use App\Services\Board\BoardViewResolver;
 use App\Support\AutomationCopier;
+use App\Support\AutomationTransfer;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -26,9 +29,10 @@ use Illuminate\Validation\Rule;
 
 /**
  * What the Manage tab does beyond one automation at a time: the board's automation settings
- * ("Pause all automations" and the working calendar), bulk enable, disable and delete, copying
- * automations to another board, version history, a run's steps with retry, and what the item
- * drawer's Automations tab shows for one item.
+ * ("Pause all automations", the working calendar and the failure streak that pauses an
+ * automation), bulk enable, disable and delete, copying automations to another board, exporting
+ * and importing them as JSON, version history, a run's steps with retry and undo, and what the
+ * item drawer's Automations tab shows for one item.
  */
 class BoardAutomationManageController extends Controller
 {
@@ -62,6 +66,7 @@ class BoardAutomationManageController extends Controller
             'workdays.*' => ['integer', 'between:1,7', 'distinct'],
             'holidays' => ['sometimes', 'array', 'max:'.BoardAutomationSetting::MAX_HOLIDAYS],
             'holidays.*' => ['date_format:Y-m-d', 'distinct'],
+            'auto_pause_after_failures' => ['sometimes', 'integer', 'min:0', 'max:'.BoardAutomationSetting::MAX_AUTO_PAUSE_AFTER_FAILURES],
         ]);
 
         $settings = BoardAutomationSetting::forBoard($item->id);
@@ -73,6 +78,9 @@ class BoardAutomationManageController extends Controller
             $workdays = array_map('intval', $validated['workdays']);
             sort($workdays);
             $settings->workdays = $workdays;
+        }
+        if (array_key_exists('auto_pause_after_failures', $validated)) {
+            $settings->auto_pause_after_failures = (int) $validated['auto_pause_after_failures'];
         }
         if (array_key_exists('holidays', $validated)) {
             $holidays = array_values($validated['holidays']);
@@ -117,7 +125,11 @@ class BoardAutomationManageController extends Controller
 
                     continue;
                 }
-                $automation->fill(['is_enabled' => $is_enabled, ...($is_enabled ? ['paused_at' => null, 'paused_reason' => null] : [])])->save();
+                $automation->fill(['is_enabled' => $is_enabled, ...($is_enabled ? ['paused_at' => null, 'paused_reason' => null] : [])]);
+                if ($is_enabled) {
+                    $automation->forceFill(['consecutive_failures' => 0]);
+                }
+                $automation->save();
             }
         });
 
@@ -260,6 +272,9 @@ class BoardAutomationManageController extends Controller
         $retries = BoardAutomationRunLog::whereIn('retry_of_id', $steps->pluck('id'))->with('actor')->orderBy('id')->get();
         $pending = $run->run_uuid ? BoardAutomationDelayedRun::where('run_uuid', $run->run_uuid)->where('status', BoardAutomationDelayedRun::STATUS_PENDING)->first() : null;
         $automation = $run->automation_id ? BoardAutomation::find($run->automation_id) : null;
+        $can_undo = $run->run_uuid !== null && BoardAutomationRunUndoer::undoableRunUuids([$run->run_uuid]) !== [];
+        $steps->each(fn (BoardAutomationRunLog $step) => $step->setAttribute('can_undo', $can_undo));
+        $run->setAttribute('can_undo', $can_undo);
 
         return response()->json(['data' => [
             'run' => new BoardAutomationRunLogResource($run->loadMissing('actor')),
@@ -268,7 +283,135 @@ class BoardAutomationManageController extends Controller
             'waiting_until' => $pending?->run_at?->toIso8601String(),
             'waiting_id' => $pending?->id,
             'can_retry' => $automation !== null && $run->status === BoardAutomationRunLog::STATUS_FAILED,
+            'can_undo' => $can_undo,
+            'undone_at' => $run->undone_at?->toIso8601String(),
         ]]);
+    }
+
+    /**
+     * POST /api/boards/{item}/automations/runs/{run}/undo
+     *
+     * Takes back what the run a history row belongs to changed inside the app, see
+     * {@see BoardAutomationRunUndoer}. Changes made again since are left alone and listed.
+     */
+    public function undo(Request $request, WorkspaceNavigationItem $item, BoardAutomationRunLog $run, BoardAutomationRunUndoer $undoer): JsonResponse
+    {
+        abort_if($run->board_id !== $item->id, 404);
+        BoardEditGate::authorize($item, $request->user());
+        abort_if($run->run_uuid === null || BoardAutomationRunUndoer::undoableRunUuids([$run->run_uuid]) === [], 422, 'This run has nothing left to undo.');
+
+        $result = $undoer->undo($run->run_uuid, $request->user());
+        $message = $result['reverted'] === 0
+            ? 'Nothing was undone, everything the run changed was changed again since.'
+            : "Undid {$result['reverted']} change(s) of the run.".($result['skipped'] !== [] ? ' Some were left as they are.' : '');
+
+        return response()->json(['message' => $message, 'data' => $result]);
+    }
+
+    /**
+     * POST /api/boards/{item}/automations/export
+     *
+     * The chosen automations of one table as a JSON file another table can import, see {@see AutomationTransfer}.
+     */
+    public function export(Request $request, WorkspaceNavigationItem $item, BoardViewResolver $view_resolver): JsonResponse
+    {
+        $validated = $request->validate([
+            'view_id' => ['sometimes', 'nullable', 'integer'],
+            'automation_ids' => ['sometimes', 'array', 'max:'.AutomationTransfer::MAX_AUTOMATIONS],
+            'automation_ids.*' => ['integer', 'distinct'],
+        ]);
+
+        $view = $view_resolver->resolveForRead($item, isset($validated['view_id']) ? (int) $validated['view_id'] : null);
+        abort_if(! $view, 404, 'This board has no table to export automations from.');
+
+        $automations = BoardAutomation::where('board_view_id', $view->id)
+            ->when(! empty($validated['automation_ids']), fn ($query) => $query->whereIn('id', $validated['automation_ids']))
+            ->orderBy('id')
+            ->limit(AutomationTransfer::MAX_AUTOMATIONS)
+            ->get();
+        abort_if($automations->isEmpty(), 422, 'There is no automation to export.');
+
+        return response()->json(['data' => AutomationTransfer::export($automations, $item, $view)]);
+    }
+
+    /**
+     * POST /api/boards/{item}/automations/import
+     *
+     * Creates the automations of an exported file on this table, matching columns, labels and
+     * groups by name with {@see AutomationCopier}. Every import starts switched off, and what found
+     * no match is listed so the builder can ask for it.
+     */
+    public function import(Request $request, WorkspaceNavigationItem $item, BoardViewResolver $view_resolver): JsonResponse
+    {
+        BoardEditGate::authorize($item, $request->user());
+
+        $validated = $request->validate([
+            'view_id' => ['sometimes', 'nullable', 'integer'],
+            'file' => ['required', 'array'],
+            'file.format' => ['required', 'string', Rule::in([AutomationTransfer::FORMAT])],
+            'file.version' => ['required', 'integer', Rule::in([AutomationTransfer::VERSION])],
+            'file.source' => ['sometimes', 'array'],
+            'file.source.board_id' => ['sometimes', 'nullable', 'integer'],
+            'file.columns' => ['sometimes', 'array', 'max:500'],
+            'file.groups' => ['sometimes', 'array', 'max:500'],
+            'file.automations' => ['required', 'array', 'min:1', 'max:'.AutomationTransfer::MAX_AUTOMATIONS],
+            'file.automations.*.name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'file.automations.*.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            'file.automations.*.importance' => ['sometimes', 'nullable', Rule::in(BoardAutomation::importanceLevels())],
+            'file.automations.*.failure_alert' => ['sometimes', 'nullable', Rule::in(BoardAutomation::failureAlerts())],
+            'file.automations.*.trigger_type' => ['required', Rule::in(BoardAutomation::triggerTypes())],
+            'file.automations.*.trigger_config' => ['sometimes', 'nullable', 'array'],
+            'file.automations.*.conditions' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_CONDITIONS],
+            'file.automations.*.condition_operator' => ['sometimes', 'nullable', Rule::in(['and', 'or'])],
+            'file.automations.*.condition_groups' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_CONDITION_GROUPS],
+            'file.automations.*.actions' => ['required', 'array', 'min:1', 'max:'.BoardAutomation::MAX_ACTIONS],
+            'file.automations.*.actions.*.type' => ['required', Rule::in(BoardAutomation::actionTypes())],
+            'file.automations.*.actions.*.params' => ['present', 'array'],
+            'file.automations.*.else_actions' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_ACTIONS],
+            'file.automations.*.else_actions.*.type' => ['required', Rule::in(BoardAutomation::actionTypes())],
+            'file.automations.*.else_actions.*.params' => ['present', 'array'],
+        ]);
+
+        $view = $view_resolver->resolveForRead($item, isset($validated['view_id']) ? (int) $validated['view_id'] : null);
+        abort_if(! $view, 422, 'This board has no table to import automations into.');
+
+        $file = (array) $request->input('file');
+        $catalog = AutomationTransfer::sourceCatalog($file);
+        $source_board_id = (int) ($file['source']['board_id'] ?? 0);
+        $results = [];
+
+        DB::transaction(function () use ($file, $catalog, $source_board_id, $view, $item, $request, &$results) {
+            foreach ((array) $file['automations'] as $entry) {
+                $source = AutomationTransfer::automationFrom((array) $entry, $source_board_id);
+                $copied = (new AutomationCopier($source, $view, $catalog['columns'], $catalog['groups']))->copy();
+                $actions = $copied['attributes']['actions'];
+
+                $automation = BoardAutomation::create([
+                    'board_id' => $item->id,
+                    'board_view_id' => $view->id,
+                    'name' => $source->name,
+                    'description' => $source->description,
+                    'is_enabled' => false,
+                    'importance' => $source->importance ?: BoardAutomation::IMPORTANCE_MINOR,
+                    'failure_alert' => $source->failure_alert ?: BoardAutomation::FAILURE_ALERT_APP,
+                    ...$copied['attributes'],
+                    'action_type' => $actions[0]['type'],
+                    'action_params' => $actions[0]['params'],
+                    'last_scheduled_run_at' => in_array($source->trigger_type, BoardAutomation::scheduledTriggers(), true) ? now() : null,
+                    'webhook_token' => $source->trigger_type === BoardAutomation::TRIGGER_WEBHOOK_RECEIVED ? Str::random(48) : null,
+                    'created_by_id' => $request->user()?->id,
+                    'owner_id' => $request->user()?->id,
+                ]);
+                $this->version_recorder->record($automation, $request->user());
+
+                $results[] = ['automation_id' => $automation->id, 'name' => $automation->name, 'unmapped' => $copied['unmapped']];
+            }
+        });
+
+        return response()->json([
+            'message' => 'Imported '.count($results).' automation(s). They start turned off, check them and turn them on.',
+            'data' => $results,
+        ], 201);
     }
 
     /**
@@ -354,6 +497,7 @@ class BoardAutomationManageController extends Controller
             'paused_by' => $settings->pausedBy ? ['id' => $settings->pausedBy->id, 'name' => $settings->pausedBy->full_name] : null,
             'workdays' => $settings->workdays ?: BoardAutomationSetting::DEFAULT_WORKDAYS,
             'holidays' => array_values((array) ($settings->holidays ?? [])),
+            'auto_pause_after_failures' => $settings->autoPauseThreshold(),
         ];
     }
 }

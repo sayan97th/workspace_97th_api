@@ -33,6 +33,9 @@ class BoardAutomationRunLogResource extends JsonResource
             'branch' => $this->branch ?: 'then',
             'step_index' => $this->step_index,
             'retry_of_id' => $this->retry_of_id,
+            // Set once the run this step belongs to was undone. `can_undo` is filled in by the listings.
+            'undone_at' => $this->undone_at?->toIso8601String(),
+            'can_undo' => (bool) ($this->resource->getAttribute('can_undo') ?? false),
         ];
     }
 }

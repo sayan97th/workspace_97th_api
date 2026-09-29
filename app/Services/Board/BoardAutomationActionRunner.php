@@ -15,6 +15,7 @@ use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\AutomationActions\RunsBulkActions;
 use App\Services\Board\AutomationActions\RunsColumnActions;
 use App\Services\Board\AutomationActions\RunsDateActions;
 use App\Services\Board\AutomationActions\RunsFlowActions;
@@ -45,13 +46,17 @@ use Illuminate\Support\Facades\DB;
  * happen, in a transaction the caller rolls back, but nothing leaves the app: notifications,
  * emails, Slack messages and webhooks only report who they would have reached.
  *
- * Date, group, column, flow (round robin, cascades, checklists, dependents) and outbound actions
- * live in the traits under `AutomationActions`. The "wait" action is handled by
- * {@see BoardAutomationService} itself, since it stops the branch.
+ * Date, group, column, flow (round robin, cascades, checklists, dependents), bulk (rename, add or
+ * remove values, connected items, whole groups) and outbound actions live in the traits under
+ * `AutomationActions`. The "wait" action is handled by {@see BoardAutomationService} itself, since
+ * it stops the branch.
+ *
+ * Every change inside the app is written down in the run's journal ({@see BoardAutomationRunJournal}),
+ * cell values by {@see BoardItemValueService::sync()} and the rest here, so the run can be undone.
  */
 class BoardAutomationActionRunner
 {
-    use RunsColumnActions, RunsDateActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions;
+    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions;
 
     public function __construct(
         private readonly NotificationService $notification_service,
@@ -60,6 +65,9 @@ class BoardAutomationActionRunner
         private readonly BoardAutomationMessageRenderer $renderer,
         private readonly BoardItemTransferService $transfer_service,
         private readonly AutomationRunContext $run_context,
+        private readonly BoardAutomationRunJournal $journal,
+        private readonly BoardFormulaResolver $formula_resolver,
+        private readonly MirrorColumnResolver $mirror_resolver,
     ) {}
 
     /**
@@ -113,6 +121,10 @@ class BoardAutomationActionRunner
             BoardAutomation::ACTION_SET_PARENT_VALUE => $this->setParentValue($automation, $params, $item, $actor),
             BoardAutomation::ACTION_ADD_CHECKLIST_ITEMS => $this->addChecklistItems($automation, $params, $item, $actor),
             BoardAutomation::ACTION_SHIFT_DEPENDENTS => $this->shiftDependents($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_RENAME_ITEM => $this->renameItem($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_CHANGE_VALUES => $this->changeValues($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_UPDATE_CONNECTED_ITEMS => $this->updateConnectedItems($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_GROUP_ITEMS => $this->groupItems($automation, $params, $item, $actor),
             BoardAutomation::ACTION_WAIT => BoardAutomationActionOutcome::skipped('A wait is handled by the automation itself.'),
             default => BoardAutomationActionOutcome::skipped('This action type is not supported.'),
         };
@@ -144,6 +156,7 @@ class BoardAutomationActionRunner
             $this->cascadeGroupToDescendants($item, $target_group->id);
         });
         $item->setRelation('group', $target_group);
+        $this->journal->moved($item, $from_group_id, $target_group->id);
 
         $this->log($automation, $item, $actor, "moved \"{$item->name}\" to \"{$target_group->name}\"");
         $this->automationService()->handleItemMoved($item, $from_group_id, $actor);
@@ -181,6 +194,7 @@ class BoardAutomationActionRunner
         }
 
         $item->update(['is_archived' => true]);
+        $this->journal->archived($item);
         $this->log($automation, $item, $actor, "archived \"{$item->name}\"");
         $this->automationService()->handleItemArchived($item, $actor);
 
@@ -190,10 +204,12 @@ class BoardAutomationActionRunner
     private function deleteItem(BoardAutomation $automation, BoardItem $item, ?User $actor): BoardAutomationActionOutcome
     {
         $item->loadMissing('childrenRecursive');
-        foreach ($this->flattenTree($item->childrenRecursive) as $descendant) {
+        $descendants = $this->flattenTree($item->childrenRecursive);
+        foreach ($descendants as $descendant) {
             $descendant->delete();
         }
         $item->delete();
+        $this->journal->deleted($item, array_map(fn (BoardItem $descendant) => $descendant->id, $descendants));
 
         $this->log($automation, $item, $actor, "deleted \"{$item->name}\"");
         $this->automationService()->handleItemDeleted($item, $actor);
@@ -214,6 +230,7 @@ class BoardAutomationActionRunner
             return $this->copySubtree($item, $item->parent_id, $position, $with_subitems, true);
         });
 
+        $this->journal->created($copy);
         $this->log($automation, $item, $actor, "duplicated \"{$item->name}\"");
 
         return BoardAutomationActionOutcome::success("Duplicated the item as \"{$copy->name}\".");
@@ -397,15 +414,39 @@ class BoardAutomationActionRunner
         $created_by_id = $actor?->id ?? $automation->responsibleUser()?->id;
         $created = $this->transfer_service->createCopyInGroup($item, $target_group, $name, (bool) ($params['copy_values'] ?? false), $created_by_id);
 
+        $this->journal->created($created);
+
         if (! $is_cross_board && ! empty($params['field_mappings'])) {
             $this->applyFieldMappings($automation, (array) $params['field_mappings'], $created, $item, $actor, $context);
         }
+        $linked_note = $is_cross_board && $item !== null && ! empty($params['link_column_id']) ? $this->linkCreatedItem($automation, (int) $params['link_column_id'], $item, $created, $actor) : '';
 
         $where = $is_cross_board ? "\"{$target_group->name}\" on \"{$target_group->board->label}\"" : "\"{$target_group->name}\"";
         $this->log($automation, $item, $actor, "created \"{$created->name}\" in {$where}");
         $this->automationService()->handleItemCreated($created, $actor);
 
-        return BoardAutomationActionOutcome::success("Created \"{$created->name}\" in {$where}.", created_item: $created);
+        return BoardAutomationActionOutcome::success("Created \"{$created->name}\" in {$where}.{$linked_note}", created_item: $created);
+    }
+
+    /**
+     * Adds an item just created on another board to the triggering item's connect boards column,
+     * when that column links to the board the item was created on.
+     */
+    private function linkCreatedItem(BoardAutomation $automation, int $link_column_id, BoardItem $item, BoardItem $created, ?User $actor): string
+    {
+        $target = $this->resolveColumnTarget($automation, ['target_column_id' => $link_column_id], $item, BoardColumn::TYPE_CONNECT_BOARD);
+        if (is_string($target)) {
+            return ' It was not connected: '.lcfirst($target);
+        }
+        [$column, $subject] = $target;
+        if ((int) ($column->config['linked_board_id'] ?? 0) !== $created->board_id) {
+            return " It was not connected, \"{$column->label}\" links to another board.";
+        }
+
+        $current_ids = array_map('strval', array_filter((array) $this->currentValue($subject, $column), 'is_scalar'));
+        $this->writeValue($subject, $column, array_values(array_unique([...$current_ids, (string) $created->id])), $actor);
+
+        return " Connected it in \"{$column->label}\".";
     }
 
     /**
@@ -476,6 +517,7 @@ class BoardAutomationActionRunner
         }
 
         foreach ($created as $subitem) {
+            $this->journal->created($subitem);
             $this->valueService()->assignAutoNumbers($subitem, BoardColumn::SCOPE_SUBITEM);
             $this->automationService()->handleItemCreated($subitem, $actor);
         }

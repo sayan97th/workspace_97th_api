@@ -50,6 +50,8 @@ use Illuminate\Support\Carbon;
  * @property array<int, array{join_operator?: string, rules?: array<int, array<string, mixed>>}>|null $condition_groups
  * @property array<int, array{type: string, params: array<string, mixed>}>|null $else_actions
  * @property string $failure_alert
+ * @property int $consecutive_failures
+ * @property Carbon|null $last_failed_at
  * @property array<string, mixed>|null $state
  * @property string $action_type
  * @property array<string, mixed>|null $action_params
@@ -148,6 +150,19 @@ class BoardAutomation extends Model
 
     /** Fires once a task of the checklist column is checked, only the task named `trigger_value` when set. */
     public const TRIGGER_CHECKLIST_ITEM_CHECKED = 'checklist_item_checked';
+
+    /** Fires once someone is removed from a `people` column, `trigger_value` is a specific user id to watch for, or null for "anyone". */
+    public const TRIGGER_PERSON_UNASSIGNED = 'person_unassigned';
+
+    /** Fires once a file or link is added to a `files` column, only files whose extension is in `trigger_config.extensions` when set. */
+    public const TRIGGER_FILE_UPLOADED = 'file_uploaded';
+
+    /**
+     * Fires once the date (or the end of the timeline) `trigger_column_id` has passed while the item is not done: the status
+     * column `trigger_config.status_column_id` does not hold one of `trigger_config.done_values`. Checked on a schedule, at
+     * `trigger_config.time`, once per item and date. Items already overdue when the automation is created are left alone.
+     */
+    public const TRIGGER_ITEM_OVERDUE = 'item_overdue';
 
     /** Moves the item to `target_group_id`. */
     public const ACTION_MOVE_TO_GROUP = 'move_to_group';
@@ -257,6 +272,26 @@ class BoardAutomation extends Model
     /** Adds one task per entry of `tasks` to the checklist column `target_column_id`, skipping tasks it already has. */
     public const ACTION_ADD_CHECKLIST_ITEMS = 'add_checklist_items';
 
+    /** Renames the item to `name_template`, tokens such as `{item_name}` and `{column:12}` filled in. */
+    public const ACTION_RENAME_ITEM = 'rename_item';
+
+    /**
+     * Adds (`mode` `add`) or removes (`remove`) the `values` of a `dropdown`, `tags`, `people` or `vote` column
+     * `target_column_id`, keeping the rest. For people and votes `__actor__` and `__creator__` stand for whoever set the
+     * automation off and the item creator.
+     */
+    public const ACTION_CHANGE_VALUES = 'change_values';
+
+    /** Sets `linked_column_id`, a column of the connected board, to `value` on every item the connect boards column `connect_column_id` links to. */
+    public const ACTION_UPDATE_CONNECTED_ITEMS = 'update_connected_items';
+
+    /**
+     * Runs `operation` (`set_column_value`, `clear_column`, `archive` or `move_to_group`) on every item of the group
+     * `target_group_id`, or of the item's own group with `from_item_group`: `target_column_id` and `value` for the column
+     * operations, `destination_group_id` for a move.
+     */
+    public const ACTION_GROUP_ITEMS = 'group_items';
+
     public const FAILURE_ALERT_APP = 'app';
 
     public const FAILURE_ALERT_APP_AND_EMAIL = 'app_and_email';
@@ -295,6 +330,7 @@ class BoardAutomation extends Model
             self::TRIGGER_NAME_CHANGED, self::TRIGGER_DATE_CHANGED, self::TRIGGER_WEBHOOK_RECEIVED,
             self::TRIGGER_BUTTON_CLICKED, self::TRIGGER_NUMBER_THRESHOLD, self::TRIGGER_ITEM_MOVED_TO_BOARD,
             self::TRIGGER_ITEM_RESTORED, self::TRIGGER_CHECKLIST_COMPLETED, self::TRIGGER_CHECKLIST_ITEM_CHECKED,
+            self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED, self::TRIGGER_ITEM_OVERDUE,
         ];
     }
 
@@ -329,7 +365,8 @@ class BoardAutomation extends Model
             self::TRIGGER_STATUS_CHANGED, self::TRIGGER_DATE_ARRIVED, self::TRIGGER_PERSON_ASSIGNED, self::TRIGGER_COLUMN_CHANGED,
             self::TRIGGER_ALL_SUBITEMS_STATUS, self::TRIGGER_ALL_GROUP_ITEMS_STATUS, self::TRIGGER_DATE_CHANGED,
             self::TRIGGER_BUTTON_CLICKED, self::TRIGGER_NUMBER_THRESHOLD, self::TRIGGER_CHECKLIST_COMPLETED,
-            self::TRIGGER_CHECKLIST_ITEM_CHECKED,
+            self::TRIGGER_CHECKLIST_ITEM_CHECKED, self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED,
+            self::TRIGGER_ITEM_OVERDUE,
         ];
     }
 
@@ -344,7 +381,9 @@ class BoardAutomation extends Model
             self::TRIGGER_STATUS_CHANGED, self::TRIGGER_ALL_SUBITEMS_STATUS, self::TRIGGER_ALL_GROUP_ITEMS_STATUS => [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL],
             self::TRIGGER_DATE_ARRIVED => [BoardColumn::TYPE_DATE],
             self::TRIGGER_DATE_CHANGED => [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE],
-            self::TRIGGER_PERSON_ASSIGNED => [BoardColumn::TYPE_PEOPLE],
+            self::TRIGGER_PERSON_ASSIGNED, self::TRIGGER_PERSON_UNASSIGNED => [BoardColumn::TYPE_PEOPLE],
+            self::TRIGGER_FILE_UPLOADED => [BoardColumn::TYPE_FILES],
+            self::TRIGGER_ITEM_OVERDUE => [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE],
             self::TRIGGER_BUTTON_CLICKED => [BoardColumn::TYPE_BUTTON],
             self::TRIGGER_NUMBER_THRESHOLD => [BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS, BoardColumn::TYPE_TIME_TRACKING],
             self::TRIGGER_CHECKLIST_COMPLETED, self::TRIGGER_CHECKLIST_ITEM_CHECKED => [BoardColumn::TYPE_CHECKLIST],
@@ -370,6 +409,7 @@ class BoardAutomation extends Model
             self::ACTION_CONNECT_ITEMS, self::ACTION_NOTIFY_TEAM, self::ACTION_SEND_WEBHOOK,
             self::ACTION_WAIT, self::ACTION_SHIFT_DEPENDENTS, self::ACTION_ASSIGN_ROUND_ROBIN,
             self::ACTION_SET_SUBITEMS_VALUE, self::ACTION_SET_PARENT_VALUE, self::ACTION_ADD_CHECKLIST_ITEMS,
+            self::ACTION_RENAME_ITEM, self::ACTION_CHANGE_VALUES, self::ACTION_UPDATE_CONNECTED_ITEMS, self::ACTION_GROUP_ITEMS,
         ];
     }
 
@@ -392,7 +432,7 @@ class BoardAutomation extends Model
         return [
             self::ACTION_CREATE_ITEM, self::ACTION_NOTIFY_PERSON, self::ACTION_SEND_EMAIL, self::ACTION_SLACK_NOTIFY_CHANNEL,
             self::ACTION_SLACK_NOTIFY_PERSON, self::ACTION_CREATE_GROUP, self::ACTION_DUPLICATE_GROUP, self::ACTION_ARCHIVE_GROUP,
-            self::ACTION_NOTIFY_TEAM, self::ACTION_SEND_WEBHOOK, self::ACTION_WAIT,
+            self::ACTION_NOTIFY_TEAM, self::ACTION_SEND_WEBHOOK, self::ACTION_WAIT, self::ACTION_GROUP_ITEMS,
         ];
     }
 
@@ -598,6 +638,8 @@ class BoardAutomation extends Model
             'condition_groups' => 'array',
             'else_actions' => 'array',
             'state' => 'array',
+            'consecutive_failures' => 'integer',
+            'last_failed_at' => 'datetime',
             'last_scheduled_run_at' => 'datetime',
             'paused_at' => 'datetime',
         ];

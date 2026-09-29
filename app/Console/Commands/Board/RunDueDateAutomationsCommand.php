@@ -10,7 +10,7 @@ class RunDueDateAutomationsCommand extends Command
 {
     protected $signature = 'automations:run-date-triggers';
 
-    protected $description = 'Runs every board automation whose date-column trigger has arrived, with its day offset and time, see BoardAutomation::TRIGGER_DATE_ARRIVED';
+    protected $description = 'Runs every board automation whose date-column trigger has arrived (BoardAutomation::TRIGGER_DATE_ARRIVED) or whose items became overdue (BoardAutomation::TRIGGER_ITEM_OVERDUE)';
 
     public function __construct(private readonly BoardAutomationService $automation_service)
     {
@@ -20,8 +20,9 @@ class RunDueDateAutomationsCommand extends Command
     public function handle(): int
     {
         $ran_count = $this->automation_service->runDueDateTriggers();
+        $overdue_count = $this->automation_service->runOverdueTriggers();
 
-        $this->components->info("Ran {$ran_count} date-triggered automation(s).");
+        $this->components->info("Ran {$ran_count} date-triggered automation(s) and {$overdue_count} overdue one(s).");
 
         return self::SUCCESS;
     }

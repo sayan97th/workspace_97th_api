@@ -16,6 +16,8 @@ use App\Models\BoardAutomationTemplate;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationHealthChecker;
+use App\Services\Board\BoardAutomationImpactPreview;
+use App\Services\Board\BoardAutomationRunUndoer;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardAutomationVersionRecorder;
 use App\Services\Board\BoardViewResolver;
@@ -136,6 +138,10 @@ class BoardAutomationController extends Controller
         if ($is_definition_saved || $automation->is_enabled) {
             $automation->fill(['paused_at' => null, 'paused_reason' => null]);
         }
+        // Turning it back on, or changing what it does, starts the failure count again.
+        if ($is_definition_saved || ($validated['is_enabled'] ?? null) === true) {
+            $automation->forceFill(['consecutive_failures' => 0]);
+        }
 
         $automation->save();
         $this->ensureWebhookToken($automation);
@@ -187,7 +193,37 @@ class BoardAutomationController extends Controller
     public function test(TestBoardAutomationRequest $request, WorkspaceNavigationItem $item, BoardAutomationService $automation_service): JsonResponse
     {
         $validated = $request->validated();
+        $automation = $this->unsavedAutomation($validated, $item, $request);
 
+        $board_item = isset($validated['item_id']) ? BoardItem::with(['group', 'values'])->find($validated['item_id']) : null;
+        $result = $automation_service->testRun($automation, $board_item, $request->user(), (array) ($validated['payload'] ?? []));
+
+        return response()->json(['data' => [
+            'item' => $board_item ? ['id' => $board_item->id, 'name' => $board_item->name] : null,
+            ...$result,
+        ]]);
+    }
+
+    /**
+     * POST /api/boards/{item}/automations/preview
+     *
+     * "Preview impact": the items of the table an automation that is not saved yet would act on,
+     * and what one run would do, see {@see BoardAutomationImpactPreview}. Nothing is saved.
+     */
+    public function preview(TestBoardAutomationRequest $request, WorkspaceNavigationItem $item, BoardAutomationImpactPreview $impact_preview): JsonResponse
+    {
+        $automation = $this->unsavedAutomation($request->validated(), $item, $request);
+
+        return response()->json(['data' => $impact_preview->preview($automation, $request->user())]);
+    }
+
+    /**
+     * The automation a test run or a preview works with, built from the builder's definition.
+     *
+     * @param  array<string, mixed>  $validated
+     */
+    private function unsavedAutomation(array $validated, WorkspaceNavigationItem $item, Request $request): BoardAutomation
+    {
         $automation = new BoardAutomation([
             'board_id' => $item->id,
             'board_view_id' => $validated['view_id'],
@@ -202,13 +238,7 @@ class BoardAutomationController extends Controller
         $automation->setRelation('owner', $request->user());
         $automation->setRelation('creator', $request->user());
 
-        $board_item = isset($validated['item_id']) ? BoardItem::with(['group', 'values'])->find($validated['item_id']) : null;
-        $result = $automation_service->testRun($automation, $board_item, $request->user(), (array) ($validated['payload'] ?? []));
-
-        return response()->json(['data' => [
-            'item' => $board_item ? ['id' => $board_item->id, 'name' => $board_item->name] : null,
-            ...$result,
-        ]]);
+        return $automation;
     }
 
     /**
@@ -280,6 +310,9 @@ class BoardAutomationController extends Controller
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->paginate($per_page);
+
+        $undoable = BoardAutomationRunUndoer::undoableRunUuids($page->getCollection()->pluck('run_uuid')->all());
+        $page->getCollection()->each(fn (BoardAutomationRunLog $log) => $log->setAttribute('can_undo', $log->run_uuid !== null && in_array($log->run_uuid, $undoable, true)));
 
         return response()->json([
             'data' => BoardAutomationRunLogResource::collection($page->getCollection()),
@@ -462,13 +495,15 @@ class BoardAutomationController extends Controller
             fn (array $action) => ['type' => (string) $action['type'], 'params' => (array) ($action['params'] ?? [])],
             array_filter((array) ($list ?? []), 'is_array')
         ));
+        $to_rule = fn (array $rule) => [
+            'column_id' => (string) $rule['column_id'],
+            'condition' => (string) $rule['condition'],
+            'value' => (string) ($rule['value'] ?? ''),
+            'values' => array_values(array_map('strval', array_filter((array) ($rule['values'] ?? []), 'is_scalar'))),
+        ];
+        // A "subitems" condition keeps its nested rule on a subitem column.
         $to_rules = fn (mixed $list) => array_values(array_map(
-            fn (array $rule) => [
-                'column_id' => (string) $rule['column_id'],
-                'condition' => (string) $rule['condition'],
-                'value' => (string) ($rule['value'] ?? ''),
-                'values' => array_values(array_map('strval', array_filter((array) ($rule['values'] ?? []), 'is_scalar'))),
-            ],
+            fn (array $rule) => [...$to_rule($rule), ...(is_array($rule['subitem_rule'] ?? null) ? ['subitem_rule' => $to_rule($rule['subitem_rule'])] : [])],
             array_filter((array) ($list ?? []), 'is_array')
         ));
         $actions = $to_actions($validated['actions'] ?? []);

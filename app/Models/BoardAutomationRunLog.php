@@ -37,6 +37,8 @@ use Illuminate\Support\Carbon;
  * @property int|null $step_index
  * @property array<string, mixed>|null $context
  * @property int|null $retry_of_id
+ * @property Carbon|null $undone_at
+ * @property int|null $undone_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read BoardAutomation|null $automation
@@ -45,7 +47,7 @@ use Illuminate\Support\Carbon;
 #[Fillable([
     'automation_id', 'board_id', 'board_view_id', 'board_item_id', 'actor_id',
     'automation_name', 'item_name', 'trigger_type', 'action_type', 'status', 'message',
-    'run_uuid', 'branch', 'step_index', 'context', 'retry_of_id',
+    'run_uuid', 'branch', 'step_index', 'context', 'retry_of_id', 'undone_at', 'undone_by_id',
 ])]
 class BoardAutomationRunLog extends Model
 {
@@ -86,6 +88,7 @@ class BoardAutomationRunLog extends Model
     {
         return [
             'context' => 'array',
+            'undone_at' => 'datetime',
         ];
     }
 }

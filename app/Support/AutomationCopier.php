@@ -14,16 +14,20 @@ use Illuminate\Support\Collection;
  * and scope alone when the target has exactly one such column), status like options by label and
  * groups by name. Whatever finds no match is left empty and listed in `unmapped`, so the copy
  * starts switched off and the builder marks those tokens for the user to choose again.
+ *
+ * An imported automation (see {@see AutomationTransfer}) is not saved anywhere yet: its columns
+ * and groups come from the export file instead of the database, passed as `$source_columns` and
+ * `$source_groups`.
  */
 final class AutomationCopier
 {
     /** Params of an action that hold a column id of the automation's own tab. */
     private const COLUMN_PARAMS = [
         'target_column_id', 'source_column_id', 'number_column_id', 'notify_from_people_column_id',
-        'dependency_column_id', 'email_column_id',
+        'dependency_column_id', 'email_column_id', 'connect_column_id', 'link_column_id',
     ];
 
-    private const OPTION_TYPES = [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_DROPDOWN];
+    private const OPTION_TYPES = [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_TAGS];
 
     /** @var Collection<int, BoardColumn> */
     private Collection $source_columns;
@@ -40,11 +44,19 @@ final class AutomationCopier
     /** @var array<int, string> */
     private array $unmapped = [];
 
-    public function __construct(private readonly BoardAutomation $automation, private readonly BoardView $target_view)
-    {
-        $this->source_columns = BoardColumn::where('board_view_id', $automation->board_view_id)->get()->keyBy('id');
+    /**
+     * @param  Collection<int, BoardColumn>|null  $source_columns  the original tab's columns keyed by id, read from the database when null
+     * @param  Collection<int, BoardGroup>|null  $source_groups  the original tab's groups keyed by id, read from the database when null
+     */
+    public function __construct(
+        private readonly BoardAutomation $automation,
+        private readonly BoardView $target_view,
+        ?Collection $source_columns = null,
+        ?Collection $source_groups = null,
+    ) {
+        $this->source_columns = $source_columns ?? BoardColumn::where('board_view_id', $automation->board_view_id)->get()->keyBy('id');
         $this->target_columns = BoardColumn::where('board_view_id', $target_view->id)->get()->keyBy('id');
-        $this->source_groups = BoardGroup::where('board_view_id', $automation->board_view_id)->get()->keyBy('id');
+        $this->source_groups = $source_groups ?? BoardGroup::where('board_view_id', $automation->board_view_id)->get()->keyBy('id');
         $this->target_groups = BoardGroup::where('board_view_id', $target_view->id)->where('is_archived', false)->get();
     }
 
@@ -70,6 +82,14 @@ final class AutomationCopier
         }
         if (! empty($config['group_id'])) {
             $config['group_id'] = $this->mapGroup((int) $config['group_id']);
+        }
+        if (! empty($config['status_column_id'])) {
+            $source_status_id = (int) $config['status_column_id'];
+            $config['status_column_id'] = $this->mapColumn($source_status_id, 'the status that says an item is done');
+            $config['done_values'] = array_values(array_filter(array_map(fn ($id) => $this->mapOption($source_status_id, $config['status_column_id'], $id), (array) ($config['done_values'] ?? []))));
+        }
+        if (! empty($config['match']['values']) && $this->isOptionColumn($automation->trigger_column_id)) {
+            $config['match']['values'] = array_values(array_filter(array_map(fn ($id) => $this->mapOption($automation->trigger_column_id, $trigger_column_id, $id), (array) $config['match']['values'])));
         }
         unset($config['form_view_id']);
 
@@ -108,6 +128,13 @@ final class AutomationCopier
                 $rule['values'] = $field_id === '__group__'
                     ? array_values(array_filter(array_map(fn ($id) => $this->mapGroup((int) $id), (array) ($rule['values'] ?? []))))
                     : ($rule['values'] ?? []);
+                if (is_array($rule['subitem_rule'] ?? null)) {
+                    $nested = $this->mapRules([$rule['subitem_rule']]);
+                    if ($nested === []) {
+                        continue;
+                    }
+                    $rule['subitem_rule'] = $nested[0];
+                }
                 $mapped[] = $rule;
 
                 continue;
@@ -149,7 +176,13 @@ final class AutomationCopier
                 $params['field_mappings'][$index]['column_id'] = $this->mapColumn((int) ($mapping['column_id'] ?? 0), 'a column to fill');
             }
 
-            if (array_key_exists('value', $params) && $this->isOptionColumn($source_target_column)) {
+            if ($action['type'] === BoardAutomation::ACTION_CHANGE_VALUES && $this->isOptionColumn($source_target_column)) {
+                $params['values'] = array_values(array_filter(array_map(fn ($id) => $this->mapOption((int) $source_target_column, $params['target_column_id'], $id), (array) ($params['values'] ?? []))));
+            }
+            if (! empty($params['destination_group_id'])) {
+                $params['destination_group_id'] = $this->mapGroup((int) $params['destination_group_id']);
+            }
+            if (array_key_exists('value', $params) && $action['type'] !== BoardAutomation::ACTION_UPDATE_CONNECTED_ITEMS && $this->isOptionColumn($source_target_column)) {
                 $params['value'] = is_array($params['value'])
                     ? array_values(array_filter(array_map(fn ($id) => $this->mapOption((int) $source_target_column, $params['target_column_id'], $id), $params['value'])))
                     : $this->mapOption((int) $source_target_column, $params['target_column_id'], $params['value']);

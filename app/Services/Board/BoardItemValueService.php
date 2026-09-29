@@ -14,7 +14,8 @@ use App\Services\Notification\NotificationService;
  * Writes cell values for a board item. Shared by the inline cell edit, the
  * bulk "Edit column" action and the comment composer's "Assign" action so all
  * of them get the same side effects: the "Assigned you" notification, board
- * automations and the item activity entry the Update Feed shows.
+ * automations and the item activity entry the Update Feed shows. A write an
+ * automation makes is also written down in its run's journal, for "Undo".
  */
 class BoardItemValueService
 {
@@ -22,6 +23,7 @@ class BoardItemValueService
         private readonly NotificationService $notification_service,
         private readonly BoardAutomationService $automation_service,
         private readonly BoardItemActivityService $activity_service,
+        private readonly BoardAutomationRunJournal $journal,
     ) {}
 
     /**
@@ -70,6 +72,10 @@ class BoardItemValueService
 
             if ($record_activity) {
                 $this->activity_service->record($board_item, $column, $old_value, $value, $actor);
+            }
+
+            if (! $this->automation_service->valuesAreEqual($old_value, $value)) {
+                $this->journal->valueChanged($board_item, $column->id, $old_value, $value);
             }
 
             $this->automation_service->handleValueChanged($board_item, $column, $old_value, $value, $actor);

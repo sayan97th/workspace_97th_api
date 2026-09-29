@@ -41,6 +41,9 @@ class BoardAutomationResource extends JsonResource
             // Only a "When a webhook is received" automation has one, the secret URL to post to.
             'webhook_url' => $this->resource->webhookUrl(),
             'paused_at' => $this->paused_at?->toIso8601String(),
+            // How many runs in a row failed, reset by a run that works. The board pauses it at its threshold.
+            'consecutive_failures' => (int) ($this->consecutive_failures ?? 0),
+            'last_failed_at' => $this->last_failed_at?->toIso8601String(),
             'paused_reason' => $this->paused_reason,
             // What it uses that no longer exists, each with the sentence part it belongs to.
             'problems' => app(BoardAutomationHealthChecker::class)->problems($this->resource),

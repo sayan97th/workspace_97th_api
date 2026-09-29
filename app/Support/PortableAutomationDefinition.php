@@ -15,7 +15,7 @@ use App\Models\BoardColumn;
 final class PortableAutomationDefinition
 {
     /** Params of an action that hold a column id of the automation's own tab. */
-    private const COLUMN_PARAMS = ['target_column_id', 'source_column_id', 'number_column_id', 'notify_from_people_column_id', 'match_column_id', 'dependency_column_id', 'email_column_id'];
+    private const COLUMN_PARAMS = ['target_column_id', 'source_column_id', 'number_column_id', 'notify_from_people_column_id', 'match_column_id', 'dependency_column_id', 'email_column_id', 'connect_column_id', 'link_column_id'];
 
     /** Column types whose values are option ids of that one column. */
     private const OPTION_TYPES = [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_TAGS];
@@ -44,7 +44,10 @@ final class PortableAutomationDefinition
         $remember('trigger_column_id', $automation->trigger_column_id);
 
         $config = (array) ($automation->trigger_config ?? []);
-        unset($config['from_value'], $config['group_id'], $config['form_view_id']);
+        unset($config['from_value'], $config['group_id'], $config['form_view_id'], $config['status_column_id'], $config['done_values']);
+        if (isset($config['match']) && $is_option_column($automation->trigger_column_id)) {
+            $config['match']['values'] = [];
+        }
 
         $portable_rules = function (array $rules, string $path) use ($remember, $is_option_column): array {
             $portable = [];
@@ -92,7 +95,10 @@ final class PortableAutomationDefinition
                         $params['field_mappings'][$mapping_index]['column_id'] = null;
                     }
                 }
-                unset($params['linked_match_column_id']);
+                unset($params['linked_match_column_id'], $params['linked_column_id'], $params['destination_group_id']);
+                if ($action['type'] === BoardAutomation::ACTION_CHANGE_VALUES && $is_option_column($action['params']['target_column_id'] ?? null)) {
+                    $params['values'] = [];
+                }
                 if (! $is_cross_board) {
                     unset($params['target_group_id'], $params['source_group_id']);
                 }

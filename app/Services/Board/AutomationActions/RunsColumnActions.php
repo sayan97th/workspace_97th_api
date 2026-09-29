@@ -9,6 +9,8 @@ use App\Models\BoardItemValue;
 use App\Models\User;
 use App\Services\Board\BoardAutomationActionOutcome;
 use App\Services\Board\BoardAutomationActionRunner;
+use App\Services\Board\BoardFormulaResolver;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon;
 
 /**
@@ -39,12 +41,12 @@ trait RunsColumnActions
         }
         [$source_column, $source_subject] = $source;
 
-        $source_value = $this->currentValue($source_subject, $source_column);
+        [$read_as, $source_value] = $this->readSourceValue($source_column, $source_subject);
         if ($this->valuesAreEqual($source_value, null)) {
             return BoardAutomationActionOutcome::skipped("\"{$source_column->label}\" had no value to copy.");
         }
 
-        $value = $this->convertValue($source_column, $source_value, $column);
+        $value = $this->convertValue($read_as, $source_value, $column);
         if ($value === null) {
             return BoardAutomationActionOutcome::skipped("A \"{$source_column->label}\" value cannot be copied into \"{$column->label}\".");
         }
@@ -57,6 +59,54 @@ trait RunsColumnActions
         $this->log($automation, $subject, $actor, "copied \"{$source_column->label}\" into \"{$column->label}\" on \"{$subject->name}\"");
 
         return BoardAutomationActionOutcome::success("Copied \"{$shown}\" into \"{$column->label}\".");
+    }
+
+    /**
+     * The value to copy from `$column` and the column type to read it as. A stored value reads as
+     * itself. A Formula result is computed ({@see BoardFormulaResolver}) and read as a number, a
+     * date, a checkbox or text. A Mirror reads as the mirrored column when one item is linked, and
+     * as text listing every value when several are.
+     *
+     * @return array{0: BoardColumn, 1: mixed}
+     */
+    private function readSourceValue(BoardColumn $column, BoardItem $subject): array
+    {
+        if ($column->type === BoardColumn::TYPE_FORMULA) {
+            $outcome = $this->formula_resolver->outcome($column, $subject);
+            $result = $outcome !== null && $outcome['ok'] ? $outcome['value'] : null;
+            [$type, $value] = match (true) {
+                is_int($result) || is_float($result) => [BoardColumn::TYPE_NUMBER, floor((float) $result) === (float) $result ? (int) $result : round((float) $result, 6)],
+                is_bool($result) => [BoardColumn::TYPE_CHECKBOX, $result],
+                $result instanceof CarbonImmutable => [BoardColumn::TYPE_DATE, $outcome['text']],
+                default => [BoardColumn::TYPE_TEXT, $outcome !== null && $outcome['ok'] && $outcome['text'] !== '' ? $outcome['text'] : null],
+            };
+
+            return [new BoardColumn(['type' => $type, 'label' => $column->label, 'config' => []]), $value];
+        }
+
+        if ($column->type === BoardColumn::TYPE_MIRROR) {
+            $copy = (clone $subject)->setRelations([]);
+            $this->mirror_resolver->attach(collect([$copy]), BoardColumn::where('board_view_id', $column->board_view_id)->where('scope', $column->scope)->get());
+            $mirrored = ($copy->getAttribute('mirror_values') ?? [])[(string) $column->id] ?? null;
+            $mirrored_column = BoardColumn::find((int) ($column->config['mirrored_column_id'] ?? 0));
+            $source_column = BoardColumn::find((int) ($column->config['source_column_id'] ?? 0));
+            $linked_count = $source_column && $mirrored_column
+                ? BoardItemValue::whereIn('item_id', array_filter((array) $this->currentValue($subject, $source_column), 'is_numeric'))->where('column_id', $mirrored_column->id)->whereNotNull('value')->count()
+                : 0;
+
+            if ($mirrored === null || ! $mirrored_column) {
+                return [$column, null];
+            }
+            if ($linked_count <= 1) {
+                return [$mirrored_column, $mirrored];
+            }
+
+            $text = implode(', ', array_filter(array_map(fn ($entry) => $this->renderer->displayValue($mirrored_column, $entry), (array) $mirrored)));
+
+            return [new BoardColumn(['type' => BoardColumn::TYPE_TEXT, 'label' => $column->label, 'config' => []]), $text === '' ? null : $text];
+        }
+
+        return [$column, $this->currentValue($subject, $column)];
     }
 
     /**

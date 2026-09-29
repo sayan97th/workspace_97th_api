@@ -455,12 +455,16 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('templates/{template}', [BoardAutomationController::class, 'destroyTemplate']);
             Route::get('teams', [BoardAutomationController::class, 'teams']);
             Route::post('test', [BoardAutomationController::class, 'test'])->middleware('throttle:30,1');
+            Route::post('preview', [BoardAutomationController::class, 'preview'])->middleware('throttle:30,1');
+            Route::post('export', [BoardAutomationManageController::class, 'export']);
+            Route::post('import', [BoardAutomationManageController::class, 'import'])->middleware('throttle:20,1');
             Route::get('settings', [BoardAutomationManageController::class, 'settings']);
             Route::put('settings', [BoardAutomationManageController::class, 'updateSettings']);
             Route::post('bulk', [BoardAutomationManageController::class, 'bulk']);
             Route::post('copy', [BoardAutomationManageController::class, 'copy']);
             Route::get('runs/{run}', [BoardAutomationManageController::class, 'run']);
             Route::post('runs/{run}/retry', [BoardAutomationManageController::class, 'retry'])->middleware('throttle:30,1');
+            Route::post('runs/{run}/undo', [BoardAutomationManageController::class, 'undo'])->middleware('throttle:30,1');
             Route::delete('delayed/{delayed}', [BoardAutomationManageController::class, 'cancelDelayed']);
             Route::get('items/{board_item}', [BoardAutomationManageController::class, 'forItem']);
 

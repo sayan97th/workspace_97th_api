@@ -7,7 +7,9 @@ use App\Http\Requests\Board\StoreBoardItemCellFileLinkRequest;
 use App\Http\Requests\Board\StoreBoardItemCellFileRequest;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
+use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
@@ -65,7 +67,7 @@ class BoardItemCellFileController extends Controller
         });
 
         $next_files = $this->currentFiles($board_item, $column)->concat($uploaded)->values();
-        $this->saveFiles($board_item, $column, $next_files);
+        $this->saveFiles($board_item, $column, $next_files, $request->user());
 
         return response()->json([
             'message' => 'File uploaded successfully.',
@@ -98,7 +100,7 @@ class BoardItemCellFileController extends Controller
         ];
 
         $next_files = $this->currentFiles($board_item, $column)->push($link)->values();
-        $this->saveFiles($board_item, $column, $next_files);
+        $this->saveFiles($board_item, $column, $next_files, $request->user());
 
         return response()->json([
             'message' => 'Link added successfully.',
@@ -124,7 +126,7 @@ class BoardItemCellFileController extends Controller
         }
 
         $next_files = $existing->reject(fn (array $file) => ($file['id'] ?? null) === $file_id)->values();
-        $this->saveFiles($board_item, $column, $next_files);
+        $this->saveFiles($board_item, $column, $next_files, $request->user());
 
         return response()->json([
             'message' => 'File removed successfully.',
@@ -146,14 +148,21 @@ class BoardItemCellFileController extends Controller
     }
 
     /**
+     * Saves the column's new file list, then lets the automations watching the column react
+     * ("When a file is uploaded", "When a column changes").
+     *
      * @param  Collection<int, array<string, mixed>>  $files
      */
-    private function saveFiles(BoardItem $board_item, BoardColumn $column, Collection $files): void
+    private function saveFiles(BoardItem $board_item, BoardColumn $column, Collection $files, ?User $actor): void
     {
+        $old_files = $board_item->values()->where('column_id', $column->id)->first()?->value;
+
         $board_item->values()->updateOrCreate(
             ['column_id' => $column->id],
             ['value' => $files->all()]
         );
+
+        app(BoardAutomationService::class)->handleValueChanged($board_item->loadMissing('group'), $column, $old_files, $files->all(), $actor);
     }
 
     /**

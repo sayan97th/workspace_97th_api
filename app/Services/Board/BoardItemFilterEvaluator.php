@@ -6,6 +6,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use Closure;
 use Illuminate\Support\Collection;
 
 /**
@@ -24,6 +25,11 @@ use Illuminate\Support\Collection;
  * computed in the browser, and rules saved as free text before typed
  * conditions existed) pass every row. The client filters again on top of the
  * server's result, so the server only ever needs to return a superset.
+ *
+ * A `$rule_extension` may answer a rule before the board filter families do,
+ * which is how automation conditions read fields a board filter has no use
+ * for (subitems, the person who set the automation off, formulas, linked
+ * items, dependencies, running timers), see {@see AutomationConditionEvaluator}.
  */
 class BoardItemFilterEvaluator
 {
@@ -97,6 +103,7 @@ class BoardItemFilterEvaluator
      * @param  Collection<string, BoardColumn>|null  $subitem_columns  the view's subitem-scoped columns, keyed by id as a string
      * @param  array<string, array<int, int>>  $team_member_ids  account team id => ids of its members, for the Person filter's teams
      * @param  string  $timezone  the viewer's time zone, which turns Creation date and Last updated timestamps into days
+     * @param  (Closure(BoardItem, array<string, mixed>): (array{result: bool|null}|null))|null  $rule_extension  answers a rule first, null when it leaves the rule to the filter families
      */
     public function __construct(
         private readonly Collection $columns,
@@ -105,6 +112,7 @@ class BoardItemFilterEvaluator
         private readonly ?Collection $subitem_columns = null,
         private readonly array $team_member_ids = [],
         private readonly string $timezone = 'UTC',
+        private readonly ?Closure $rule_extension = null,
     ) {}
 
     /**
@@ -375,6 +383,12 @@ class BoardItemFilterEvaluator
      */
     private function evaluateRule(BoardItem $item, ?BoardItem $sub_item, array $rule, bool $include_subitems): ?bool
     {
+        if (! empty($rule['is_disabled'])) {
+            return null;
+        }
+        if ($this->rule_extension !== null && ($handled = ($this->rule_extension)($item, $rule)) !== null) {
+            return $handled['result'];
+        }
         if (! self::isRuleApplicable($rule)) {
             return null;
         }
@@ -443,7 +457,7 @@ class BoardItemFilterEvaluator
     /**
      * @param  array<int, string>  $values
      */
-    private function evaluateNumberRule(?float $number, string $operator, string $value, array $values): ?bool
+    public static function evaluateNumberRule(?float $number, string $operator, string $value, array $values): ?bool
     {
         if ($operator === 'is_empty') {
             return $number === null;
@@ -532,7 +546,7 @@ class BoardItemFilterEvaluator
         };
     }
 
-    private function evaluateTextOperator(string $text, string $operator, string $value): ?bool
+    public static function evaluateTextOperator(string $text, string $operator, string $value): ?bool
     {
         $haystack = mb_strtolower(trim($text));
         $needle = mb_strtolower(trim($value));

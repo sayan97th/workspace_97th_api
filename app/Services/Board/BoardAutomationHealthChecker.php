@@ -23,8 +23,14 @@ use Illuminate\Support\Collection;
  */
 class BoardAutomationHealthChecker
 {
-    /** Condition fields that are item details, not columns, see `BoardItemFilterEvaluator`. */
-    private const VIRTUAL_FIELDS = ['name', '__group__', '__created_by__', '__created_at__', '__updated_at__', '__starred__'];
+    /** Condition fields that are item details, not columns, see `AutomationConditionEvaluator`. */
+    private const VIRTUAL_FIELDS = AutomationConditionEvaluator::VIRTUAL_FIELDS;
+
+    /** Action params that hold a column id of the automation's own tab. */
+    private const COLUMN_PARAMS = [
+        'target_column_id', 'source_column_id', 'number_column_id', 'notify_from_people_column_id', 'dependency_column_id',
+        'email_column_id', 'connect_column_id', 'link_column_id',
+    ];
 
     /** @var array<int, Collection<int, BoardColumn>> */
     private array $columns_by_view = [];
@@ -76,6 +82,10 @@ class BoardAutomationHealthChecker
             $problems[] = $this->problem('trigger', 'The group the trigger watches was deleted.');
         }
 
+        if (! empty($config['status_column_id']) && ! $columns->has((int) $config['status_column_id'])) {
+            $problems[] = $this->problem('trigger', 'The status column that says an item is done was deleted.');
+        }
+
         if ($automation->trigger_type === BoardAutomation::TRIGGER_FORM_SUBMITTED && ! empty($config['form_view_id'])
             && ! BoardView::where('board_id', $automation->board_id)->whereKey((int) $config['form_view_id'])->exists()) {
             $problems[] = $this->problem('trigger', 'The form the trigger watches was deleted.');
@@ -96,16 +106,24 @@ class BoardAutomationHealthChecker
     private function conditionProblems(BoardAutomation $automation, Collection $columns): array
     {
         $problems = [];
-        foreach (array_values((array) ($automation->conditions ?? [])) as $index => $condition) {
-            $field_id = (string) ($condition['column_id'] ?? '');
+        $is_missing = function (mixed $condition) use ($columns): bool {
+            $field_id = (string) (is_array($condition) ? ($condition['column_id'] ?? '') : '');
             if (! in_array($field_id, self::VIRTUAL_FIELDS, true) && ! $columns->has((int) $field_id)) {
+                return true;
+            }
+            $nested = is_array($condition) ? ($condition['subitem_rule'] ?? null) : null;
+
+            return is_array($nested) && ! in_array((string) ($nested['column_id'] ?? ''), self::VIRTUAL_FIELDS, true) && ! $columns->has((int) ($nested['column_id'] ?? 0));
+        };
+
+        foreach (array_values((array) ($automation->conditions ?? [])) as $index => $condition) {
+            if ($is_missing($condition)) {
                 $problems[] = $this->problem("conditions.{$index}", 'A column a condition reads was deleted.');
             }
         }
         foreach (array_values((array) ($automation->condition_groups ?? [])) as $index => $group) {
             foreach ((array) ($group['rules'] ?? []) as $condition) {
-                $field_id = (string) ($condition['column_id'] ?? '');
-                if (! in_array($field_id, self::VIRTUAL_FIELDS, true) && ! $columns->has((int) $field_id)) {
+                if ($is_missing($condition)) {
                     $problems[] = $this->problem("condition_groups.{$index}", 'A column a condition reads was deleted.');
                     break;
                 }
@@ -147,7 +165,7 @@ class BoardAutomationHealthChecker
         $params = $action['params'];
         $type = $action['type'];
 
-        foreach (['target_column_id', 'source_column_id', 'number_column_id', 'notify_from_people_column_id', 'dependency_column_id', 'email_column_id'] as $key) {
+        foreach (self::COLUMN_PARAMS as $key) {
             if (! empty($params[$key]) && ! $columns->has((int) $params[$key])) {
                 $problems[] = $this->problem($path, 'A column this action uses was deleted.');
             }
@@ -172,11 +190,19 @@ class BoardAutomationHealthChecker
             }
         }
 
+        if (! empty($params['destination_group_id']) && ! $groups->has((int) $params['destination_group_id'])) {
+            $problems[] = $this->problem($path, 'The group this action moves items to was deleted.');
+        }
+
         $user_ids = array_filter([$params['notify_user_id'] ?? null, ($params['assign_mode'] ?? 'user') === 'user' && $type === BoardAutomation::ACTION_ASSIGN_PERSON ? ($params['user_id'] ?? null) : null]);
         foreach ($user_ids as $user_id) {
             if (! User::whereKey((int) $user_id)->where('is_active', true)->exists()) {
                 $problems[] = $this->problem($path, 'The person this action reaches was deactivated or removed.');
             }
+        }
+
+        if ($type === BoardAutomation::ACTION_UPDATE_CONNECTED_ITEMS && ! BoardColumn::whereKey((int) ($params['linked_column_id'] ?? 0))->exists()) {
+            $problems[] = $this->problem($path, 'The column of the connected board this action sets was deleted.');
         }
 
         if ($type === BoardAutomation::ACTION_NOTIFY_TEAM && ! AccountTeam::whereKey((int) ($params['team_id'] ?? 0))->exists()) {
