@@ -2,22 +2,26 @@
 
 namespace App\Http\Requests\Board\Concerns;
 
+use App\Models\AccountTeam;
 use App\Models\BoardAutomation;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
+use App\Models\BoardView;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Rules\SlackActionHasConnectedWorkspace;
 use App\Support\AutomationSchedule;
 use App\Support\BoardEditGate;
+use App\Support\OutboundWebhookUrl;
 use Illuminate\Support\Facades\Validator as ValidatorFacade;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
 /**
  * Validation shared by creating and editing an automation with the sentence builder: the
- * trigger (with its column, value and `trigger_config`), the "and only if" `conditions` and the
- * ordered `actions`, each checked against the params its type needs.
+ * trigger (with its column, value and `trigger_config`), the "and only if" `conditions` (and
+ * `condition_groups`, combined with `condition_operator`), the ordered `actions` and the
+ * "Otherwise" `else_actions`, each checked against the params its type needs.
  *
  * Older clients send a single `action_type` + `action_params`, which is read as a list of one.
  */
@@ -34,6 +38,20 @@ trait ValidatesAutomationDefinition
     private const CONDITION_VIRTUAL_FIELDS = ['name', '__group__', '__created_by__', '__created_at__', '__updated_at__', '__starred__'];
 
     private const MAX_SUBITEM_NAMES = 20;
+
+    private const MAX_FIELD_MAPPINGS = 30;
+
+    /** Condition values are matched per column, a scheduled item scan without any would act on every item. */
+    private const MIN_SCAN_CONDITIONS = 1;
+
+    private const MAX_CHECKLIST_TASKS = 20;
+
+    private const MAX_ROTATION_PEOPLE = 50;
+
+    private const MAX_EMAIL_ADDRESSES = 10;
+
+    /** The longest a "wait" step may be, in minutes, {@see BoardAutomation::MAX_WAIT_DAYS}. */
+    private const MAX_WAIT_MINUTES = BoardAutomation::MAX_WAIT_DAYS * 24 * 60;
 
     /** Set when the payload came as a single `action_type` + `action_params`, whose errors keep that key. */
     private bool $uses_legacy_action = false;
@@ -58,6 +76,7 @@ trait ValidatesAutomationDefinition
             'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'is_enabled' => ['sometimes', 'boolean'],
             'importance' => ['sometimes', 'string', Rule::in(BoardAutomation::importanceLevels())],
+            'failure_alert' => ['sometimes', 'string', Rule::in(BoardAutomation::failureAlerts())],
             'trigger_type' => [$presence, 'string', Rule::in(BoardAutomation::triggerTypes())],
             'trigger_column_id' => ['sometimes', 'nullable', 'integer'],
             'trigger_value' => ['sometimes', 'nullable'],
@@ -67,6 +86,11 @@ trait ValidatesAutomationDefinition
             'trigger_config.time' => ['sometimes', 'nullable', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
             'trigger_config.timezone' => ['sometimes', 'nullable', 'timezone:all'],
             'trigger_config.group_id' => ['sometimes', 'nullable', 'integer'],
+            'trigger_config.form_view_id' => ['sometimes', 'nullable', 'integer'],
+            'trigger_config.from_board_id' => ['sometimes', 'nullable', 'integer'],
+            'trigger_config.operator' => ['sometimes', 'nullable', Rule::in(['above', 'below', 'equals'])],
+            'trigger_config.threshold' => ['sometimes', 'nullable', 'numeric', 'between:-1000000000,1000000000'],
+            'trigger_config.working_days_only' => ['sometimes', 'boolean'],
             'trigger_config.schedule' => ['sometimes', 'nullable', 'array'],
             'trigger_config.schedule.frequency' => ['sometimes', 'string', Rule::in(AutomationSchedule::frequencies())],
             'trigger_config.schedule.weekdays' => ['sometimes', 'array', 'max:7'],
@@ -81,6 +105,17 @@ trait ValidatesAutomationDefinition
             'conditions.*.value' => ['sometimes', 'nullable', 'string', 'max:255'],
             'conditions.*.values' => ['sometimes', 'nullable', 'array', 'max:50'],
             'conditions.*.values.*' => ['nullable', 'string', 'max:255'],
+            'condition_operator' => ['sometimes', Rule::in(['and', 'or'])],
+            'condition_groups' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_CONDITION_GROUPS],
+            'condition_groups.*' => ['array'],
+            'condition_groups.*.join_operator' => ['sometimes', Rule::in(['and', 'or'])],
+            'condition_groups.*.rules' => ['required', 'array', 'min:1', 'max:'.BoardAutomation::MAX_CONDITIONS],
+            'condition_groups.*.rules.*' => ['array'],
+            'condition_groups.*.rules.*.column_id' => ['required', 'string', 'max:64'],
+            'condition_groups.*.rules.*.condition' => ['required', 'string', Rule::in(self::CONDITION_OPERATORS)],
+            'condition_groups.*.rules.*.value' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'condition_groups.*.rules.*.values' => ['sometimes', 'nullable', 'array', 'max:50'],
+            'condition_groups.*.rules.*.values.*' => ['nullable', 'string', 'max:255'],
             // Older clients, already folded into `actions` by `prepareForValidation()`.
             'action_type' => ['sometimes', 'string', Rule::in(BoardAutomation::actionTypes()), new SlackActionHasConnectedWorkspace],
             'action_params' => ['sometimes', 'nullable', 'array'],
@@ -88,6 +123,10 @@ trait ValidatesAutomationDefinition
             'actions.*' => ['array'],
             'actions.*.type' => ['required', 'string', Rule::in(BoardAutomation::actionTypes()), new SlackActionHasConnectedWorkspace],
             'actions.*.params' => ['present', 'array'],
+            'else_actions' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_ACTIONS],
+            'else_actions.*' => ['array'],
+            'else_actions.*.type' => ['required', 'string', Rule::in(BoardAutomation::actionTypes()), new SlackActionHasConnectedWorkspace],
+            'else_actions.*.params' => ['present', 'array'],
         ];
     }
 
@@ -109,14 +148,50 @@ trait ValidatesAutomationDefinition
             $this->validateTrigger($validator, (int) $view_id, (string) $trigger_type);
         }
 
-        if ($this->has('conditions')) {
+        if ($this->has('conditions') || $this->has('condition_groups')) {
             $this->validateConditions($validator, (int) $view_id);
         }
 
         if ($this->has('actions')) {
             foreach ((array) $this->input('actions', []) as $index => $action) {
-                $this->validateAction($validator, (int) $view_id, $current['board'], (string) $trigger_type, (int) $index, (array) $action);
+                $this->validateAction($validator, (int) $view_id, $current['board'], (string) $trigger_type, (int) $index, (array) $action, 'actions');
             }
+            $this->validateWaits($validator, 'actions');
+        }
+
+        if ($this->filled('else_actions')) {
+            if (in_array($trigger_type, BoardAutomation::itemlessTriggers(), true) || $trigger_type === BoardAutomation::TRIGGER_ITEM_SCAN) {
+                $validator->errors()->add('else_actions', 'This trigger has no conditions to fail, so it cannot have "Otherwise" actions.');
+
+                return;
+            }
+            foreach ((array) $this->input('else_actions', []) as $index => $action) {
+                $this->validateAction($validator, (int) $view_id, $current['board'], (string) $trigger_type, (int) $index, (array) $action, 'else_actions');
+            }
+            $this->validateWaits($validator, 'else_actions');
+        }
+    }
+
+    /**
+     * All the "wait" steps of one branch together may not wait longer than {@see BoardAutomation::MAX_WAIT_DAYS}.
+     */
+    private function validateWaits(Validator $validator, string $branch_key): void
+    {
+        $minutes = 0;
+        foreach ((array) $this->input($branch_key, []) as $action) {
+            if (($action['type'] ?? null) !== BoardAutomation::ACTION_WAIT) {
+                continue;
+            }
+            $amount = (int) ($action['params']['amount'] ?? 0);
+            $minutes += match ($action['params']['unit'] ?? 'hours') {
+                'minutes' => $amount,
+                'days' => $amount * 1440,
+                default => $amount * 60,
+            };
+        }
+
+        if ($minutes > self::MAX_WAIT_MINUTES) {
+            $validator->errors()->add($branch_key, 'The waits of one automation may add up to '.BoardAutomation::MAX_WAIT_DAYS.' days at most.');
         }
     }
 
@@ -127,10 +202,10 @@ trait ValidatesAutomationDefinition
 
         if (in_array($trigger_type, BoardAutomation::columnTriggers(), true)) {
             $column = $column_id ? BoardColumn::where('board_view_id', $view_id)->find((int) $column_id) : null;
-            $allowed_types = match ($trigger_type) {
-                BoardAutomation::TRIGGER_STATUS_CHANGED => [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL],
-                BoardAutomation::TRIGGER_DATE_ARRIVED => [BoardColumn::TYPE_DATE],
-                BoardAutomation::TRIGGER_PERSON_ASSIGNED => [BoardColumn::TYPE_PEOPLE],
+            $allowed_types = BoardAutomation::triggerColumnTypes($trigger_type);
+            $required_scope = match ($trigger_type) {
+                BoardAutomation::TRIGGER_ALL_SUBITEMS_STATUS => BoardColumn::SCOPE_SUBITEM,
+                BoardAutomation::TRIGGER_ALL_GROUP_ITEMS_STATUS => BoardColumn::SCOPE_ITEM,
                 default => null,
             };
 
@@ -140,15 +215,38 @@ trait ValidatesAutomationDefinition
                 $validator->errors()->add('trigger_column_id', 'This column cannot be used with this trigger.');
             } elseif ($allowed_types === null && in_array($column->type, BoardColumn::READ_ONLY_TYPES, true)) {
                 $validator->errors()->add('trigger_column_id', 'Calculated columns never change on their own, choose another column.');
+            } elseif ($required_scope !== null && $column->scope !== $required_scope) {
+                $validator->errors()->add('trigger_column_id', $required_scope === BoardColumn::SCOPE_SUBITEM ? 'Choose a subitem status column.' : 'Choose an item status column.');
+            } elseif ($required_scope !== null && ! collect($column->config['options'] ?? [])->contains(fn ($option) => (string) ($option['id'] ?? '') === (string) $this->input('trigger_value'))) {
+                $validator->errors()->add('trigger_value', 'Choose the label every item must have.');
             }
         }
 
-        if ($trigger_type === BoardAutomation::TRIGGER_ITEM_MOVED_TO_GROUP && ! empty($config['group_id'])
-            && ! BoardGroup::where('board_view_id', $view_id)->whereKey((int) $config['group_id'])->exists()) {
+        if (! empty($config['group_id']) && ! BoardGroup::where('board_view_id', $view_id)->whereKey((int) $config['group_id'])->exists()) {
             $validator->errors()->add('trigger_config.group_id', 'This group does not belong to this table.');
         }
 
-        if ($trigger_type === BoardAutomation::TRIGGER_RECURRING) {
+        if ($trigger_type === BoardAutomation::TRIGGER_NUMBER_THRESHOLD && ! is_numeric($config['threshold'] ?? null)) {
+            $validator->errors()->add('trigger_config.threshold', 'Enter the number the column must reach.');
+        }
+
+        if ($trigger_type === BoardAutomation::TRIGGER_CHECKLIST_ITEM_CHECKED && $this->input('trigger_value') !== null && (! is_string($this->input('trigger_value')) || mb_strlen($this->input('trigger_value')) > 255)) {
+            $validator->errors()->add('trigger_value', 'Type the task the trigger waits for, or leave it empty for any task.');
+        }
+
+        if ($trigger_type === BoardAutomation::TRIGGER_ITEM_MOVED_TO_BOARD && ! empty($config['from_board_id'])
+            && ! WorkspaceNavigationItem::boards()->whereKey((int) $config['from_board_id'])->exists()) {
+            $validator->errors()->add('trigger_config.from_board_id', 'Choose a board of this workspace.');
+        }
+
+        if ($trigger_type === BoardAutomation::TRIGGER_FORM_SUBMITTED && ! empty($config['form_view_id'])) {
+            $board_id = BoardView::whereKey($view_id)->value('board_id');
+            if (! BoardView::where('board_id', $board_id)->where('view_type', 'form')->whereKey((int) $config['form_view_id'])->exists()) {
+                $validator->errors()->add('trigger_config.form_view_id', 'Choose a form of this board.');
+            }
+        }
+
+        if (in_array($trigger_type, BoardAutomation::scheduledTriggers(), true)) {
             $schedule = (array) ($config['schedule'] ?? []);
             $frequency = $schedule['frequency'] ?? null;
 
@@ -159,10 +257,17 @@ trait ValidatesAutomationDefinition
             } elseif ($frequency === AutomationSchedule::FREQUENCY_MONTHLY && empty($schedule['day_of_month'])) {
                 $validator->errors()->add('trigger_config.schedule.day_of_month', 'Choose the day of the month.');
             }
+        }
 
+        $grouped_rule_count = collect((array) $this->input('condition_groups', []))->sum(fn ($group) => count((array) ($group['rules'] ?? [])));
+        if ($trigger_type === BoardAutomation::TRIGGER_ITEM_SCAN && count((array) $this->input('conditions', [])) + $grouped_rule_count < self::MIN_SCAN_CONDITIONS) {
+            $validator->errors()->add('conditions', 'Add at least one condition, it decides which items the scheduled check acts on.');
+        }
+
+        if (in_array($trigger_type, BoardAutomation::itemlessTriggers(), true)) {
             $first_action_type = $this->input('actions.0.type');
             if ($first_action_type !== null && ! in_array($first_action_type, BoardAutomation::itemlessActions(), true)) {
-                $validator->errors()->add('actions.0.type', 'A recurring automation has no item of its own, start it with "create an item" or a notification.');
+                $validator->errors()->add('actions.0.type', 'This trigger has no item of its own, start with "create an item", a group action or a notification.');
             }
         }
     }
@@ -170,23 +275,38 @@ trait ValidatesAutomationDefinition
     private function validateConditions(Validator $validator, int $view_id): void
     {
         $column_ids = BoardColumn::where('board_view_id', $view_id)->pluck('id')->map(fn ($id) => (string) $id)->all();
-
-        foreach ((array) $this->input('conditions', []) as $index => $condition) {
-            $field_id = (string) ($condition['column_id'] ?? '');
+        $check = function (mixed $condition, string $key) use ($validator, $column_ids) {
+            $field_id = (string) (is_array($condition) ? ($condition['column_id'] ?? '') : '');
             if (! in_array($field_id, $column_ids, true) && ! in_array($field_id, self::CONDITION_VIRTUAL_FIELDS, true)) {
-                $validator->errors()->add("conditions.{$index}.column_id", 'This column does not belong to this table.');
+                $validator->errors()->add("{$key}.column_id", 'This column does not belong to this table.');
             }
+        };
+
+        $total = 0;
+        foreach ((array) $this->input('conditions', []) as $index => $condition) {
+            $check($condition, "conditions.{$index}");
+            $total++;
+        }
+        foreach ((array) $this->input('condition_groups', []) as $group_index => $group) {
+            foreach ((array) ($group['rules'] ?? []) as $index => $condition) {
+                $check($condition, "condition_groups.{$group_index}.rules.{$index}");
+                $total++;
+            }
+        }
+
+        if ($total > BoardAutomation::MAX_CONDITIONS) {
+            $validator->errors()->add('conditions', 'An automation may have '.BoardAutomation::MAX_CONDITIONS.' conditions at most, groups included.');
         }
     }
 
     /**
      * @param  array<string, mixed>  $action
      */
-    private function validateAction(Validator $validator, int $view_id, ?WorkspaceNavigationItem $board, string $trigger_type, int $index, array $action): void
+    private function validateAction(Validator $validator, int $view_id, ?WorkspaceNavigationItem $board, string $trigger_type, int $index, array $action, string $branch_key = 'actions'): void
     {
         $type = (string) ($action['type'] ?? '');
         $params = (array) ($action['params'] ?? []);
-        $prefix = $this->uses_legacy_action ? 'action_params' : "actions.{$index}.params";
+        $prefix = $this->uses_legacy_action && $branch_key === 'actions' ? 'action_params' : "{$branch_key}.{$index}.params";
 
         $column_in_view = fn (array $types = []) => Rule::exists('board_columns', 'id')->where(function ($query) use ($view_id, $types) {
             $query->where('board_view_id', $view_id)->whereNotIn('type', BoardColumn::READ_ONLY_TYPES);
@@ -195,6 +315,7 @@ trait ValidatesAutomationDefinition
             }
         });
         $group_in_view = Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id));
+        $column_in_scope = fn (string $scope) => Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', $scope)->whereNotIn('type', BoardColumn::READ_ONLY_TYPES));
         $recipient_rules = [
             'notify_user_id' => ['required_without:notify_from_people_column_id', 'nullable', 'integer', Rule::exists('users', 'id')],
             'notify_from_people_column_id' => ['required_without:notify_user_id', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
@@ -230,21 +351,129 @@ trait ValidatesAutomationDefinition
             BoardAutomation::ACTION_SET_DATE => [
                 'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_DATE])],
                 'offset_days' => ['required', 'integer', 'between:-3650,3650'],
+                'use_working_days' => ['sometimes', 'boolean'],
             ],
             BoardAutomation::ACTION_ADJUST_NUMBER => [
                 'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS])],
                 'amount' => ['required', 'numeric', 'not_in:0', 'between:-1000000000,1000000000'],
             ],
             BoardAutomation::ACTION_NOTIFY_PERSON, BoardAutomation::ACTION_SLACK_NOTIFY_PERSON => $recipient_rules,
-            BoardAutomation::ACTION_SEND_EMAIL => [...$recipient_rules, 'subject' => ['sometimes', 'nullable', 'string', 'max:150']],
+            BoardAutomation::ACTION_SEND_EMAIL => [
+                'notify_user_id' => ['sometimes', 'nullable', 'integer', Rule::exists('users', 'id')],
+                'notify_from_people_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
+                'email_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_EMAIL])],
+                'email_addresses' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_EMAIL_ADDRESSES],
+                'email_addresses.*' => ['required', 'email', 'max:255'],
+                'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
+                'subject' => ['sometimes', 'nullable', 'string', 'max:150'],
+            ],
             BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL => [
                 'slack_channel_id' => ['required', 'string', 'regex:/^[CG][A-Z0-9]{2,}$/'],
                 'slack_channel_name' => ['sometimes', 'nullable', 'string', 'max:120'],
                 'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
             ],
             BoardAutomation::ACTION_POST_UPDATE => ['message' => ['required', 'string', 'max:2000']],
+            BoardAutomation::ACTION_SHIFT_DATE => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])],
+                'amount' => ['required', 'integer', 'not_in:0', 'between:-3650,3650'],
+                'unit' => ['required', Rule::in(['days', 'weeks', 'months'])],
+                'use_working_days' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_SET_DATE_FROM_COLUMN => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_DATE])],
+                'source_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])],
+                'offset_days' => ['sometimes', 'integer', 'between:-3650,3650'],
+                'number_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS])],
+                'number_sign' => ['sometimes', 'integer', Rule::in([1, -1])],
+            ],
+            BoardAutomation::ACTION_ENSURE_DATE_AFTER => [
+                'target_column_id' => ['required', 'integer', 'different:source_column_id', $column_in_view([BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])],
+                'source_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])],
+                'gap_days' => ['sometimes', 'integer', 'between:0,365'],
+            ],
+            BoardAutomation::ACTION_SET_TIMELINE => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_TIMELINE])],
+                'start_offset_days' => ['sometimes', 'integer', 'between:-3650,3650'],
+                'duration_days' => ['required', 'integer', 'between:1,3650'],
+                'use_working_days' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_CREATE_GROUP => [
+                'group_name' => ['required', 'string', 'max:255'],
+                'position' => ['sometimes', Rule::in(['top', 'bottom'])],
+                'accent_color' => ['sometimes', 'nullable', 'regex:/^#[0-9a-fA-F]{6}$/'],
+            ],
+            BoardAutomation::ACTION_DUPLICATE_GROUP => [
+                'from_item_group' => ['sometimes', 'boolean'],
+                'source_group_id' => ['required_unless:from_item_group,true', 'nullable', 'integer', $group_in_view],
+                'group_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'with_items' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_ARCHIVE_GROUP => [
+                'from_item_group' => ['sometimes', 'boolean'],
+                'target_group_id' => ['required_unless:from_item_group,true', 'nullable', 'integer', $group_in_view],
+            ],
+            BoardAutomation::ACTION_COPY_COLUMN_VALUE => [
+                'source_column_id' => ['required', 'integer', 'different:target_column_id', $column_in_view()],
+                'target_column_id' => ['required', 'integer', $column_in_view()],
+            ],
+            BoardAutomation::ACTION_TIME_TRACKING => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_TIME_TRACKING])],
+                'mode' => ['required', Rule::in(['start', 'stop'])],
+            ],
+            BoardAutomation::ACTION_CONNECT_ITEMS => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_CONNECT_BOARD])],
+                'match_column_id' => ['required', 'string', 'max:32'],
+                'linked_match_column_id' => ['required', 'string', 'max:32'],
+                'replace' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_NOTIFY_TEAM => [
+                'team_id' => ['required', 'integer', Rule::exists(AccountTeam::class, 'id')->whereNull('deleted_at')],
+                'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            ],
+            BoardAutomation::ACTION_SEND_WEBHOOK => [
+                'url' => ['required', 'string', 'max:2000'],
+                'secret' => ['sometimes', 'nullable', 'string', 'max:255'],
+            ],
+            BoardAutomation::ACTION_WAIT => [
+                'amount' => ['required', 'integer', 'min:1', 'max:'.self::MAX_WAIT_MINUTES],
+                'unit' => ['required', Rule::in(['minutes', 'hours', 'days'])],
+                'recheck_conditions' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_SHIFT_DEPENDENTS => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])],
+                'dependency_column_id' => ['required', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('type', BoardColumn::TYPE_DEPENDENCY))],
+                'mode' => ['required', Rule::in(['strict', 'flexible'])],
+                'use_working_days' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_ASSIGN_ROUND_ROBIN => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
+                'user_ids' => ['required', 'array', 'min:1', 'max:'.self::MAX_ROTATION_PEOPLE],
+                'user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id')],
+                'strategy' => ['required', Rule::in(['rotation', 'least_busy'])],
+                'replace' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_SET_SUBITEMS_VALUE => [
+                'target_column_id' => ['required', 'integer', $column_in_scope(BoardColumn::SCOPE_SUBITEM)],
+                'value' => ['present', 'nullable'],
+            ],
+            BoardAutomation::ACTION_SET_PARENT_VALUE => [
+                'target_column_id' => ['required', 'integer', $column_in_scope(BoardColumn::SCOPE_ITEM)],
+                'value' => ['present', 'nullable'],
+            ],
+            BoardAutomation::ACTION_ADD_CHECKLIST_ITEMS => [
+                'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_CHECKLIST])],
+                'tasks' => ['required', 'array', 'min:1', 'max:'.self::MAX_CHECKLIST_TASKS],
+                'tasks.*' => ['required', 'string', 'max:250'],
+            ],
             default => [],
         };
+        if ($type === BoardAutomation::ACTION_CREATE_ITEM) {
+            $rules += [
+                'field_mappings' => ['sometimes', 'array', 'max:'.self::MAX_FIELD_MAPPINGS],
+                'field_mappings.*.column_id' => ['required', 'integer', $column_in_view()],
+                'field_mappings.*.source' => ['required', 'string', 'max:500'],
+            ];
+        }
 
         $param_validator = ValidatorFacade::make($params, $rules);
         foreach ($param_validator->errors()->messages() as $key => $messages) {
@@ -254,12 +483,21 @@ trait ValidatesAutomationDefinition
             return;
         }
 
-        if ($trigger_type === BoardAutomation::TRIGGER_RECURRING && $index > 0 && ! in_array($type, BoardAutomation::itemlessActions(), true)) {
-            $starts_with_create = collect((array) $this->input('actions', []))->take($index)->contains(fn ($earlier) => ($earlier['type'] ?? null) === BoardAutomation::ACTION_CREATE_ITEM);
-            if (! $starts_with_create) {
-                $validator->errors()->add("actions.{$index}.type", 'This action needs an item, add "create an item" before it.');
-            }
+        $is_itemless_trigger = in_array($trigger_type, BoardAutomation::itemlessTriggers(), true);
+        $has_created_item = collect((array) $this->input($branch_key, []))->take($index)->contains(fn ($earlier) => ($earlier['type'] ?? null) === BoardAutomation::ACTION_CREATE_ITEM);
+
+        if ($is_itemless_trigger && $index > 0 && ! in_array($type, BoardAutomation::itemlessActions(), true) && ! $has_created_item) {
+            $validator->errors()->add("{$branch_key}.{$index}.type", 'This action needs an item, add "create an item" before it.');
         }
+        if ($type === BoardAutomation::ACTION_SEND_EMAIL && empty($params['notify_user_id']) && empty($params['notify_from_people_column_id'])
+            && empty($params['email_column_id']) && empty($params['email_addresses'])) {
+            $validator->errors()->add("{$prefix}.notify_user_id", 'Choose who the email goes to.');
+        }
+        if ($is_itemless_trigger && ! $has_created_item && ! empty($params['from_item_group'])) {
+            $validator->errors()->add("{$prefix}.from_item_group", 'There is no item yet, choose the group instead.');
+        }
+
+        $this->validateNewActionParams($validator, $view_id, $type, $params, $prefix);
 
         $is_cross_board = $type === BoardAutomation::ACTION_MOVE_TO_BOARD
             || ($type === BoardAutomation::ACTION_CREATE_ITEM && ! empty($params['target_board_id']) && (int) $params['target_board_id'] !== $board?->id);
@@ -271,6 +509,42 @@ trait ValidatesAutomationDefinition
 
         if ($is_cross_board) {
             $this->validateCrossBoardTarget($validator, $board, $prefix, $params);
+        }
+    }
+
+    /**
+     * The checks of the date, column, connect and webhook actions that a plain rule cannot express.
+     *
+     * @param  array<string, mixed>  $params
+     */
+    private function validateNewActionParams(Validator $validator, int $view_id, string $type, array $params, string $prefix): void
+    {
+        if ($type === BoardAutomation::ACTION_SEND_WEBHOOK && ($problem = OutboundWebhookUrl::problem((string) ($params['url'] ?? '')))) {
+            $validator->errors()->add("{$prefix}.url", $problem);
+        }
+
+        if ($type === BoardAutomation::ACTION_COPY_COLUMN_VALUE) {
+            $source = BoardColumn::where('board_view_id', $view_id)->find((int) $params['source_column_id']);
+            if ($source && in_array($source->type, [BoardColumn::TYPE_FORMULA, BoardColumn::TYPE_MIRROR], true)) {
+                $validator->errors()->add("{$prefix}.source_column_id", 'Calculated columns have no stored value to copy.');
+            }
+        }
+
+        if ($type === BoardAutomation::ACTION_CONNECT_ITEMS) {
+            $column = BoardColumn::where('board_view_id', $view_id)->find((int) $params['target_column_id']);
+            $linked_board_id = (int) ($column?->config['linked_board_id'] ?? 0);
+            $match = (string) $params['match_column_id'];
+            $linked_match = (string) $params['linked_match_column_id'];
+
+            if ($linked_board_id === 0) {
+                $validator->errors()->add("{$prefix}.target_column_id", 'Connect this column to a board first.');
+            }
+            if ($match !== 'name' && ! BoardColumn::where('board_view_id', $view_id)->whereKey((int) $match)->exists()) {
+                $validator->errors()->add("{$prefix}.match_column_id", 'Choose a column of this table.');
+            }
+            if ($linked_match !== 'name' && ! BoardColumn::where('board_id', $linked_board_id)->whereKey((int) $linked_match)->exists()) {
+                $validator->errors()->add("{$prefix}.linked_match_column_id", 'Choose a column of the connected board.');
+            }
         }
     }
 

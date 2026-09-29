@@ -16,7 +16,8 @@ use Illuminate\Support\Str;
  * between an item's updates. Only a real change to a cell is recorded, and
  * the old and new values are stored as display text (a status label, a
  * person's name, a formatted date) so the entry stays readable even after the
- * column is renamed or its options are edited.
+ * column is renamed or its options are edited. A change an automation made keeps which
+ * automation made it (see {@see AutomationRunContext}).
  */
 class BoardItemActivityService
 {
@@ -25,6 +26,8 @@ class BoardItemActivityService
 
     /** Most changes shown under one update. */
     public const MAX_PER_UPDATE = 10;
+
+    public function __construct(private readonly AutomationRunContext $run_context) {}
 
     /** Column types whose values are computed or too bulky to describe as a change. */
     private const SKIPPED_TYPES = [
@@ -49,9 +52,13 @@ class BoardItemActivityService
             return;
         }
 
+        $automation = $this->run_context->current();
+
         BoardItemActivity::create([
             'item_id' => $board_item->id,
             'user_id' => $actor?->id,
+            'automation_id' => $automation?->id,
+            'automation_name' => $automation ? Str::limit($automation->name ?: 'Automation', 250, '') : null,
             'column_id' => $column->id,
             'column_label' => Str::limit((string) $column->label, 100, ''),
             'column_type' => $column->type,

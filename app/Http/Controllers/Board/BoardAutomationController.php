@@ -4,14 +4,20 @@ namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\StoreBoardAutomationRequest;
+use App\Http\Requests\Board\TestBoardAutomationRequest;
 use App\Http\Requests\Board\UpdateBoardAutomationRequest;
 use App\Http\Resources\BoardAutomationResource;
 use App\Http\Resources\BoardAutomationRunLogResource;
 use App\Http\Resources\BoardAutomationTemplateResource;
+use App\Models\AccountTeam;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationRunLog;
 use App\Models\BoardAutomationTemplate;
+use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationHealthChecker;
+use App\Services\Board\BoardAutomationService;
+use App\Services\Board\BoardAutomationVersionRecorder;
 use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,7 +33,11 @@ class BoardAutomationController extends Controller
 
     private const USAGE_DAYS = 30;
 
-    public function __construct(private readonly BoardViewResolver $view_resolver) {}
+    public function __construct(
+        private readonly BoardViewResolver $view_resolver,
+        private readonly BoardAutomationHealthChecker $health_checker,
+        private readonly BoardAutomationVersionRecorder $version_recorder,
+    ) {}
 
     /**
      * GET /api/boards/{item}/automations
@@ -46,7 +56,7 @@ class BoardAutomationController extends Controller
 
         $automations = BoardAutomation::where('board_view_id', $view->id)
             ->with(['creator', 'owner'])
-            ->withCount('runLogs')
+            ->withCount(['runLogs', 'versions'])
             ->withMax('runLogs', 'created_at')
             ->orderByDesc('id')
             ->get();
@@ -70,10 +80,13 @@ class BoardAutomationController extends Controller
             'description' => $validated['description'] ?? null,
             'is_enabled' => $validated['is_enabled'] ?? true,
             'importance' => $validated['importance'] ?? BoardAutomation::IMPORTANCE_MINOR,
+            'failure_alert' => $validated['failure_alert'] ?? BoardAutomation::FAILURE_ALERT_APP,
             ...$this->definitionAttributes($validated),
             'created_by_id' => $request->user()?->id,
             'owner_id' => $request->user()?->id,
         ]);
+        $this->ensureWebhookToken($automation);
+        $this->version_recorder->record($automation, $request->user());
 
         return response()->json([
             'message' => 'Automation created successfully.',
@@ -93,23 +106,40 @@ class BoardAutomationController extends Controller
         $this->ensureAutomationBelongsToBoard($item, $automation);
 
         $validated = $request->validated();
-        $automation->fill(collect($validated)->only(['name', 'description', 'is_enabled', 'importance', 'owner_id'])->all());
+        $automation->fill(collect($validated)->only(['name', 'description', 'is_enabled', 'importance', 'owner_id', 'failure_alert'])->all());
 
         // The sentence builder always saves the whole definition, so a changed trigger never keeps
         // the column, value or config of the one it replaced.
-        if (array_key_exists('trigger_type', $validated) || array_key_exists('actions', $validated)) {
+        $is_definition_saved = array_key_exists('trigger_type', $validated) || array_key_exists('actions', $validated);
+        if ($is_definition_saved) {
             $automation->fill($this->definitionAttributes([
                 'trigger_type' => $automation->trigger_type,
                 'trigger_column_id' => $automation->trigger_column_id,
                 'trigger_value' => $automation->trigger_value,
                 'trigger_config' => $automation->trigger_config,
                 'conditions' => $automation->conditions,
+                'condition_operator' => $automation->condition_operator,
+                'condition_groups' => $automation->condition_groups,
                 'actions' => $automation->resolvedActions(),
+                'else_actions' => $automation->resolvedElseActions(),
                 ...$validated,
             ]));
         }
 
+        // A paused automation is switched back on only once nothing it uses is missing.
+        if (($validated['is_enabled'] ?? false) === true && ($problems = $this->health_checker->problems($automation, fresh: true)) !== []) {
+            return response()->json([
+                'message' => 'Fix this automation before turning it on: '.lcfirst($problems[0]['message']),
+                'errors' => ['is_enabled' => [$problems[0]['message']]],
+            ], 422);
+        }
+        if ($is_definition_saved || $automation->is_enabled) {
+            $automation->fill(['paused_at' => null, 'paused_reason' => null]);
+        }
+
         $automation->save();
+        $this->ensureWebhookToken($automation);
+        $this->version_recorder->record($automation, $request->user());
 
         return response()->json([
             'message' => 'Automation updated successfully.',
@@ -132,8 +162,14 @@ class BoardAutomationController extends Controller
         $copy->is_enabled = false;
         $copy->created_by_id = $request->user()?->id;
         $copy->owner_id = $request->user()?->id;
-        $copy->last_scheduled_run_at = $automation->trigger_type === BoardAutomation::TRIGGER_RECURRING ? now() : null;
+        $copy->last_scheduled_run_at = in_array($automation->trigger_type, BoardAutomation::scheduledTriggers(), true) ? now() : null;
+        $copy->webhook_token = null;
+        $copy->paused_at = null;
+        $copy->paused_reason = null;
+        $copy->state = null;
         $copy->save();
+        $this->ensureWebhookToken($copy);
+        $this->version_recorder->record($copy, $request->user());
 
         return response()->json([
             'message' => 'Automation duplicated successfully.',
@@ -142,10 +178,76 @@ class BoardAutomationController extends Controller
     }
 
     /**
+     * POST /api/boards/{item}/automations/test
+     *
+     * "Test run on an item": runs a builder definition (saved or not) once on `item_id`, inside a
+     * transaction that is rolled back, with nothing sent outside the app. Answers with which
+     * conditions the item passes and what every action did or would have done.
+     */
+    public function test(TestBoardAutomationRequest $request, WorkspaceNavigationItem $item, BoardAutomationService $automation_service): JsonResponse
+    {
+        $validated = $request->validated();
+
+        $automation = new BoardAutomation([
+            'board_id' => $item->id,
+            'board_view_id' => $validated['view_id'],
+            'name' => $validated['name'] ?? null,
+            'is_enabled' => true,
+            'importance' => BoardAutomation::IMPORTANCE_MINOR,
+            ...$this->definitionAttributes($validated),
+            'created_by_id' => $request->user()?->id,
+            'owner_id' => $request->user()?->id,
+        ]);
+        $automation->setRelation('board', $item);
+        $automation->setRelation('owner', $request->user());
+        $automation->setRelation('creator', $request->user());
+
+        $board_item = isset($validated['item_id']) ? BoardItem::with(['group', 'values'])->find($validated['item_id']) : null;
+        $result = $automation_service->testRun($automation, $board_item, $request->user(), (array) ($validated['payload'] ?? []));
+
+        return response()->json(['data' => [
+            'item' => $board_item ? ['id' => $board_item->id, 'name' => $board_item->name] : null,
+            ...$result,
+        ]]);
+    }
+
+    /**
+     * POST /api/boards/{item}/automations/{automation}/webhook-token
+     *
+     * Replaces a webhook automation's secret URL, the old one stops working at once.
+     */
+    public function regenerateWebhookToken(WorkspaceNavigationItem $item, BoardAutomation $automation): JsonResponse
+    {
+        $this->ensureAutomationBelongsToBoard($item, $automation);
+        abort_if($automation->trigger_type !== BoardAutomation::TRIGGER_WEBHOOK_RECEIVED, 422, 'This automation does not listen to a webhook.');
+
+        $automation->forceFill(['webhook_token' => $this->newWebhookToken()])->save();
+
+        return response()->json([
+            'message' => 'Webhook URL replaced.',
+            'automation' => new BoardAutomationResource($this->withRunStats($automation)),
+        ]);
+    }
+
+    /**
+     * GET /api/boards/{item}/automations/teams
+     *
+     * The account teams a "notify team" action can reach, with how many people each has.
+     */
+    public function teams(): JsonResponse
+    {
+        $teams = AccountTeam::withCount('members')->orderBy('name')->get(['id', 'name']);
+
+        return response()->json([
+            'data' => $teams->map(fn (AccountTeam $team) => ['id' => $team->id, 'name' => $team->name, 'member_count' => (int) $team->members_count])->values(),
+        ]);
+    }
+
+    /**
      * GET /api/boards/{item}/automations/runs
      *
      * The Manage tab's "Run history", newest first. Scoped to one tab like `index()`, and
-     * narrowed by `status`, `automation_id` and a `from`/`to` date range.
+     * narrowed by `status`, `automation_id`, `item_id` and a `from`/`to` date range.
      */
     public function runs(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -153,6 +255,7 @@ class BoardAutomationController extends Controller
             'view_id' => ['sometimes', 'nullable', 'integer'],
             'status' => ['sometimes', 'nullable', Rule::in(BoardAutomationRunLog::statuses())],
             'automation_id' => ['sometimes', 'nullable', 'integer'],
+            'item_id' => ['sometimes', 'nullable', 'integer'],
             'from' => ['sometimes', 'nullable', 'date'],
             'to' => ['sometimes', 'nullable', 'date', 'after_or_equal:from'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:'.self::RUNS_MAX_PER_PAGE],
@@ -171,6 +274,7 @@ class BoardAutomationController extends Controller
             ->with('actor')
             ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
             ->when($filters['automation_id'] ?? null, fn ($query, $automation_id) => $query->where('automation_id', $automation_id))
+            ->when($filters['item_id'] ?? null, fn ($query, $item_id) => $query->where('board_item_id', $item_id))
             ->when($filters['from'] ?? null, fn ($query, $from) => $query->where('created_at', '>=', Carbon::parse($from)->startOfDay()))
             ->when($filters['to'] ?? null, fn ($query, $to) => $query->where('created_at', '<=', Carbon::parse($to)->endOfDay()))
             ->orderByDesc('created_at')
@@ -279,7 +383,7 @@ class BoardAutomationController extends Controller
      */
     private function withRunStats(BoardAutomation $automation): BoardAutomation
     {
-        return $automation->load(['creator', 'owner'])->loadCount('runLogs')->loadMax('runLogs', 'created_at');
+        return $automation->load(['creator', 'owner'])->loadCount(['runLogs', 'versions'])->loadMax('runLogs', 'created_at');
     }
 
     /**
@@ -318,7 +422,10 @@ class BoardAutomationController extends Controller
                 'trigger_value' => $automation->trigger_value,
                 'trigger_config' => $automation->trigger_config,
                 'conditions' => $automation->conditions ?? [],
+                'condition_operator' => $automation->condition_operator ?: 'and',
+                'condition_groups' => $automation->condition_groups ?? [],
                 'actions' => $automation->resolvedActions(),
+                'else_actions' => $automation->resolvedElseActions(),
             ],
             'created_by_id' => $request->user()?->id,
         ]);
@@ -348,22 +455,29 @@ class BoardAutomationController extends Controller
      * @param  array<string, mixed>  $validated
      * @return array<string, mixed>
      */
-    private function definitionAttributes(array $validated): array
+    public static function definitionAttributes(array $validated): array
     {
         $trigger_type = (string) $validated['trigger_type'];
-        $actions = array_values(array_map(
+        $to_actions = fn (mixed $list) => array_values(array_map(
             fn (array $action) => ['type' => (string) $action['type'], 'params' => (array) ($action['params'] ?? [])],
-            array_filter((array) ($validated['actions'] ?? []), 'is_array')
+            array_filter((array) ($list ?? []), 'is_array')
         ));
-        $conditions = array_values(array_map(
+        $to_rules = fn (mixed $list) => array_values(array_map(
             fn (array $rule) => [
                 'column_id' => (string) $rule['column_id'],
                 'condition' => (string) $rule['condition'],
                 'value' => (string) ($rule['value'] ?? ''),
                 'values' => array_values(array_map('strval', array_filter((array) ($rule['values'] ?? []), 'is_scalar'))),
             ],
-            array_filter((array) ($validated['conditions'] ?? []), 'is_array')
+            array_filter((array) ($list ?? []), 'is_array')
         ));
+        $actions = $to_actions($validated['actions'] ?? []);
+        $else_actions = $to_actions($validated['else_actions'] ?? []);
+        $conditions = $to_rules($validated['conditions'] ?? []);
+        $condition_groups = array_values(array_filter(array_map(
+            fn (array $group) => ['join_operator' => ($group['join_operator'] ?? 'and') === 'or' ? 'or' : 'and', 'rules' => $to_rules($group['rules'] ?? [])],
+            array_filter((array) ($validated['condition_groups'] ?? []), 'is_array')
+        ), fn (array $group) => $group['rules'] !== []));
         $trigger_config = array_filter((array) ($validated['trigger_config'] ?? []), fn ($value) => $value !== null && $value !== '');
 
         return [
@@ -372,11 +486,14 @@ class BoardAutomationController extends Controller
             'trigger_value' => $validated['trigger_value'] ?? null,
             'trigger_config' => $trigger_config ?: null,
             'conditions' => $conditions ?: null,
+            'condition_operator' => ($validated['condition_operator'] ?? 'and') === 'or' ? 'or' : 'and',
+            'condition_groups' => $condition_groups ?: null,
             'actions' => $actions,
+            'else_actions' => $else_actions ?: null,
             'action_type' => $actions[0]['type'],
             'action_params' => $actions[0]['params'],
-            // A recurring schedule counts from the moment it is saved, never catching up on the past.
-            'last_scheduled_run_at' => $trigger_type === BoardAutomation::TRIGGER_RECURRING ? now() : null,
+            // A schedule counts from the moment it is saved, never catching up on the past.
+            'last_scheduled_run_at' => in_array($trigger_type, BoardAutomation::scheduledTriggers(), true) ? now() : null,
         ];
     }
 
@@ -392,6 +509,21 @@ class BoardAutomationController extends Controller
         return response()->json([
             'message' => 'Automation deleted successfully.',
         ]);
+    }
+
+    /**
+     * Gives a webhook automation its secret URL the first time it is saved with that trigger.
+     */
+    private function ensureWebhookToken(BoardAutomation $automation): void
+    {
+        if ($automation->trigger_type === BoardAutomation::TRIGGER_WEBHOOK_RECEIVED && ! $automation->webhook_token) {
+            $automation->forceFill(['webhook_token' => $this->newWebhookToken()])->save();
+        }
+    }
+
+    private function newWebhookToken(): string
+    {
+        return Str::random(48);
     }
 
     /**

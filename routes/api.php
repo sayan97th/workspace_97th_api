@@ -31,8 +31,10 @@ use App\Http\Controllers\Auth\StaffInvitationController;
 use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
+use App\Http\Controllers\Board\AccountAutomationTemplateController;
 use App\Http\Controllers\Board\BoardActivityLogController;
 use App\Http\Controllers\Board\BoardAutomationController;
+use App\Http\Controllers\Board\BoardAutomationManageController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardExportController;
@@ -41,6 +43,7 @@ use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardImportController;
 use App\Http\Controllers\Board\BoardInvitationController;
 use App\Http\Controllers\Board\BoardItemAttachmentController;
+use App\Http\Controllers\Board\BoardItemButtonController;
 use App\Http\Controllers\Board\BoardItemCellFileController;
 use App\Http\Controllers\Board\BoardItemChecklistItemController;
 use App\Http\Controllers\Board\BoardItemCommentController;
@@ -79,6 +82,7 @@ use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Profile\SidebarPreferenceController;
 use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Controllers\Profile\WorkingStatusController;
+use App\Http\Controllers\PublicAccess\AutomationWebhookController;
 use App\Http\Controllers\PublicAccess\PublicFormController;
 use App\Http\Controllers\PublicAccess\PublicSharedViewController;
 use App\Http\Controllers\Search\GlobalSearchController;
@@ -157,6 +161,8 @@ Route::post('integrations/slack/events', SlackEventController::class)->middlewar
 // unguessable random string, and both are throttled per IP.
 Route::prefix('public')->group(function () {
     Route::get('forms/{token}', [PublicFormController::class, 'show'])->middleware('throttle:60,1');
+    // The secret URL a "When a webhook is received" automation listens on, see `AutomationWebhookController`.
+    Route::post('automation-webhooks/{token}', [AutomationWebhookController::class, 'receive'])->middleware('throttle:60,1');
     Route::post('forms/{token}/submissions', [PublicFormController::class, 'submit'])->middleware('throttle:10,1');
     Route::post('views/{token}', [PublicSharedViewController::class, 'show'])->middleware('throttle:30,1');
 });
@@ -408,6 +414,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::patch('workspace-permissions', [WorkspacePermissionController::class, 'update']);
     });
 
+    // Account wide automation templates, the Create tab's "Created by" category. Everyone may use
+    // them, administrators publish and remove them.
+    Route::get('automation-templates', [AccountAutomationTemplateController::class, 'index']);
+    Route::middleware('role:super_admin,admin')->group(function () {
+        Route::post('automation-templates', [AccountAutomationTemplateController::class, 'store']);
+        Route::delete('automation-templates/{template}', [AccountAutomationTemplateController::class, 'destroy']);
+    });
+
     // Board content — the reusable "table board" engine: any number of
     // tables (groups) per board, items (pulses) with typed column values,
     // and saved views/tabs that double as saved filter configurations.
@@ -439,9 +453,22 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('usage', [BoardAutomationController::class, 'usage']);
             Route::get('templates', [BoardAutomationController::class, 'templates']);
             Route::delete('templates/{template}', [BoardAutomationController::class, 'destroyTemplate']);
+            Route::get('teams', [BoardAutomationController::class, 'teams']);
+            Route::post('test', [BoardAutomationController::class, 'test'])->middleware('throttle:30,1');
+            Route::get('settings', [BoardAutomationManageController::class, 'settings']);
+            Route::put('settings', [BoardAutomationManageController::class, 'updateSettings']);
+            Route::post('bulk', [BoardAutomationManageController::class, 'bulk']);
+            Route::post('copy', [BoardAutomationManageController::class, 'copy']);
+            Route::get('runs/{run}', [BoardAutomationManageController::class, 'run']);
+            Route::post('runs/{run}/retry', [BoardAutomationManageController::class, 'retry'])->middleware('throttle:30,1');
+            Route::delete('delayed/{delayed}', [BoardAutomationManageController::class, 'cancelDelayed']);
+            Route::get('items/{board_item}', [BoardAutomationManageController::class, 'forItem']);
 
             Route::post('{automation}/duplicate', [BoardAutomationController::class, 'duplicate']);
             Route::post('{automation}/template', [BoardAutomationController::class, 'saveAsTemplate']);
+            Route::post('{automation}/webhook-token', [BoardAutomationController::class, 'regenerateWebhookToken']);
+            Route::get('{automation}/versions', [BoardAutomationManageController::class, 'versions']);
+            Route::post('{automation}/versions/{version}/restore', [BoardAutomationManageController::class, 'restoreVersion']);
             Route::patch('{automation}', [BoardAutomationController::class, 'update']);
             Route::delete('{automation}', [BoardAutomationController::class, 'destroy']);
         });
@@ -505,6 +532,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{board_item}/recurrence', [BoardItemController::class, 'setRecurrence']);
             Route::delete('{board_item}/recurrence', [BoardItemController::class, 'clearRecurrence']);
             Route::patch('{board_item}/board', [BoardItemMoveController::class, 'store']);
+            // A button column's "press", fires the automations watching that button.
+            Route::post('{board_item}/buttons/{column}', [BoardItemButtonController::class, 'press'])->middleware('throttle:60,1');
             Route::get('{board_item}/updates/export', [BoardItemUpdatesExportController::class, 'export'])->middleware('account.permission:export_data');
             Route::post('{board_item}/mute', [BoardItemNotificationMuteController::class, 'store']);
             Route::delete('{board_item}/mute', [BoardItemNotificationMuteController::class, 'destroy']);

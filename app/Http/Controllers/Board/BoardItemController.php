@@ -264,11 +264,15 @@ class BoardItemController extends Controller
 
         $validated = $request->validated();
         $from_group_id = $board_item->group_id;
+        $old_name = (string) $board_item->name;
         $board_item->fill($validated)->save();
 
         if (array_key_exists('group_id', $validated)) {
             $this->cascadeGroupToDescendants($board_item, $validated['group_id']);
             $this->automation_service->handleItemMoved($board_item->fresh('group'), $from_group_id, $request->user());
+        }
+        if (array_key_exists('name', $validated) && $old_name !== (string) $board_item->name) {
+            $this->automation_service->handleNameChanged($board_item->fresh('group'), $old_name, $request->user());
         }
 
         return response()->json([

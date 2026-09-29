@@ -4,13 +4,14 @@ namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BoardActivityLogResource;
+use App\Models\BoardActivityLog;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
  * The board options menu's "Activity log" item — a board-level timeline (see
- * {@see \App\Models\BoardActivityLog} for exactly what it tracks).
+ * {@see BoardActivityLog} for exactly what it tracks).
  */
 class BoardActivityLogController extends Controller
 {
@@ -19,13 +20,17 @@ class BoardActivityLogController extends Controller
     private const MAX_PER_PAGE = 200;
 
     /**
-     * GET /api/boards/{item}/activity-log
+     * GET /api/boards/{item}/activity-log?item_id=
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $per_page = max(1, min((int) $request->integer('per_page', self::DEFAULT_PER_PAGE), self::MAX_PER_PAGE));
 
-        $entries = $item->activityLogs()->with('user')->paginate($per_page);
+        // `item_id` narrows the log to one item, what the item drawer shows under its updates.
+        $entries = $item->activityLogs()
+            ->with('user')
+            ->when($request->integer('item_id') > 0, fn ($query) => $query->where('meta->item_id', $request->integer('item_id')))
+            ->paginate($per_page);
 
         return response()->json([
             'data' => BoardActivityLogResource::collection($entries->items()),

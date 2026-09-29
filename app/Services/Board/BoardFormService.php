@@ -275,8 +275,9 @@ class BoardFormService
             return $board_item;
         });
 
-        // Same "When an item is created" automations a regular new item runs.
+        // Same "When an item is created" automations a regular new item runs, then the form ones.
         $this->automation_service->handleItemCreated($board_item->fresh('group'), null);
+        $this->automation_service->handleFormSubmitted($board_item->fresh('group'), $form_view->id);
 
         return $board_item;
     }

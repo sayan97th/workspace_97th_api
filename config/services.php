@@ -35,6 +35,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // Outgoing automation webhooks ("send a webhook"), private network hosts stay blocked unless
+    // this is switched on, which only makes sense on a developer machine.
+    'automation_webhooks' => [
+        'allow_private_hosts' => env('AUTOMATION_WEBHOOKS_ALLOW_PRIVATE', false),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

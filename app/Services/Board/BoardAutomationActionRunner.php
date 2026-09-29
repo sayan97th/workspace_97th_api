@@ -6,6 +6,7 @@ use App\Jobs\SendEmailJob;
 use App\Mail\Automations\AutomationEmail;
 use App\Models\BoardActivityLog;
 use App\Models\BoardAutomation;
+use App\Models\BoardAutomationSetting;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
@@ -14,9 +15,15 @@ use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\AutomationActions\RunsColumnActions;
+use App\Services\Board\AutomationActions\RunsDateActions;
+use App\Services\Board\AutomationActions\RunsFlowActions;
+use App\Services\Board\AutomationActions\RunsGroupActions;
+use App\Services\Board\AutomationActions\RunsOutboundActions;
 use App\Services\Notification\NotificationService;
 use App\Services\Slack\SlackNotifier;
 use App\Support\BoardEditGate;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -33,22 +40,34 @@ use Illuminate\Support\Facades\DB;
  *
  * A column action on a subitem whose column belongs to items (not subitems) acts on the parent
  * item instead, which is how "when a subitem's status changes, change the parent's status" works.
+ *
+ * During a test run ({@see AutomationRunContext::isDryRun()}) the changes inside the app still
+ * happen, in a transaction the caller rolls back, but nothing leaves the app: notifications,
+ * emails, Slack messages and webhooks only report who they would have reached.
+ *
+ * Date, group, column, flow (round robin, cascades, checklists, dependents) and outbound actions
+ * live in the traits under `AutomationActions`. The "wait" action is handled by
+ * {@see BoardAutomationService} itself, since it stops the branch.
  */
 class BoardAutomationActionRunner
 {
+    use RunsColumnActions, RunsDateActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions;
+
     public function __construct(
         private readonly NotificationService $notification_service,
         private readonly BoardActivityLogger $activity_logger,
         private readonly SlackNotifier $slack_notifier,
         private readonly BoardAutomationMessageRenderer $renderer,
         private readonly BoardItemTransferService $transfer_service,
+        private readonly AutomationRunContext $run_context,
     ) {}
 
     /**
      * @param  array{type: string, params: array<string, mixed>}  $action
      * @param  array<string, mixed>  $context  what the trigger knows, see {@see BoardAutomationMessageRenderer::render()}
+     * @param  string  $action_key  `then.0`, `else.1`: where the action sits, for what it remembers between runs
      */
-    public function run(BoardAutomation $automation, array $action, ?BoardItem $item, ?User $actor, array $context = []): BoardAutomationActionOutcome
+    public function run(BoardAutomation $automation, array $action, ?BoardItem $item, ?User $actor, array $context = [], string $action_key = 'then.0'): BoardAutomationActionOutcome
     {
         $params = $action['params'];
         $type = $action['type'];
@@ -77,6 +96,24 @@ class BoardAutomationActionRunner
             BoardAutomation::ACTION_CREATE_ITEM => $this->createItem($automation, $params, $item, $actor, $context),
             BoardAutomation::ACTION_CREATE_SUBITEM => $this->createSubitems($automation, $params, $item, $actor),
             BoardAutomation::ACTION_POST_UPDATE => $this->postUpdate($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_SHIFT_DATE => $this->shiftDate($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SET_DATE_FROM_COLUMN => $this->setDateFromColumn($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_ENSURE_DATE_AFTER => $this->ensureDateAfter($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SET_TIMELINE => $this->setTimeline($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_CREATE_GROUP => $this->createGroup($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_DUPLICATE_GROUP => $this->duplicateGroup($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_ARCHIVE_GROUP => $this->archiveGroup($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_COPY_COLUMN_VALUE => $this->copyColumnValue($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_TIME_TRACKING => $this->toggleTimeTracking($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_CONNECT_ITEMS => $this->connectItems($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_NOTIFY_TEAM => $this->notifyTeam($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_SEND_WEBHOOK => $this->sendWebhook($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_ASSIGN_ROUND_ROBIN => $this->assignRoundRobin($automation, $params, $item, $actor, $action_key),
+            BoardAutomation::ACTION_SET_SUBITEMS_VALUE => $this->setSubitemsValue($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SET_PARENT_VALUE => $this->setParentValue($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_ADD_CHECKLIST_ITEMS => $this->addChecklistItems($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SHIFT_DEPENDENTS => $this->shiftDependents($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_WAIT => BoardAutomationActionOutcome::skipped('A wait is handled by the automation itself.'),
             default => BoardAutomationActionOutcome::skipped('This action type is not supported.'),
         };
     }
@@ -129,8 +166,10 @@ class BoardAutomationActionRunner
         }
 
         $item_name = $item->name;
-        $this->transfer_service->moveToBoard($item, $target_group);
+        $from_board_id = $item->board_id;
+        $moved = $this->transfer_service->moveToBoard($item, $target_group);
         $this->log($automation, null, $actor, "moved \"{$item_name}\" to the board \"{$target_group->board->label}\"");
+        $this->automationService()->handleItemMovedToBoard($moved->load('group'), $from_board_id, $actor);
 
         return BoardAutomationActionOutcome::success("Moved the item to \"{$target_group->name}\" on \"{$target_group->board->label}\".", stops_chain: true);
     }
@@ -295,7 +334,9 @@ class BoardAutomationActionRunner
         }
         [$column, $subject] = $target;
 
-        $date = Carbon::today()->addDays((int) ($params['offset_days'] ?? 0))->toDateString();
+        $date = empty($params['use_working_days'])
+            ? Carbon::today()->addDays((int) ($params['offset_days'] ?? 0))->toDateString()
+            : BoardAutomationSetting::forBoard($automation->board_id)->calendar()->addWorkingDays(CarbonImmutable::today(), (int) ($params['offset_days'] ?? 0))->toDateString();
         if ($this->valuesAreEqual($this->currentValue($subject, $column), $date)) {
             return BoardAutomationActionOutcome::skipped("\"{$column->label}\" was already {$date}.");
         }
@@ -356,11 +397,59 @@ class BoardAutomationActionRunner
         $created_by_id = $actor?->id ?? $automation->responsibleUser()?->id;
         $created = $this->transfer_service->createCopyInGroup($item, $target_group, $name, (bool) ($params['copy_values'] ?? false), $created_by_id);
 
+        if (! $is_cross_board && ! empty($params['field_mappings'])) {
+            $this->applyFieldMappings($automation, (array) $params['field_mappings'], $created, $item, $actor, $context);
+        }
+
         $where = $is_cross_board ? "\"{$target_group->name}\" on \"{$target_group->board->label}\"" : "\"{$target_group->name}\"";
         $this->log($automation, $item, $actor, "created \"{$created->name}\" in {$where}");
         $this->automationService()->handleItemCreated($created, $actor);
 
         return BoardAutomationActionOutcome::success("Created \"{$created->name}\" in {$where}.", created_item: $created);
+    }
+
+    /**
+     * Fills the columns of an item a "create an item" action just made from text templates, such as
+     * `{payload.email}` for a webhook. Each rendered text is read the way an imported spreadsheet
+     * cell is, so "Done" becomes the Done label and "2026-10-05" a date.
+     *
+     * @param  array<int, mixed>  $mappings  `[{column_id, source}]`
+     * @param  array<string, mixed>  $context
+     */
+    private function applyFieldMappings(BoardAutomation $automation, array $mappings, BoardItem $created, ?BoardItem $item, ?User $actor, array $context): void
+    {
+        $columns = BoardColumn::where('board_view_id', $automation->board_view_id)
+            ->where('scope', BoardColumn::SCOPE_ITEM)
+            ->whereNotIn('type', BoardColumn::READ_ONLY_TYPES)
+            ->get()
+            ->keyBy('id');
+        $caster = new ImportedCellValueCaster($created->board, User::where('is_active', true)->get());
+
+        $values = [];
+        foreach ($mappings as $mapping) {
+            $column = $columns->get((int) ($mapping['column_id'] ?? 0));
+            if (! $column || ! is_array($mapping) || $caster->defersLinkedItems($column)) {
+                continue;
+            }
+
+            $text = $this->renderer->renderPlain((string) ($mapping['source'] ?? ''), '', $automation, $item, $actor, $context);
+            $value = $text === '' ? null : $caster->cast($column, $text);
+            if ($value !== null) {
+                $values[(string) $column->id] = $value;
+            }
+        }
+
+        if ($values !== []) {
+            $this->writeValues($created, $values, $actor);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     */
+    private function writeValues(BoardItem $item, array $values, ?User $actor): void
+    {
+        $this->valueService()->sync($item->board, $item, $values, $this->run_context->isDryRun() ? null : $actor);
     }
 
     /**
@@ -432,6 +521,9 @@ class BoardAutomationActionRunner
         if ($recipients->isEmpty()) {
             return BoardAutomationActionOutcome::skipped('Found nobody to notify.');
         }
+        if ($this->run_context->isDryRun()) {
+            return BoardAutomationActionOutcome::success('Would notify '.$recipients->map(fn (User $user) => $user->full_name)->implode(', ').'.');
+        }
 
         $board = $item?->board ?? $automation->board;
         $automation_label = $automation->name ?: 'Automation';
@@ -474,6 +566,11 @@ class BoardAutomationActionRunner
         $message = $this->renderer->render($params['message'] ?? null, $automation, $item, $actor, $context);
         $board = $item?->board ?? $automation->board;
         $link = $item ? "/boards/{$item->board_id}/pulses/{$item->id}" : "/boards/{$board->id}";
+
+        if ($this->run_context->isDryRun()) {
+            return $this->describeCommunication($type, $params, $item);
+        }
+
         $outcomes = [];
         $delivered_count = 0;
         $failed_count = 0;
@@ -487,8 +584,18 @@ class BoardAutomationActionRunner
             $was_sent ? $delivered_count++ : $failed_count++;
         } else {
             $recipients = $this->resolveRecipients($params, $item);
-            if ($recipients->isEmpty()) {
+            $addresses = $type === BoardAutomation::ACTION_SEND_EMAIL ? $this->resolveEmailAddresses($params, $item, $recipients) : [];
+            if ($recipients->isEmpty() && $addresses === []) {
                 $outcomes[] = 'found nobody to notify';
+            }
+
+            foreach ($addresses as $address) {
+                SendEmailJob::dispatch(
+                    new AutomationEmail($this->renderer->renderSubject($params['subject'] ?? null, $automation, $item, $actor, $context), $message, $board->label, $link),
+                    $address,
+                );
+                $outcomes[] = "emailed {$address}";
+                $delivered_count++;
             }
 
             foreach ($recipients as $recipient) {
@@ -522,6 +629,28 @@ class BoardAutomationActionRunner
     }
 
     /**
+     * What a communication action would have done, for a test run.
+     *
+     * @param  array<string, mixed>  $params
+     */
+    private function describeCommunication(string $type, array $params, ?BoardItem $item): BoardAutomationActionOutcome
+    {
+        if ($type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL) {
+            return BoardAutomationActionOutcome::success('Would post to Slack channel #'.($params['slack_channel_name'] ?? $params['slack_channel_id'] ?? 'channel').'.');
+        }
+
+        $recipients = $this->resolveRecipients($params, $item);
+        $names = $recipients->map(fn (User $user) => $user->full_name)
+            ->merge($type === BoardAutomation::ACTION_SEND_EMAIL ? $this->resolveEmailAddresses($params, $item, $recipients) : [])
+            ->implode(', ');
+        if ($names === '') {
+            return BoardAutomationActionOutcome::skipped('Found nobody to reach.');
+        }
+
+        return BoardAutomationActionOutcome::success($type === BoardAutomation::ACTION_SEND_EMAIL ? "Would email {$names}." : "Would send a Slack message to {$names}.");
+    }
+
+    /**
      * Everyone a notify or communication action should reach: a fixed `notify_user_id`, or every
      * person `notify_from_people_column_id` currently holds. Deactivated accounts are skipped.
      *
@@ -545,24 +674,67 @@ class BoardAutomationActionRunner
         return new Collection;
     }
 
+    /**
+     * The outside email addresses a "send an email" action reaches: the addresses typed into
+     * `email_addresses`, and whatever the Email column `email_column_id` holds on the item. Anyone
+     * already emailed as a member is left out, so nobody gets the same email twice.
+     *
+     * @param  array<string, mixed>  $params
+     * @param  Collection<int, User>  $members
+     * @return array<int, string>
+     */
+    private function resolveEmailAddresses(array $params, ?BoardItem $item, Collection $members): array
+    {
+        $addresses = array_map('strval', (array) ($params['email_addresses'] ?? []));
+
+        if ($item && ($email_column_id = $params['email_column_id'] ?? null)) {
+            $column = BoardColumn::find((int) $email_column_id);
+            $subject = $this->subjectForColumn($item, $column);
+            $value = $subject ? $this->currentValue($subject, $column) : null;
+            foreach (preg_split('/[\s,;]+/', is_string($value) ? $value : '') ?: [] as $address) {
+                $addresses[] = $address;
+            }
+        }
+
+        $taken = $members->map(fn (User $user) => mb_strtolower((string) $user->email))->all();
+        $unique = [];
+        foreach ($addresses as $address) {
+            $address = trim($address);
+            $key = mb_strtolower($address);
+            if ($address === '' || ! filter_var($address, FILTER_VALIDATE_EMAIL) || in_array($key, $taken, true)) {
+                continue;
+            }
+            $taken[] = $key;
+            $unique[] = $address;
+        }
+
+        return array_slice($unique, 0, 20);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /**
      * The target column of a column action and the item it applies to, or why it cannot run.
      *
      * @param  array<string, mixed>  $params
+     * @param  string|array<int, string>|null  $required_type  one type or a list of accepted types
      * @return array{0: BoardColumn, 1: BoardItem}|string
      */
-    private function resolveColumnTarget(BoardAutomation $automation, array $params, BoardItem $item, ?string $required_type = null): array|string
+    private function resolveColumnTarget(BoardAutomation $automation, array $params, BoardItem $item, string|array|null $required_type = null, string $param = 'target_column_id'): array|string
     {
-        $column = BoardColumn::where('board_view_id', $automation->board_view_id)->find((int) ($params['target_column_id'] ?? 0));
+        $column = BoardColumn::where('board_view_id', $automation->board_view_id)->find((int) ($params[$param] ?? 0));
         if (! $column) {
-            return 'The column to update no longer exists.';
+            return $param === 'target_column_id' ? 'The column to update no longer exists.' : 'The column to read from no longer exists.';
         }
-        if (in_array($column->type, BoardColumn::READ_ONLY_TYPES, true)) {
+        if ($param === 'target_column_id' && in_array($column->type, BoardColumn::READ_ONLY_TYPES, true)) {
             return "\"{$column->label}\" is calculated and cannot be changed.";
         }
-        if ($required_type !== null && $column->type !== $required_type && ! ($required_type === BoardColumn::TYPE_NUMBER && in_array($column->type, [BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS], true))) {
+
+        $accepted_types = $required_type === null ? null : (array) $required_type;
+        if ($accepted_types === [BoardColumn::TYPE_NUMBER]) {
+            $accepted_types = [BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS];
+        }
+        if ($accepted_types !== null && ! in_array($column->type, $accepted_types, true)) {
             return "\"{$column->label}\" is not the right kind of column for this action.";
         }
 
@@ -605,9 +777,12 @@ class BoardAutomationActionRunner
         return BoardItemValue::where('item_id', $item->id)->where('column_id', $column->id)->first()?->value;
     }
 
+    /**
+     * A test run writes without an actor, so nobody gets an "Assigned you" notification for it.
+     */
     private function writeValue(BoardItem $item, BoardColumn $column, mixed $value, ?User $actor): void
     {
-        $this->valueService()->sync($item->board, $item, [(string) $column->id => $value], $actor);
+        $this->valueService()->sync($item->board, $item, [(string) $column->id => $value], $this->run_context->isDryRun() ? null : $actor);
     }
 
     /**
@@ -730,7 +905,7 @@ class BoardAutomationActionRunner
             $actor,
             BoardActivityLog::ACTION_AUTOMATION_RAN,
             "Automation \"{$automation_label}\" {$what}",
-            $item ? ['item_id' => $item->id] : []
+            array_filter(['item_id' => $item?->id, 'automation_id' => $automation->id])
         );
     }
 

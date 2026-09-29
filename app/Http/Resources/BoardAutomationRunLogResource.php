@@ -28,6 +28,11 @@ class BoardAutomationRunLogResource extends JsonResource
             'message' => $this->message,
             'actor_name' => $this->actor?->full_name,
             'ran_at' => $this->created_at,
+            // Every step of one execution shares `run_uuid`, see `BoardAutomationRunLog`.
+            'run_uuid' => $this->run_uuid,
+            'branch' => $this->branch ?: 'then',
+            'step_index' => $this->step_index,
+            'retry_of_id' => $this->retry_of_id,
         ];
     }
 }

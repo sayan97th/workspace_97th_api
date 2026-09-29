@@ -10,7 +10,10 @@ use Illuminate\Support\Carbon;
 
 /**
  * One time {@see BoardAutomation} was asked to run, written by {@see BoardAutomationService}.
- * Shown under the Manage tab's "Run history" and summed for its usage numbers. Distinct from
+ * Shown under the Manage tab's "Run history" and summed for its usage numbers. Every action of
+ * one execution shares a `run_uuid`, `branch` says whether it came from the "Then" or the
+ * "Otherwise" actions and `step_index` which one it was, and `context` keeps what the trigger knew
+ * so a failed step can be retried. Distinct from
  * {@see BoardAutomationRun}, which only dedupes the daily date trigger.
  *
  * `status` is {@see self::STATUS_SUCCESS} when the action did its job, {@see self::STATUS_SKIPPED}
@@ -29,6 +32,11 @@ use Illuminate\Support\Carbon;
  * @property string $action_type
  * @property string $status
  * @property string $message
+ * @property string|null $run_uuid
+ * @property string $branch
+ * @property int|null $step_index
+ * @property array<string, mixed>|null $context
+ * @property int|null $retry_of_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read BoardAutomation|null $automation
@@ -37,6 +45,7 @@ use Illuminate\Support\Carbon;
 #[Fillable([
     'automation_id', 'board_id', 'board_view_id', 'board_item_id', 'actor_id',
     'automation_name', 'item_name', 'trigger_type', 'action_type', 'status', 'message',
+    'run_uuid', 'branch', 'step_index', 'context', 'retry_of_id',
 ])]
 class BoardAutomationRunLog extends Model
 {
@@ -68,5 +77,15 @@ class BoardAutomationRunLog extends Model
     public function actor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'actor_id');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'context' => 'array',
+        ];
     }
 }

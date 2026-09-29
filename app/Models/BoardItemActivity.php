@@ -20,6 +20,8 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $item_id
  * @property int|null $user_id
+ * @property int|null $automation_id
+ * @property string|null $automation_name
  * @property int|null $column_id
  * @property string $column_label
  * @property string $column_type
@@ -29,7 +31,7 @@ use Illuminate\Support\Carbon;
  * @property-read BoardItem $item
  * @property-read User|null $user
  */
-#[Fillable(['item_id', 'user_id', 'column_id', 'column_label', 'column_type', 'old_display', 'new_display'])]
+#[Fillable(['item_id', 'user_id', 'automation_id', 'automation_name', 'column_id', 'column_label', 'column_type', 'old_display', 'new_display'])]
 class BoardItemActivity extends Model
 {
     public const UPDATED_AT = null;

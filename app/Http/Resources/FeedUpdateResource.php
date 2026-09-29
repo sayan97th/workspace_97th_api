@@ -102,6 +102,8 @@ class FeedUpdateResource extends JsonResource
                     'avatar_url' => $entry->user->profile_photo_url,
                     'is_deactivated' => $entry->user->is_deactivated,
                 ] : null,
+                // Set when an automation made the change, the feed then credits it instead of the actor.
+                'automation' => $entry->automation_name !== null ? ['id' => $entry->automation_id, 'name' => $entry->automation_name] : null,
                 'column_label' => $entry->column_label,
                 'column_type' => $entry->column_type,
                 'old_display' => $entry->old_display,

@@ -47,6 +47,7 @@ class UpdateBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_CONNECT_BOARD,
                 BoardColumn::TYPE_MIRROR,
                 BoardColumn::TYPE_CHECKLIST,
+                BoardColumn::TYPE_BUTTON,
             ])],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
             'config' => ['sometimes', 'nullable', 'array'],
@@ -72,6 +73,9 @@ class UpdateBoardColumnRequest extends FormRequest
             'config.operation' => ['sometimes', 'string', Rule::in(['sum', 'subtract', 'multiply', 'divide', 'concat'])],
             'config.source_column_ids' => ['sometimes', 'array', 'min:1'],
             'config.source_column_ids.*' => ['integer', Rule::exists('board_columns', 'id')],
+            // Button columns only: the text on the button and its color.
+            'config.button_label' => ['sometimes', 'string', 'max:40'],
+            'config.button_color' => ['sometimes', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
             // Connect-board columns only: the other board this column's cells link items on.
             'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
             // Mirror columns only: which of this tab's own connect-board columns to read through, and which column on that linked board to display.

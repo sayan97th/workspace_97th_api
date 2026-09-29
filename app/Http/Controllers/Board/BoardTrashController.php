@@ -8,6 +8,7 @@ use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
+use App\Services\Board\BoardAutomationService;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,7 +25,10 @@ use Illuminate\Support\Collection;
  */
 class BoardTrashController extends Controller
 {
-    public function __construct(private readonly BoardActivityLogger $activity_logger) {}
+    public function __construct(
+        private readonly BoardActivityLogger $activity_logger,
+        private readonly BoardAutomationService $automation_service,
+    ) {}
 
     /**
      * GET /api/boards/{item}/trash
@@ -122,6 +126,8 @@ class BoardTrashController extends Controller
             "Restored \"{$target->name}\"",
             ['item_id' => $target->id]
         );
+
+        $this->automation_service->handleItemRestored($target->fresh('group'), $request->user());
 
         return response()->json(['message' => 'Item restored successfully.']);
     }

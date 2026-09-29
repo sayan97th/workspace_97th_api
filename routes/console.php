@@ -19,6 +19,9 @@ Schedule::command('automations:run-date-triggers')->everyFiveMinutes()->withoutO
 
 Schedule::command('automations:run-scheduled')->everyMinute()->withoutOverlapping();
 
+// Automations waiting behind a "wait" step continue once their time comes.
+Schedule::command('automations:run-delayed')->everyMinute()->withoutOverlapping();
+
 Schedule::command('automations:prune-run-logs')->dailyAt('03:00');
 
 Schedule::command('board:send-due-date-reminders')->dailyAt('08:00');

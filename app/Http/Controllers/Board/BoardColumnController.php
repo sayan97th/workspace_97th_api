@@ -13,6 +13,7 @@ use App\Http\Resources\BoardColumnResource;
 use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
@@ -239,7 +240,11 @@ class BoardColumnController extends Controller
         BoardEditGate::authorizeStructure($item, $request->user());
         $this->ensureColumnBelongsToBoard($item, $column);
 
+        $view_id = $column->board_view_id;
         $column->delete();
+
+        // Automations that used the column can no longer run, they are paused and their owners told.
+        app(BoardAutomationService::class)->pauseBrokenAutomations($view_id);
 
         return response()->json([
             'message' => 'Column deleted successfully.',
@@ -384,6 +389,10 @@ class BoardColumnController extends Controller
                     ['id' => (string) Str::uuid(), 'label' => 'Critical', 'color' => '#b02f43', 'is_active' => true],
                 ],
             ];
+        }
+
+        if ($type === BoardColumn::TYPE_BUTTON) {
+            return ['button_label' => 'Click me', 'button_color' => '#579bfc'];
         }
 
         return null;

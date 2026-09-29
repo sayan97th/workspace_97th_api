@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Services\Board\AutomationRunContext;
+use App\Services\Board\BoardAutomationHealthChecker;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\ColumnPermissionService;
 use App\Services\Favorite\UserFavoriteService;
@@ -26,6 +28,10 @@ class AppServiceProvider extends ServiceProvider
         // One instance per request or job, so a chain of automations setting each other off shares
         // one loop guard, see BoardAutomationService::MAX_CHAIN_DEPTH.
         $this->app->scoped(BoardAutomationService::class);
+        // Which automation is running right now and whether it is a test run, read by the item
+        // activity log and by every action that reaches outside the app.
+        $this->app->scoped(AutomationRunContext::class);
+        $this->app->scoped(BoardAutomationHealthChecker::class);
     }
 
     /**

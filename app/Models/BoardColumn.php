@@ -136,13 +136,17 @@ class BoardColumn extends Model
     /** A per-item checklist of sub-tasks, stored as an array of `{id, text, is_done}`, distinct from {@see BoardItemChecklistItem}, which is one fixed checklist per item shown in its drawer, not a column an item can have several of. */
     public const TYPE_CHECKLIST = 'checklist';
 
+    /** A clickable button (`config.label`, `config.color`) that stores no value, pressing it fires the `button_clicked` automations watching it. */
+    public const TYPE_BUTTON = 'button';
+
     /**
-     * Column types whose value is computed rather than written by a user, so no edit can ever
-     * "change" them and they are not offered to a `column_changed` automation.
+     * Column types whose value is computed rather than written by a user (or, for a button, never
+     * stored at all), so no edit can ever "change" them and they are not offered to a
+     * `column_changed` automation.
      *
      * @var array<int, string>
      */
-    public const READ_ONLY_TYPES = [self::TYPE_FORMULA, self::TYPE_MIRROR, self::TYPE_AUTO_NUMBER];
+    public const READ_ONLY_TYPES = [self::TYPE_FORMULA, self::TYPE_MIRROR, self::TYPE_AUTO_NUMBER, self::TYPE_BUTTON];
 
     /**
      * The board (navigation leaf) this column belongs to.

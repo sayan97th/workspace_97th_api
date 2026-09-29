@@ -9,6 +9,7 @@ use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemTransferService;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
@@ -24,6 +25,7 @@ class BoardItemMoveController extends Controller
     public function __construct(
         private readonly BoardItemTransferService $transfer_service,
         private readonly BoardActivityLogger $activity_logger,
+        private readonly BoardAutomationService $automation_service,
     ) {}
 
     /**
@@ -102,6 +104,8 @@ class BoardItemMoveController extends Controller
             sprintf('Moved "%s" here from the board "%s"', $moved_item->name, $item->label),
             $meta,
         );
+
+        $this->automation_service->handleItemMovedToBoard($moved_item->fresh('group'), $item->id, $request->user());
 
         return response()->json([
             'message' => 'Item moved to the board successfully.',

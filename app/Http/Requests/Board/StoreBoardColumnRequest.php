@@ -68,6 +68,7 @@ class StoreBoardColumnRequest extends FormRequest
                 BoardColumn::TYPE_CONNECT_BOARD,
                 BoardColumn::TYPE_MIRROR,
                 BoardColumn::TYPE_CHECKLIST,
+                BoardColumn::TYPE_BUTTON,
             ])],
             'position' => ['sometimes', 'integer', 'min:0'],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
@@ -92,6 +93,9 @@ class StoreBoardColumnRequest extends FormRequest
             'config.operation' => ['sometimes', 'string', Rule::in(['sum', 'subtract', 'multiply', 'divide', 'concat'])],
             'config.source_column_ids' => ['sometimes', 'array', 'min:1'],
             'config.source_column_ids.*' => ['integer', Rule::exists('board_columns', 'id')],
+            // Button columns only: the text on the button and its color.
+            'config.button_label' => ['sometimes', 'string', 'max:40'],
+            'config.button_color' => ['sometimes', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
             'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
             'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],

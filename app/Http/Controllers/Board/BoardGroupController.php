@@ -14,6 +14,7 @@ use App\Models\BoardGroupCollapseState;
 use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardViewResolver;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
@@ -233,7 +234,11 @@ class BoardGroupController extends Controller
         $this->ensureGroupBelongsToBoard($item, $group);
         BoardEditGate::authorizeStructure($item, $request->user());
 
+        $view_id = $group->board_view_id;
         $group->delete();
+
+        // Automations that used the group can no longer run, they are paused and their owners told.
+        app(BoardAutomationService::class)->pauseBrokenAutomations($view_id);
 
         return response()->json([
             'message' => 'Table deleted successfully.',
