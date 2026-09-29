@@ -101,6 +101,7 @@ class BoardAutomationService
         private readonly AutomationRunContext $run_context,
         private readonly BoardAutomationHealthChecker $health_checker,
         private readonly AutomationConditionEvaluator $condition_evaluator,
+        private readonly AutomationUsageMeter $usage_meter,
     ) {}
 
     // ── Column triggers ───────────────────────────────────────────────────────
@@ -374,8 +375,26 @@ class BoardAutomationService
         }
 
         foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_DATE_CHANGED, $column->id) as $automation) {
+            if (! $this->timelinePartChanged($column, (string) ($automation->trigger_config['timeline_part'] ?? 'any'), $old_value, $new_value)) {
+                continue;
+            }
             $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, $old_value, $new_value));
         }
+    }
+
+    /**
+     * Whether the watched end of a timeline moved: `start`, `end`, or `any` for either. A date
+     * column only has one day, so any change counts.
+     */
+    private function timelinePartChanged(BoardColumn $column, string $part, mixed $old_value, mixed $new_value): bool
+    {
+        if ($column->type !== BoardColumn::TYPE_TIMELINE || ! in_array($part, ['start', 'end'], true)) {
+            return true;
+        }
+
+        $day = fn (mixed $value): ?string => is_array($value) && is_string($value[$part] ?? null) ? substr($value[$part], 0, 10) : null;
+
+        return $day($old_value) !== $day($new_value);
     }
 
     /**
@@ -879,6 +898,160 @@ class BoardAutomationService
     }
 
     /**
+     * Runs every "status is stuck" and "item is not updated" automation, see
+     * {@see BoardAutomation::quietTriggers()}. An item fires once its label (or its last update)
+     * is older than the automation's quiet period, once per stretch: the stretch is recorded in
+     * {@see BoardAutomationRun} under the moment it began, so a new change starts a new stretch.
+     * Each automation acts on at most {@see self::MAX_SCAN_ITEMS} items per check, the ones quiet
+     * the longest first, and the rest follow on the next checks.
+     *
+     * @return int How many (automation, item) pairs ran.
+     */
+    public function runQuietTriggers(?CarbonInterface $now = null): int
+    {
+        $now = CarbonImmutable::instance($now ?? Carbon::now());
+        $ran_count = 0;
+
+        $automations = BoardAutomation::query()
+            ->where('is_enabled', true)
+            ->whereIn('trigger_type', BoardAutomation::quietTriggers())
+            ->with(['triggerColumn', 'board', 'creator', 'owner'])
+            ->get();
+
+        foreach ($automations as $automation) {
+            $minutes = $automation->quietPeriodMinutes();
+            if ($minutes === null || $this->isBoardPaused($automation->board_id)) {
+                continue;
+            }
+
+            $candidates = $automation->trigger_type === BoardAutomation::TRIGGER_STATUS_STUCK
+                ? $this->stuckItems($automation, $now->subMinutes($minutes))
+                : $this->staleItems($automation, $now->subMinutes($minutes));
+
+            foreach ($candidates as [$item, $since, $context]) {
+                if (! $this->claimStretch($automation, $item, $since)) {
+                    continue;
+                }
+
+                $this->executeAutomation($automation, $item, null, $context);
+                $ran_count++;
+            }
+        }
+
+        return $ran_count;
+    }
+
+    /**
+     * Items whose status column has held the automation's label (any label when none is set)
+     * since `$cutoff` or before, oldest first.
+     *
+     * @return array<int, array{0: BoardItem, 1: CarbonImmutable, 2: array<string, mixed>}>
+     */
+    public function stuckItems(BoardAutomation $automation, CarbonImmutable $cutoff): array
+    {
+        $column = $automation->triggerColumn;
+        if (! $column || $column->board_view_id !== $automation->board_view_id) {
+            return [];
+        }
+
+        $label = $automation->trigger_value;
+        $values = BoardItemValue::where('column_id', $column->id)
+            ->where('updated_at', '<=', $cutoff)
+            ->orderBy('updated_at')
+            ->with('item.group')
+            ->get();
+
+        $stuck = [];
+        foreach ($values as $value) {
+            if ($value->value === null || $value->value === '' || ($label !== null && $label !== '' && (string) $value->value !== (string) $label)) {
+                continue;
+            }
+            $item = $value->item;
+            if (! $item || $item->is_archived || $item->group?->board_view_id !== $automation->board_view_id || $item->group->is_archived) {
+                continue;
+            }
+
+            $stuck[] = [$item, CarbonImmutable::instance($value->updated_at), $this->changeContext($column, null, $value->value)];
+            if (count($stuck) >= self::MAX_SCAN_ITEMS) {
+                break;
+            }
+        }
+
+        return $stuck;
+    }
+
+    /**
+     * Top level items with no change to their name, values or updates since `$cutoff`, only of
+     * `trigger_config.group_id` when set, quiet the longest first.
+     *
+     * @return array<int, array{0: BoardItem, 1: CarbonImmutable, 2: array<string, mixed>}>
+     */
+    public function staleItems(BoardAutomation $automation, CarbonImmutable $cutoff): array
+    {
+        $group_id = $automation->trigger_config['group_id'] ?? null;
+        $stale = [];
+
+        // An item's own timestamp only moves forward with its values, so it narrows the scan cheaply.
+        BoardItem::query()
+            ->whereNull('parent_id')
+            ->where('is_archived', false)
+            ->where('updated_at', '<=', $cutoff)
+            ->whereHas('group', fn ($query) => $query->where('board_view_id', $automation->board_view_id)->where('is_archived', false))
+            ->when($group_id, fn ($query) => $query->where('group_id', (int) $group_id))
+            ->with(['values', 'group'])
+            ->orderBy('id')
+            ->chunkById(200, function (EloquentCollection $items) use ($cutoff, &$stale) {
+                $last_updates = BoardItemComment::whereIn('item_id', $items->modelKeys())
+                    ->groupBy('item_id')
+                    ->selectRaw('item_id, MAX(created_at) as last_at')
+                    ->toBase()
+                    ->pluck('last_at', 'item_id');
+
+                foreach ($items as $item) {
+                    $last_at = BoardItemFilterEvaluator::lastUpdatedAt($item);
+                    $last_update = isset($last_updates[$item->id]) ? CarbonImmutable::parse($last_updates[$item->id]) : null;
+                    if ($last_update !== null && ($last_at === null || $last_update->greaterThan($last_at))) {
+                        $last_at = $last_update;
+                    }
+                    if ($last_at === null || $last_at->greaterThan($cutoff)) {
+                        continue;
+                    }
+                    $stale[] = [$item, CarbonImmutable::instance($last_at), []];
+                }
+            });
+
+        usort($stale, fn (array $a, array $b) => $a[1] <=> $b[1]);
+
+        return array_slice($stale, 0, self::MAX_SCAN_ITEMS);
+    }
+
+    /**
+     * Records that the automation fired for the stretch that began at `$since`, false when it
+     * already had, the unique index settles two overlapping scheduler checks.
+     */
+    private function claimStretch(BoardAutomation $automation, BoardItem $item, CarbonImmutable $since): bool
+    {
+        $attributes = [
+            'automation_id' => $automation->id,
+            'board_item_id' => $item->id,
+            'ran_on' => $since->toDateString(),
+            'anchor' => $since->format('Y-m-d H:i:s'),
+        ];
+
+        if (BoardAutomationRun::where('automation_id', $automation->id)->where('board_item_id', $item->id)->where('anchor', $attributes['anchor'])->exists()) {
+            return false;
+        }
+
+        try {
+            BoardAutomationRun::create($attributes);
+        } catch (UniqueConstraintViolationException) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * The day a date or timeline value is due, `YYYY-MM-DD`, the timeline's end.
      */
     private function dueDateOf(BoardColumn $column, mixed $value): ?string
@@ -1098,11 +1271,23 @@ class BoardAutomationService
                 return;
             }
 
+            // The monthly action quota, a test run never counts nor stops.
+            $is_counted = ! $this->run_context->isDryRun();
+            if ($is_counted && $this->usage_meter->isExhausted()) {
+                $this->recordRun($automation, $subject, $actor, $action['type'], BoardAutomationActionOutcome::skipped($this->usage_meter->exhaustedMessage()), $run_uuid, $branch, $index);
+
+                return;
+            }
+
             try {
                 $outcome = $this->action_runner->run($automation, $action, $subject, $actor, $context, "{$branch}.{$index}");
             } catch (Throwable $exception) {
                 report($exception);
                 $outcome = BoardAutomationActionOutcome::failed('The action failed unexpectedly.');
+            }
+
+            if ($is_counted && $outcome->status !== BoardAutomationRunLog::STATUS_SKIPPED) {
+                $this->usage_meter->recordAction();
             }
 
             $is_failed = $outcome->status === BoardAutomationRunLog::STATUS_FAILED;

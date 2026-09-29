@@ -52,6 +52,18 @@ class BoardAutomationRunJournal
     }
 
     /**
+     * Items put in a new order, the top level items of a group or the subitems of an item.
+     *
+     * @param  int|null  $item_id  the item the automation ran on, null for a run without one
+     * @param  array<int, int>  $before  the ids in their order before the run
+     * @param  array<int, int>  $after  the same ids in the order the run left them
+     */
+    public function reordered(int $board_id, ?int $item_id, array $before, array $after): void
+    {
+        $this->write(BoardAutomationRunChange::KIND_REORDERED, $board_id, $item_id, null, ['order' => array_values($before)], ['order' => array_values($after)]);
+    }
+
+    /**
      * Whether a change made right now would be recorded.
      */
     public function isRecording(): bool
@@ -60,6 +72,11 @@ class BoardAutomationRunJournal
     }
 
     private function record(string $kind, BoardItem $item, ?int $column_id, mixed $before, mixed $after): void
+    {
+        $this->write($kind, $item->board_id, $item->id, $column_id, $before, $after);
+    }
+
+    private function write(string $kind, int $board_id, ?int $item_id, ?int $column_id, mixed $before, mixed $after): void
     {
         $run_uuid = $this->run_context->currentRunUuid();
         if ($run_uuid === null || $this->run_context->isDryRun()) {
@@ -70,8 +87,8 @@ class BoardAutomationRunJournal
             BoardAutomationRunChange::create([
                 'run_uuid' => $run_uuid,
                 'automation_id' => $this->run_context->current()?->exists ? $this->run_context->current()->id : null,
-                'board_id' => $item->board_id,
-                'board_item_id' => $item->id,
+                'board_id' => $board_id,
+                'board_item_id' => $item_id,
                 'kind' => $kind,
                 'column_id' => $column_id,
                 'before' => $before,

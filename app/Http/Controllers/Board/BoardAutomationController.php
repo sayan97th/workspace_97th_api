@@ -16,6 +16,7 @@ use App\Models\BoardAutomationTemplate;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\AutomationDynamicValueResolver;
+use App\Services\Board\AutomationUsageMeter;
 use App\Services\Board\BoardAutomationHealthChecker;
 use App\Services\Board\BoardAutomationImpactPreview;
 use App\Services\Board\BoardAutomationRunUndoer;
@@ -40,6 +41,7 @@ class BoardAutomationController extends Controller
         private readonly BoardViewResolver $view_resolver,
         private readonly BoardAutomationHealthChecker $health_checker,
         private readonly BoardAutomationVersionRecorder $version_recorder,
+        private readonly AutomationUsageMeter $usage_meter,
     ) {}
 
     /**
@@ -409,6 +411,7 @@ class BoardAutomationController extends Controller
             'daily' => collect($daily)->map(fn (int $count, string $day) => ['date' => $day, 'runs' => $count])->values()->all(),
             'top_automations' => $top_automations,
             'by_action' => $by_action,
+            'monthly_quota' => $this->usage_meter->quota(),
         ];
     }
 

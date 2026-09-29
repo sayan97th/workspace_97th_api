@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Automation;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BoardAutomationResource;
+use App\Models\AccountSetting;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationRunLog;
+use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\AutomationUsageMeter;
 use App\Services\Board\BoardAutomationHealthChecker;
 use App\Support\BoardEditGate;
 use App\Support\VisibleBoards;
@@ -32,7 +35,52 @@ class AccountAutomationController extends Controller
     /** The window of the "runs" and "failed" counts. */
     private const RECENT_DAYS = 30;
 
-    public function __construct(private readonly BoardAutomationHealthChecker $health_checker) {}
+    public function __construct(
+        private readonly BoardAutomationHealthChecker $health_checker,
+        private readonly AutomationUsageMeter $usage_meter,
+    ) {}
+
+    /**
+     * GET /api/automations/usage
+     *
+     * This month's automation actions against the account's monthly limit, with the boards the
+     * user may open that used the most. Anyone may read it, only admins may change the limit.
+     */
+    public function usage(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        return response()->json([
+            'data' => $this->usage_meter->summary(VisibleBoards::query($user)->pluck('id'), $this->canManageUsage($user)),
+        ]);
+    }
+
+    /**
+     * PUT /api/automations/usage
+     *
+     * Sets the monthly action limit, null for no limit. Admins only.
+     */
+    public function updateUsage(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($this->canManageUsage($user), 403, 'Only account admins can change the automation limit.');
+
+        $validated = $request->validate([
+            'monthly_action_limit' => ['present', 'nullable', 'integer', 'between:1,'.AutomationUsageMeter::MAX_LIMIT],
+        ]);
+
+        AccountSetting::current()->update(['automation_monthly_action_limit' => $validated['monthly_action_limit']]);
+
+        return response()->json([
+            'message' => $validated['monthly_action_limit'] === null ? 'Automations now have no monthly limit.' : 'The monthly automation limit was saved.',
+            'data' => $this->usage_meter->summary(VisibleBoards::query($user)->pluck('id'), true),
+        ]);
+    }
+
+    private function canManageUsage(User $user): bool
+    {
+        return $user->hasRole(['super_admin', 'admin']);
+    }
 
     /**
      * GET /api/automations

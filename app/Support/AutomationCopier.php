@@ -23,7 +23,7 @@ final class AutomationCopier
 {
     /** Params of an action that hold a column id of the automation's own tab. */
     private const COLUMN_PARAMS = [
-        'target_column_id', 'source_column_id', 'number_column_id', 'notify_from_people_column_id',
+        'target_column_id', 'source_column_id', 'sort_column_id', 'number_column_id', 'notify_from_people_column_id',
         'dependency_column_id', 'email_column_id', 'connect_column_id', 'link_column_id',
     ];
 

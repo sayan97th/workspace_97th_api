@@ -87,6 +87,10 @@ class BoardAutomationRunUndoer
      */
     private function revert(BoardAutomationRunChange $change, ?User $actor): ?string
     {
+        if ($change->kind === BoardAutomationRunChange::KIND_REORDERED) {
+            return $this->revertReorder($change, $actor);
+        }
+
         $item = BoardItem::withTrashed()->with('group')->find($change->board_item_id);
         if (! $item) {
             return 'An item the run changed was permanently deleted.';
@@ -185,6 +189,48 @@ class BoardAutomationRunUndoer
 
         $item->update(['name' => $from]);
         $this->log($item, $actor, "renamed \"{$to}\" back to \"{$from}\"");
+
+        return null;
+    }
+
+    /**
+     * Puts reordered items back in their order from before the run. Items moved elsewhere or
+     * deleted since are left out, the others take back their places among the slots they hold
+     * now, so items added since keep theirs. Nothing moves when they were reordered again.
+     */
+    private function revertReorder(BoardAutomationRunChange $change, ?User $actor): ?string
+    {
+        $before = array_map('intval', (array) ($change->before['order'] ?? []));
+        $after = array_map('intval', (array) ($change->after['order'] ?? []));
+        $first = BoardItem::whereIn('id', $before)->orderBy('position')->first();
+        if (! $first) {
+            return 'The items the run reordered no longer exist.';
+        }
+
+        $siblings = ($first->parent_id === null
+            ? BoardItem::where('group_id', $first->group_id)->whereNull('parent_id')
+            : BoardItem::where('parent_id', $first->parent_id))
+            ->where('is_archived', false)
+            ->orderBy('position')->orderBy('id')
+            ->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        $kept = array_values(array_intersect($siblings, $before));
+        if ($kept !== array_values(array_intersect($after, $kept))) {
+            return 'The items were reordered again after the run, so their order stayed as it is.';
+        }
+
+        $restored = array_values(array_intersect($before, $kept));
+        $next = $siblings;
+        $slot = 0;
+        foreach ($next as $position => $id) {
+            if (in_array($id, $kept, true)) {
+                $next[$position] = $restored[$slot++];
+            }
+        }
+        foreach ($next as $position => $id) {
+            BoardItem::whereKey($id)->update(['position' => $position]);
+        }
+        $this->log($first, $actor, 'put '.count($restored).' items back in their previous order');
 
         return null;
     }

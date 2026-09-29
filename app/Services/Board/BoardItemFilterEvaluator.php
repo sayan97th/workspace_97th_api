@@ -631,11 +631,21 @@ class BoardItemFilterEvaluator
      */
     private function resolveDateValue(string $value): ?array
     {
+        return self::resolveDateRange($value, $this->today);
+    }
+
+    /**
+     * {@see self::resolveDateValue()} for any `$today` (`YYYY-MM-DD`), for callers without an evaluator.
+     *
+     * @return array{start: string, end: string}|null
+     */
+    public static function resolveDateRange(string $value, string $today): ?array
+    {
         if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1) {
             return ['start' => $value, 'end' => $value];
         }
 
-        $now = CarbonImmutable::createFromFormat('Y-m-d', $this->today)->startOfDay();
+        $now = CarbonImmutable::createFromFormat('Y-m-d', $today)->startOfDay();
         $day = fn (CarbonImmutable $date) => $date->format('Y-m-d');
         $week = fn (CarbonImmutable $date) => [
             'start' => $day($date->startOfWeek(CarbonImmutable::MONDAY)),
@@ -644,7 +654,7 @@ class BoardItemFilterEvaluator
         $month = fn (CarbonImmutable $date) => ['start' => $day($date->startOfMonth()), 'end' => $day($date->endOfMonth())];
 
         return match ($value) {
-            'today' => ['start' => $this->today, 'end' => $this->today],
+            'today' => ['start' => $today, 'end' => $today],
             'tomorrow' => ['start' => $day($now->addDay()), 'end' => $day($now->addDay())],
             'yesterday' => ['start' => $day($now->subDay()), 'end' => $day($now->subDay())],
             'this_week' => $week($now),
@@ -871,6 +881,6 @@ class BoardItemFilterEvaluator
 
     private static function isValuelessOperator(string $operator): bool
     {
-        return in_array($operator, ['is_empty', 'is_not_empty', 'is_checked', 'is_unchecked'], true);
+        return in_array($operator, ['is_empty', 'is_not_empty', 'is_checked', 'is_unchecked', ...AutomationConditionEvaluator::VALUELESS_OPERATORS], true);
     }
 }

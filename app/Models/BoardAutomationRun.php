@@ -20,12 +20,13 @@ use Illuminate\Support\Carbon;
  * @property int $automation_id
  * @property int $board_item_id
  * @property string $ran_on
+ * @property string $anchor when the stretch a "stuck" or "not updated" trigger fired for began, empty for date triggers
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read BoardAutomation $automation
  * @property-read BoardItem $item
  */
-#[Fillable(['automation_id', 'board_item_id', 'ran_on'])]
+#[Fillable(['automation_id', 'board_item_id', 'ran_on', 'anchor'])]
 class BoardAutomationRun extends Model
 {
     /**

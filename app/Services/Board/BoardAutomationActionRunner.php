@@ -22,6 +22,7 @@ use App\Services\Board\AutomationActions\RunsDigestActions;
 use App\Services\Board\AutomationActions\RunsFlowActions;
 use App\Services\Board\AutomationActions\RunsGroupActions;
 use App\Services\Board\AutomationActions\RunsOutboundActions;
+use App\Services\Board\AutomationActions\RunsPositionActions;
 use App\Services\Board\AutomationActions\RunsSubitemActions;
 use App\Services\Board\AutomationActions\RunsSubscriberActions;
 use App\Services\Notification\NotificationService;
@@ -50,7 +51,7 @@ use Illuminate\Support\Facades\DB;
  * emails, Slack messages and webhooks only report who they would have reached.
  *
  * Date, group, column, flow (round robin, cascades, checklists, dependents), bulk (rename, add or
- * remove values, connected items, whole groups) and outbound actions live in the traits under
+ * remove values, connected items, whole groups), position (top, bottom, sort) and outbound actions live in the traits under
  * `AutomationActions`. The "wait" action is handled by {@see BoardAutomationService} itself, since
  * it stops the branch.
  *
@@ -59,7 +60,7 @@ use Illuminate\Support\Facades\DB;
  */
 class BoardAutomationActionRunner
 {
-    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsDigestActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions, RunsSubitemActions, RunsSubscriberActions;
+    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsDigestActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions, RunsPositionActions, RunsSubitemActions, RunsSubscriberActions;
 
     public function __construct(
         private readonly NotificationService $notification_service,
@@ -136,6 +137,8 @@ class BoardAutomationActionRunner
             BoardAutomation::ACTION_CLEAR_SUBITEMS => $this->clearSubitems($automation, $params, $item, $actor),
             BoardAutomation::ACTION_CONVERT_SUBITEM => $this->convertSubitem($automation, $params, $item, $actor),
             BoardAutomation::ACTION_SEND_DIGEST => $this->sendDigest($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_MOVE_ITEM_POSITION => $this->moveItemPosition($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SORT_GROUP => $this->sortGroup($automation, $params, $item, $actor),
             BoardAutomation::ACTION_WAIT => BoardAutomationActionOutcome::skipped('A wait is handled by the automation itself.'),
             default => BoardAutomationActionOutcome::skipped('This action type is not supported.'),
         };

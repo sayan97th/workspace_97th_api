@@ -3,9 +3,11 @@
 namespace App\Services\Board;
 
 use App\Models\BoardAutomation;
+use App\Models\BoardAutomationRun;
 use App\Models\BoardAutomationSetting;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
+use App\Models\BoardItemComment;
 use App\Models\User;
 use App\Support\AutomationSchedule;
 use Carbon\CarbonImmutable;
@@ -70,7 +72,7 @@ class BoardAutomationImpactPreview
 
         $mode = match ($automation->trigger_type) {
             BoardAutomation::TRIGGER_ITEM_SCAN => 'scan',
-            BoardAutomation::TRIGGER_DATE_ARRIVED, BoardAutomation::TRIGGER_ITEM_OVERDUE => 'upcoming',
+            BoardAutomation::TRIGGER_DATE_ARRIVED, BoardAutomation::TRIGGER_ITEM_OVERDUE, BoardAutomation::TRIGGER_STATUS_STUCK, BoardAutomation::TRIGGER_ITEM_STALE => 'upcoming',
             default => 'conditions',
         };
 
@@ -78,7 +80,9 @@ class BoardAutomationImpactPreview
         foreach ($items as $item) {
             $fires_on = null;
             if ($mode === 'upcoming') {
-                $fires_on = $trigger_column ? $this->firesOn($automation, $trigger_column, $item) : null;
+                $fires_on = in_array($automation->trigger_type, BoardAutomation::quietTriggers(), true)
+                    ? $this->quietFiresOn($automation, $trigger_column, $item)
+                    : ($trigger_column ? $this->firesOn($automation, $trigger_column, $item) : null);
                 if ($fires_on === null) {
                     continue;
                 }
@@ -111,6 +115,52 @@ class BoardAutomationImpactPreview
             ], array_slice($matching, 0, self::MAX_LISTED)),
             'sample' => $first ? ['item' => ['id' => $first->id, 'name' => (string) $first->name], ...$this->automation_service->testRun($automation, $first, $actor)] : null,
         ];
+    }
+
+    /**
+     * The day a "status is stuck" or "item is not updated" trigger would fire for the item within
+     * the coming days, today for items already quiet long enough, null when it would not or it
+     * already fired for the current stretch.
+     */
+    private function quietFiresOn(BoardAutomation $automation, ?BoardColumn $column, BoardItem $item): ?string
+    {
+        $minutes = $automation->quietPeriodMinutes();
+        if ($minutes === null) {
+            return null;
+        }
+
+        if ($automation->trigger_type === BoardAutomation::TRIGGER_STATUS_STUCK) {
+            $value = $column ? $item->values->firstWhere('column_id', $column->id) : null;
+            $label = $automation->trigger_value;
+            if (! $value || $value->value === null || $value->value === '' || ($label !== null && $label !== '' && (string) $value->value !== (string) $label)) {
+                return null;
+            }
+            $since = $value->updated_at;
+        } else {
+            $group_id = $automation->trigger_config['group_id'] ?? null;
+            if ($group_id && (int) $group_id !== $item->group_id) {
+                return null;
+            }
+            $since = BoardItemFilterEvaluator::lastUpdatedAt($item);
+            $last_update = BoardItemComment::where('item_id', $item->id)->max('created_at');
+            if ($last_update !== null && ($since === null || CarbonImmutable::parse($last_update)->greaterThan($since))) {
+                $since = CarbonImmutable::parse($last_update);
+            }
+        }
+        if ($since === null) {
+            return null;
+        }
+
+        $since = CarbonImmutable::instance($since);
+        if (BoardAutomationRun::where('automation_id', $automation->id)->where('board_item_id', $item->id)->where('anchor', $since->format('Y-m-d H:i:s'))->exists()) {
+            return null;
+        }
+
+        $now = CarbonImmutable::now();
+        $fires = $since->addMinutes($minutes);
+        $fires = $fires->lessThan($now) ? $now : $fires;
+
+        return $fires->lessThanOrEqualTo($now->addDays(self::UPCOMING_DAYS)) ? $fires->toDateString() : null;
     }
 
     /**

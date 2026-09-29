@@ -182,6 +182,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // The account wide Automations center: every automation on the boards the user may open.
     Route::get('automations', [AccountAutomationController::class, 'index']);
     Route::post('automations/bulk', [AccountAutomationController::class, 'bulk'])->middleware('throttle:30,1');
+    Route::get('automations/usage', [AccountAutomationController::class, 'usage']);
+    Route::put('automations/usage', [AccountAutomationController::class, 'updateUsage'])->middleware('throttle:30,1');
     Route::get('home/recent-boards', [RecentBoardController::class, 'index']);
 
     // Broadcasting auth (JWT-based) — used by the frontend's Echo client to

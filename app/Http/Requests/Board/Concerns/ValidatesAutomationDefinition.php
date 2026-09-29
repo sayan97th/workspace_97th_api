@@ -78,7 +78,11 @@ trait ValidatesAutomationDefinition
     ];
 
     /** A condition may compare with a dynamic value unless its operator needs no value or two of them. */
-    private const DYNAMIC_OPERATORS_EXCLUDED = ['between', 'is_empty', 'is_not_empty', 'is_checked', 'is_unchecked', 'all_match', 'any_match', 'none_match', 'all_done', 'has_unfinished', 'is_running', 'is_not_running'];
+    private const DYNAMIC_OPERATORS_EXCLUDED = [
+        'between', 'is_empty', 'is_not_empty', 'is_checked', 'is_unchecked', 'all_match', 'any_match', 'none_match', 'all_done', 'has_unfinished', 'is_running', 'is_not_running',
+        'includes_today', 'not_includes_today', 'duration_greater_than', 'duration_less_than', 'duration_equals',
+        ...AutomationConditionEvaluator::CHECKLIST_OPERATORS, ...AutomationConditionEvaluator::VOTE_OPERATORS, ...AutomationConditionEvaluator::CONTACT_OPERATORS,
+    ];
 
     /** The longest a "wait" step may be, in minutes, {@see BoardAutomation::MAX_WAIT_DAYS}. */
     private const MAX_WAIT_MINUTES = BoardAutomation::MAX_WAIT_DAYS * 24 * 60;
@@ -121,6 +125,9 @@ trait ValidatesAutomationDefinition
             'trigger_config.operator' => ['sometimes', 'nullable', Rule::in(['above', 'below', 'equals'])],
             'trigger_config.threshold' => ['sometimes', 'nullable', 'numeric', 'between:-1000000000,1000000000'],
             'trigger_config.working_days_only' => ['sometimes', 'boolean'],
+            'trigger_config.amount' => ['sometimes', 'nullable', 'integer', 'between:1,'.(BoardAutomation::MAX_QUIET_DAYS * 24)],
+            'trigger_config.unit' => ['sometimes', 'nullable', Rule::in(['hours', 'days'])],
+            'trigger_config.timeline_part' => ['sometimes', 'nullable', Rule::in(['any', 'start', 'end'])],
             'trigger_config.schedule' => ['sometimes', 'nullable', 'array'],
             'trigger_config.schedule.frequency' => ['sometimes', 'string', Rule::in(AutomationSchedule::frequencies())],
             'trigger_config.schedule.weekdays' => ['sometimes', 'array', 'max:7'],
@@ -290,7 +297,7 @@ trait ValidatesAutomationDefinition
             $allowed_types = BoardAutomation::triggerColumnTypes($trigger_type);
             $required_scope = match ($trigger_type) {
                 BoardAutomation::TRIGGER_ALL_SUBITEMS_STATUS, BoardAutomation::TRIGGER_SUBITEM_COLUMN_CHANGED => BoardColumn::SCOPE_SUBITEM,
-                BoardAutomation::TRIGGER_ALL_GROUP_ITEMS_STATUS => BoardColumn::SCOPE_ITEM,
+                BoardAutomation::TRIGGER_ALL_GROUP_ITEMS_STATUS, BoardAutomation::TRIGGER_STATUS_STUCK => BoardColumn::SCOPE_ITEM,
                 default => null,
             };
             $needs_every_item_label = in_array($trigger_type, [BoardAutomation::TRIGGER_ALL_SUBITEMS_STATUS, BoardAutomation::TRIGGER_ALL_GROUP_ITEMS_STATUS], true);
@@ -324,6 +331,23 @@ trait ValidatesAutomationDefinition
 
         if (! empty($config['group_id']) && ! BoardGroup::where('board_view_id', $view_id)->whereKey((int) $config['group_id'])->exists()) {
             $validator->errors()->add('trigger_config.group_id', 'This group does not belong to this table.');
+        }
+
+        if (in_array($trigger_type, BoardAutomation::quietTriggers(), true)) {
+            $amount = (int) ($config['amount'] ?? 0);
+            $max = ($config['unit'] ?? 'days') === 'hours' ? BoardAutomation::MAX_QUIET_DAYS * 24 : BoardAutomation::MAX_QUIET_DAYS;
+            if ($amount < 1) {
+                $validator->errors()->add('trigger_config.amount', 'Enter how long nothing may change before the automation runs.');
+            } elseif ($amount > $max) {
+                $validator->errors()->add('trigger_config.amount', 'The wait may be '.BoardAutomation::MAX_QUIET_DAYS.' days at most.');
+            }
+        }
+
+        if ($trigger_type === BoardAutomation::TRIGGER_STATUS_STUCK && $this->input('trigger_value') !== null && $column_id) {
+            $stuck_column = BoardColumn::where('board_view_id', $view_id)->find((int) $column_id);
+            if ($stuck_column && ! collect($stuck_column->config['options'] ?? [])->contains(fn ($option) => (string) ($option['id'] ?? '') === (string) $this->input('trigger_value'))) {
+                $validator->errors()->add('trigger_value', 'Choose a label of this column, or any label.');
+            }
         }
 
         if ($trigger_type === BoardAutomation::TRIGGER_NUMBER_THRESHOLD && ! is_numeric($config['threshold'] ?? null)) {
@@ -694,6 +718,14 @@ trait ValidatesAutomationDefinition
                 'include_actor' => ['sometimes', 'boolean'],
             ],
             BoardAutomation::ACTION_CLEAR_SUBITEMS => ['operation' => ['required', Rule::in(['archive', 'delete'])]],
+            BoardAutomation::ACTION_MOVE_ITEM_POSITION => ['position' => ['required', Rule::in(['top', 'bottom'])]],
+            BoardAutomation::ACTION_SORT_GROUP => [
+                'from_item_group' => ['sometimes', 'boolean'],
+                'target_group_id' => ['required_unless:from_item_group,true', 'nullable', 'integer', $group_in_view],
+                'sort_by' => ['required', Rule::in(['column', 'name', 'created_at'])],
+                'sort_column_id' => ['required_if:sort_by,column', 'nullable', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', BoardColumn::SCOPE_ITEM)->where('type', '!=', BoardColumn::TYPE_BUTTON))],
+                'direction' => ['required', Rule::in(['asc', 'desc'])],
+            ],
             BoardAutomation::ACTION_CONVERT_SUBITEM => ['target_group_id' => ['sometimes', 'nullable', 'integer', $group_in_view]],
             BoardAutomation::ACTION_SEND_DIGEST => [
                 'user_ids' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_DIGEST_RECIPIENTS],

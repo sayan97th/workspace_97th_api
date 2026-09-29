@@ -184,6 +184,20 @@ class BoardAutomation extends Model
      */
     public const TRIGGER_UPDATE_KEYWORD = 'update_keyword';
 
+    /**
+     * Fires once the status (or label) column `trigger_column_id` has held the same label, `trigger_value` or any label
+     * when null, for `trigger_config.amount` `trigger_config.unit`s (`hours` or `days`). Checked on a schedule, once per
+     * item and stretch: the label has to change and get stuck again to fire again.
+     */
+    public const TRIGGER_STATUS_STUCK = 'status_stuck';
+
+    /**
+     * Fires once an item has not been updated, no column value, name or update posted, for `trigger_config.amount`
+     * `trigger_config.unit`s (`hours` or `days`), only items of `trigger_config.group_id` when set. Checked on a schedule,
+     * once per item and quiet stretch.
+     */
+    public const TRIGGER_ITEM_STALE = 'item_stale';
+
     /** Moves the item to `target_group_id`. */
     public const ACTION_MOVE_TO_GROUP = 'move_to_group';
 
@@ -342,6 +356,15 @@ class BoardAutomation extends Model
      */
     public const ACTION_SEND_DIGEST = 'send_digest';
 
+    /** Moves the item to the `position` `top` or `bottom` of its group, a subitem among its parent's subitems. */
+    public const ACTION_MOVE_ITEM_POSITION = 'move_item_position';
+
+    /**
+     * Sorts the items of `target_group_id`, or of the item's own group with `from_item_group`, by `sort_by` (a column id,
+     * `name` or `__created_at__`) in the `direction` `asc` or `desc`. Empty values always go last.
+     */
+    public const ACTION_SORT_GROUP = 'sort_group';
+
     /** Where a dynamic value comes from, see {@see AutomationDynamicValueResolver}. */
     public const DYNAMIC_SOURCES = ['actor', 'creator', 'owner', 'mentioned', 'today', 'column'];
 
@@ -388,8 +411,29 @@ class BoardAutomation extends Model
             self::TRIGGER_ITEM_RESTORED, self::TRIGGER_CHECKLIST_COMPLETED, self::TRIGGER_CHECKLIST_ITEM_CHECKED,
             self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED, self::TRIGGER_ITEM_OVERDUE,
             self::TRIGGER_SUBITEM_COLUMN_CHANGED, self::TRIGGER_USER_MENTIONED, self::TRIGGER_UPDATE_REPLIED,
-            self::TRIGGER_UPDATE_KEYWORD,
+            self::TRIGGER_UPDATE_KEYWORD, self::TRIGGER_STATUS_STUCK, self::TRIGGER_ITEM_STALE,
         ];
+    }
+
+    /** The longest quiet period a "stuck" or "not updated" trigger may wait, in days. */
+    public const MAX_QUIET_DAYS = 365;
+
+    /**
+     * How long a "stuck" or "not updated" trigger waits, in minutes, null when it is not one or its
+     * `trigger_config.amount` is missing.
+     */
+    public function quietPeriodMinutes(): ?int
+    {
+        if (! in_array($this->trigger_type, self::quietTriggers(), true)) {
+            return null;
+        }
+
+        $amount = (int) ($this->trigger_config['amount'] ?? 0);
+        if ($amount < 1) {
+            return null;
+        }
+
+        return ($this->trigger_config['unit'] ?? 'days') === 'hours' ? $amount * 60 : $amount * 1440;
     }
 
     /**
@@ -432,7 +476,7 @@ class BoardAutomation extends Model
             self::TRIGGER_ALL_SUBITEMS_STATUS, self::TRIGGER_ALL_GROUP_ITEMS_STATUS, self::TRIGGER_DATE_CHANGED,
             self::TRIGGER_BUTTON_CLICKED, self::TRIGGER_NUMBER_THRESHOLD, self::TRIGGER_CHECKLIST_COMPLETED,
             self::TRIGGER_CHECKLIST_ITEM_CHECKED, self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED,
-            self::TRIGGER_ITEM_OVERDUE, self::TRIGGER_SUBITEM_COLUMN_CHANGED,
+            self::TRIGGER_ITEM_OVERDUE, self::TRIGGER_SUBITEM_COLUMN_CHANGED, self::TRIGGER_STATUS_STUCK,
         ];
     }
 
@@ -444,7 +488,7 @@ class BoardAutomation extends Model
     public static function triggerColumnTypes(string $trigger_type): ?array
     {
         return match ($trigger_type) {
-            self::TRIGGER_STATUS_CHANGED, self::TRIGGER_ALL_SUBITEMS_STATUS, self::TRIGGER_ALL_GROUP_ITEMS_STATUS => [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL],
+            self::TRIGGER_STATUS_CHANGED, self::TRIGGER_ALL_SUBITEMS_STATUS, self::TRIGGER_ALL_GROUP_ITEMS_STATUS, self::TRIGGER_STATUS_STUCK => [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL],
             self::TRIGGER_DATE_ARRIVED => [BoardColumn::TYPE_DATE],
             self::TRIGGER_DATE_CHANGED => [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE],
             self::TRIGGER_PERSON_ASSIGNED, self::TRIGGER_PERSON_UNASSIGNED => [BoardColumn::TYPE_PEOPLE],
@@ -478,6 +522,7 @@ class BoardAutomation extends Model
             self::ACTION_RENAME_ITEM, self::ACTION_CHANGE_VALUES, self::ACTION_UPDATE_CONNECTED_ITEMS, self::ACTION_GROUP_ITEMS,
             self::ACTION_SUBSCRIBE_PEOPLE, self::ACTION_UNSUBSCRIBE_PEOPLE, self::ACTION_NOTIFY_SUBSCRIBERS,
             self::ACTION_CLEAR_SUBITEMS, self::ACTION_CONVERT_SUBITEM, self::ACTION_SEND_DIGEST,
+            self::ACTION_MOVE_ITEM_POSITION, self::ACTION_SORT_GROUP,
         ];
     }
 
@@ -501,8 +546,19 @@ class BoardAutomation extends Model
             self::ACTION_CREATE_ITEM, self::ACTION_NOTIFY_PERSON, self::ACTION_SEND_EMAIL, self::ACTION_SLACK_NOTIFY_CHANNEL,
             self::ACTION_SLACK_NOTIFY_PERSON, self::ACTION_CREATE_GROUP, self::ACTION_DUPLICATE_GROUP, self::ACTION_ARCHIVE_GROUP,
             self::ACTION_NOTIFY_TEAM, self::ACTION_SEND_WEBHOOK, self::ACTION_WAIT, self::ACTION_GROUP_ITEMS,
-            self::ACTION_SEND_DIGEST,
+            self::ACTION_SEND_DIGEST, self::ACTION_SORT_GROUP,
         ];
+    }
+
+    /**
+     * Triggers checked by the scheduler that watch how long nothing changed, see
+     * {@see BoardAutomationService::runStuckTriggers()}.
+     *
+     * @return array<int, string>
+     */
+    public static function quietTriggers(): array
+    {
+        return [self::TRIGGER_STATUS_STUCK, self::TRIGGER_ITEM_STALE];
     }
 
     /**

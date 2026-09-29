@@ -50,6 +50,9 @@ class BoardAutomationRunChange extends Model
 
     public const KIND_CREATED = 'created';
 
+    /** Items put in a new order, `before.order` and `after.order` list their ids. */
+    public const KIND_REORDERED = 'reordered';
+
     /** How long after a run it can still be undone. */
     public const UNDO_WINDOW_DAYS = 30;
 
