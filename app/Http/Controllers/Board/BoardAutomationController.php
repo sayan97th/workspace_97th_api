@@ -15,6 +15,7 @@ use App\Models\BoardAutomationRunLog;
 use App\Models\BoardAutomationTemplate;
 use App\Models\BoardItem;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\AutomationDynamicValueResolver;
 use App\Services\Board\BoardAutomationHealthChecker;
 use App\Services\Board\BoardAutomationImpactPreview;
 use App\Services\Board\BoardAutomationRunUndoer;
@@ -500,6 +501,13 @@ class BoardAutomationController extends Controller
             'condition' => (string) $rule['condition'],
             'value' => (string) ($rule['value'] ?? ''),
             'values' => array_values(array_map('strval', array_filter((array) ($rule['values'] ?? []), 'is_scalar'))),
+            // A value read on every run ("today + 3 days", "the item creator"), see `AutomationDynamicValueResolver`.
+            ...(AutomationDynamicValueResolver::isDynamic($rule['dynamic'] ?? null) ? ['dynamic' => array_filter([
+                'source' => (string) $rule['dynamic']['source'],
+                'offset_days' => isset($rule['dynamic']['offset_days']) ? (int) $rule['dynamic']['offset_days'] : null,
+                'use_working_days' => ! empty($rule['dynamic']['use_working_days']) ? true : null,
+                'column_id' => isset($rule['dynamic']['column_id']) ? (int) $rule['dynamic']['column_id'] : null,
+            ], fn ($value) => $value !== null)] : []),
         ];
         // A "subitems" condition keeps its nested rule on a subitem column.
         $to_rules = fn (mixed $list) => array_values(array_map(

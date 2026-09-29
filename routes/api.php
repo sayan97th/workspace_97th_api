@@ -31,6 +31,7 @@ use App\Http\Controllers\Auth\StaffInvitationController;
 use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\Auth\WorkspaceInvitationController as AuthWorkspaceInvitationController;
 use App\Http\Controllers\Auth\WorkspaceInviteLinkController as AuthWorkspaceInviteLinkController;
+use App\Http\Controllers\Automation\AccountAutomationController;
 use App\Http\Controllers\Board\AccountAutomationTemplateController;
 use App\Http\Controllers\Board\BoardActivityLogController;
 use App\Http\Controllers\Board\BoardAutomationController;
@@ -178,6 +179,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::put('favorites/{item}', [FavoriteController::class, 'store']);
     Route::delete('favorites/{item}', [FavoriteController::class, 'destroy']);
     Route::get('my-work', [MyWorkController::class, 'index']);
+    // The account wide Automations center: every automation on the boards the user may open.
+    Route::get('automations', [AccountAutomationController::class, 'index']);
+    Route::post('automations/bulk', [AccountAutomationController::class, 'bulk'])->middleware('throttle:30,1');
     Route::get('home/recent-boards', [RecentBoardController::class, 'index']);
 
     // Broadcasting auth (JWT-based) — used by the frontend's Echo client to

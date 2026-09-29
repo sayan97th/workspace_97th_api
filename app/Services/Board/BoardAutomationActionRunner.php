@@ -18,9 +18,12 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\AutomationActions\RunsBulkActions;
 use App\Services\Board\AutomationActions\RunsColumnActions;
 use App\Services\Board\AutomationActions\RunsDateActions;
+use App\Services\Board\AutomationActions\RunsDigestActions;
 use App\Services\Board\AutomationActions\RunsFlowActions;
 use App\Services\Board\AutomationActions\RunsGroupActions;
 use App\Services\Board\AutomationActions\RunsOutboundActions;
+use App\Services\Board\AutomationActions\RunsSubitemActions;
+use App\Services\Board\AutomationActions\RunsSubscriberActions;
 use App\Services\Notification\NotificationService;
 use App\Services\Slack\SlackNotifier;
 use App\Support\BoardEditGate;
@@ -56,7 +59,7 @@ use Illuminate\Support\Facades\DB;
  */
 class BoardAutomationActionRunner
 {
-    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions;
+    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsDigestActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions, RunsSubitemActions, RunsSubscriberActions;
 
     public function __construct(
         private readonly NotificationService $notification_service,
@@ -68,6 +71,8 @@ class BoardAutomationActionRunner
         private readonly BoardAutomationRunJournal $journal,
         private readonly BoardFormulaResolver $formula_resolver,
         private readonly MirrorColumnResolver $mirror_resolver,
+        private readonly AutomationDynamicValueResolver $dynamic_values,
+        private readonly AutomationConditionEvaluator $condition_evaluator,
     ) {}
 
     /**
@@ -95,14 +100,14 @@ class BoardAutomationActionRunner
             BoardAutomation::ACTION_ARCHIVE_ITEM => $this->archiveItem($automation, $item, $actor),
             BoardAutomation::ACTION_DELETE_ITEM => $this->deleteItem($automation, $item, $actor),
             BoardAutomation::ACTION_DUPLICATE_ITEM => $this->duplicateItem($automation, $params, $item, $actor),
-            BoardAutomation::ACTION_SET_COLUMN_VALUE => $this->setColumnValue($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SET_COLUMN_VALUE => $this->setColumnValue($automation, $params, $item, $actor, $context),
             BoardAutomation::ACTION_CLEAR_COLUMN => $this->clearColumn($automation, $params, $item, $actor),
             BoardAutomation::ACTION_ASSIGN_PERSON => $this->assignPerson($automation, $params, $item, $actor),
             BoardAutomation::ACTION_UNASSIGN_PEOPLE => $this->unassignPeople($automation, $params, $item, $actor),
             BoardAutomation::ACTION_SET_DATE => $this->setDate($automation, $params, $item, $actor),
             BoardAutomation::ACTION_ADJUST_NUMBER => $this->adjustNumber($automation, $params, $item, $actor),
             BoardAutomation::ACTION_CREATE_ITEM => $this->createItem($automation, $params, $item, $actor, $context),
-            BoardAutomation::ACTION_CREATE_SUBITEM => $this->createSubitems($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_CREATE_SUBITEM => $this->createSubitems($automation, $params, $item, $actor, $context),
             BoardAutomation::ACTION_POST_UPDATE => $this->postUpdate($automation, $params, $item, $actor, $context),
             BoardAutomation::ACTION_SHIFT_DATE => $this->shiftDate($automation, $params, $item, $actor),
             BoardAutomation::ACTION_SET_DATE_FROM_COLUMN => $this->setDateFromColumn($automation, $params, $item, $actor),
@@ -125,6 +130,12 @@ class BoardAutomationActionRunner
             BoardAutomation::ACTION_CHANGE_VALUES => $this->changeValues($automation, $params, $item, $actor),
             BoardAutomation::ACTION_UPDATE_CONNECTED_ITEMS => $this->updateConnectedItems($automation, $params, $item, $actor),
             BoardAutomation::ACTION_GROUP_ITEMS => $this->groupItems($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SUBSCRIBE_PEOPLE => $this->subscribePeople($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_UNSUBSCRIBE_PEOPLE => $this->unsubscribePeople($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_NOTIFY_SUBSCRIBERS => $this->notifySubscribers($automation, $params, $item, $actor, $context),
+            BoardAutomation::ACTION_CLEAR_SUBITEMS => $this->clearSubitems($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_CONVERT_SUBITEM => $this->convertSubitem($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_SEND_DIGEST => $this->sendDigest($automation, $params, $item, $actor, $context),
             BoardAutomation::ACTION_WAIT => BoardAutomationActionOutcome::skipped('A wait is handled by the automation itself.'),
             default => BoardAutomationActionOutcome::skipped('This action type is not supported.'),
         };
@@ -239,9 +250,13 @@ class BoardAutomationActionRunner
     // ── Column values ─────────────────────────────────────────────────────────
 
     /**
+     * Writes `value`, or with `dynamic_value` what it stands for on this run, see
+     * {@see AutomationDynamicValueResolver}.
+     *
      * @param  array<string, mixed>  $params
+     * @param  array<string, mixed>  $context
      */
-    private function setColumnValue(BoardAutomation $automation, array $params, BoardItem $item, ?User $actor): BoardAutomationActionOutcome
+    private function setColumnValue(BoardAutomation $automation, array $params, BoardItem $item, ?User $actor, array $context = []): BoardAutomationActionOutcome
     {
         $target = $this->resolveColumnTarget($automation, $params, $item);
         if (is_string($target)) {
@@ -250,6 +265,12 @@ class BoardAutomationActionRunner
         [$column, $subject] = $target;
 
         $value = $params['value'] ?? null;
+        if (AutomationDynamicValueResolver::isDynamic($params['dynamic_value'] ?? null)) {
+            [$is_resolved, $value] = $this->dynamic_values->forColumn($params['dynamic_value'], $column, $subject, $actor, $automation, $context);
+            if (! $is_resolved) {
+                return BoardAutomationActionOutcome::skipped("Found no value to write into \"{$column->label}\" on this run.");
+            }
+        }
         if ($this->valuesAreEqual($this->currentValue($subject, $column), $value)) {
             return BoardAutomationActionOutcome::skipped("\"{$column->label}\" already had that value.");
         }
@@ -494,13 +515,27 @@ class BoardAutomationActionRunner
     }
 
     /**
+     * One subitem per name of `subitem_names` (tokens such as `{item_name}` and `{column:12}` filled
+     * in), and with `source_column_id` one per entry of that column on the item: a line of a text,
+     * a task of a checklist, a label of tags or a dropdown.
+     *
      * @param  array<string, mixed>  $params
+     * @param  array<string, mixed>  $context
      */
-    private function createSubitems(BoardAutomation $automation, array $params, BoardItem $item, ?User $actor): BoardAutomationActionOutcome
+    private function createSubitems(BoardAutomation $automation, array $params, BoardItem $item, ?User $actor, array $context = []): BoardAutomationActionOutcome
     {
-        $names = array_values(array_filter(array_map(fn ($name) => trim((string) $name), (array) ($params['subitem_names'] ?? [])), fn (string $name) => $name !== ''));
+        $names = array_map(fn ($name) => $this->renderer->renderPlain((string) $name, '', $automation, $item, $actor, $context), (array) ($params['subitem_names'] ?? []));
+        if (! empty($params['source_column_id'])) {
+            $source = $this->resolveColumnTarget($automation, $params, $item, null, 'source_column_id');
+            if (is_string($source)) {
+                return BoardAutomationActionOutcome::skipped($source);
+            }
+            array_push($names, ...$this->listEntries($source[0], $this->currentValue($source[1], $source[0])));
+        }
+
+        $names = array_slice(array_values(array_filter(array_map('trim', $names), fn (string $name) => $name !== '')), 0, self::MAX_CREATED_SUBITEMS);
         if ($names === []) {
-            return BoardAutomationActionOutcome::skipped('No subitem names are set.');
+            return BoardAutomationActionOutcome::skipped(empty($params['source_column_id']) ? 'No subitem names are set.' : 'The list column was empty, so no subitem was created.');
         }
 
         $position = (int) BoardItem::where('parent_id', $item->id)->max('position') + 1;
@@ -559,7 +594,7 @@ class BoardAutomationActionRunner
      */
     private function notifyPerson(BoardAutomation $automation, array $params, ?BoardItem $item, ?User $actor, array $context): BoardAutomationActionOutcome
     {
-        $recipients = $this->resolveRecipients($params, $item);
+        $recipients = $this->resolveRecipients($automation, $params, $item, $actor, $context);
         if ($recipients->isEmpty()) {
             return BoardAutomationActionOutcome::skipped('Found nobody to notify.');
         }
@@ -610,7 +645,7 @@ class BoardAutomationActionRunner
         $link = $item ? "/boards/{$item->board_id}/pulses/{$item->id}" : "/boards/{$board->id}";
 
         if ($this->run_context->isDryRun()) {
-            return $this->describeCommunication($type, $params, $item);
+            return $this->describeCommunication($automation, $type, $params, $item, $actor, $context);
         }
 
         $outcomes = [];
@@ -625,7 +660,7 @@ class BoardAutomationActionRunner
             $outcomes[] = $was_sent ? "posted to Slack channel #{$channel_name}" : 'could not post to Slack because Slack is not connected';
             $was_sent ? $delivered_count++ : $failed_count++;
         } else {
-            $recipients = $this->resolveRecipients($params, $item);
+            $recipients = $this->resolveRecipients($automation, $params, $item, $actor, $context);
             $addresses = $type === BoardAutomation::ACTION_SEND_EMAIL ? $this->resolveEmailAddresses($params, $item, $recipients) : [];
             if ($recipients->isEmpty() && $addresses === []) {
                 $outcomes[] = 'found nobody to notify';
@@ -674,14 +709,15 @@ class BoardAutomationActionRunner
      * What a communication action would have done, for a test run.
      *
      * @param  array<string, mixed>  $params
+     * @param  array<string, mixed>  $context
      */
-    private function describeCommunication(string $type, array $params, ?BoardItem $item): BoardAutomationActionOutcome
+    private function describeCommunication(BoardAutomation $automation, string $type, array $params, ?BoardItem $item, ?User $actor, array $context): BoardAutomationActionOutcome
     {
         if ($type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL) {
             return BoardAutomationActionOutcome::success('Would post to Slack channel #'.($params['slack_channel_name'] ?? $params['slack_channel_id'] ?? 'channel').'.');
         }
 
-        $recipients = $this->resolveRecipients($params, $item);
+        $recipients = $this->resolveRecipients($automation, $params, $item, $actor, $context);
         $names = $recipients->map(fn (User $user) => $user->full_name)
             ->merge($type === BoardAutomation::ACTION_SEND_EMAIL ? $this->resolveEmailAddresses($params, $item, $recipients) : [])
             ->implode(', ');
@@ -693,16 +729,29 @@ class BoardAutomationActionRunner
     }
 
     /**
-     * Everyone a notify or communication action should reach: a fixed `notify_user_id`, or every
-     * person `notify_from_people_column_id` currently holds. Deactivated accounts are skipped.
+     * Everyone a notify or communication action should reach: a fixed `notify_user_id`, the person
+     * `recipient_source` stands for on this run (`actor`, `creator`, `owner`, `mentioned`, or every
+     * `subscribers` of the item), or every person `notify_from_people_column_id` currently holds.
+     * Deactivated accounts are skipped.
      *
      * @param  array<string, mixed>  $params
+     * @param  array<string, mixed>  $context
      * @return Collection<int, User>
      */
-    private function resolveRecipients(array $params, ?BoardItem $item): Collection
+    private function resolveRecipients(BoardAutomation $automation, array $params, ?BoardItem $item, ?User $actor = null, array $context = []): Collection
     {
         if ($user_id = $params['notify_user_id'] ?? null) {
             return User::whereKey($user_id)->where('is_active', true)->get();
+        }
+
+        $source = $params['recipient_source'] ?? null;
+        if ($source === 'subscribers') {
+            return $item ? $this->dynamic_values->subscribers($item) : new Collection;
+        }
+        if (is_string($source) && in_array($source, BoardAutomation::RECIPIENT_SOURCES, true)) {
+            $person_ids = $this->dynamic_values->personIds(['source' => $source], $item, $actor, $automation, $context);
+
+            return $person_ids ? User::whereIn('id', $person_ids)->where('is_active', true)->get() : new Collection;
         }
 
         if ($item && ($people_column_id = $params['notify_from_people_column_id'] ?? null)) {

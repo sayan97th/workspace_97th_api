@@ -123,6 +123,12 @@ final class AutomationCopier
             if (! is_array($rule)) {
                 continue;
             }
+            if (is_array($rule['dynamic'] ?? null) && ! empty($rule['dynamic']['column_id'])) {
+                $rule['dynamic']['column_id'] = $this->mapColumn((int) $rule['dynamic']['column_id'], 'a column a condition compares with');
+                if ($rule['dynamic']['column_id'] === null) {
+                    continue;
+                }
+            }
             $field_id = (string) ($rule['column_id'] ?? '');
             if (! is_numeric($field_id)) {
                 $rule['values'] = $field_id === '__group__'
@@ -174,6 +180,15 @@ final class AutomationCopier
             }
             foreach ((array) ($params['field_mappings'] ?? []) as $index => $mapping) {
                 $params['field_mappings'][$index]['column_id'] = $this->mapColumn((int) ($mapping['column_id'] ?? 0), 'a column to fill');
+            }
+            if (is_array($params['dynamic_value'] ?? null) && ! empty($params['dynamic_value']['column_id'])) {
+                $params['dynamic_value']['column_id'] = $this->mapColumn((int) $params['dynamic_value']['column_id'], 'the column a value is read from');
+            }
+            if (isset($params['column_ids'])) {
+                $params['column_ids'] = array_values(array_filter(array_map(fn ($id) => $this->mapColumn((int) $id, 'a column the digest shows'), (array) $params['column_ids'])));
+            }
+            if (isset($params['digest_rules'])) {
+                $params['digest_rules'] = $this->mapRules((array) $params['digest_rules']);
             }
 
             if ($action['type'] === BoardAutomation::ACTION_CHANGE_VALUES && $this->isOptionColumn($source_target_column)) {

@@ -6,7 +6,7 @@ namespace App\Support;
  * Shape and defaults of `users.sidebar_preferences`, the personal layout of
  * the workspace sidebar:
  *
- * - `sections`: every personal section (Home, My work, Favorites, Recent)
+ * - `sections`: every personal section (Home, My work, Automations, Favorites, Recent)
  *   in the order the user dragged them to, each one shown or hidden.
  * - `collapsed_sections`: the collapsible sections the user folded, plus the
  *   Favorites workspace groups, stored as `favorites_workspace:{id}`.
@@ -16,7 +16,7 @@ namespace App\Support;
  */
 final class SidebarPreferences
 {
-    public const SECTION_KEYS = ['home', 'my_work', 'favorites', 'recent'];
+    public const SECTION_KEYS = ['home', 'my_work', 'automations', 'favorites', 'recent'];
 
     public const COLLAPSED_SECTION_PATTERN = '/^(favorites|recent|favorites_workspace:\d+)$/';
 

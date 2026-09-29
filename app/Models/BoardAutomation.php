@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Console\Commands\Board\RunDueDateAutomationsCommand;
 use App\Console\Commands\Board\RunScheduledAutomationsCommand;
+use App\Services\Board\AutomationDynamicValueResolver;
 use App\Services\Board\BoardAutomationService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
@@ -164,6 +165,25 @@ class BoardAutomation extends Model
      */
     public const TRIGGER_ITEM_OVERDUE = 'item_overdue';
 
+    /**
+     * Fires once a subitem column (`trigger_column_id`, subitem scope) changes on any subitem, or only once the new value
+     * passes `trigger_config.match` (the same per type match `column_changed` uses). The actions run on the parent item
+     * when `trigger_config.run_on` is `parent` (the default) and on the subitem itself when it is `subitem`.
+     */
+    public const TRIGGER_SUBITEM_COLUMN_CHANGED = 'subitem_column_changed';
+
+    /** Fires once for every person `@mentioned` in an update or reply, only for the user id `trigger_value` when set. */
+    public const TRIGGER_USER_MENTIONED = 'user_mentioned';
+
+    /** Fires once someone replies to an update of an item, only replies written by the user id `trigger_value` when set. */
+    public const TRIGGER_UPDATE_REPLIED = 'update_replied';
+
+    /**
+     * Fires once an update (and a reply, with `trigger_config.include_replies`) contains one of `trigger_config.keywords`,
+     * matched without case anywhere in its text.
+     */
+    public const TRIGGER_UPDATE_KEYWORD = 'update_keyword';
+
     /** Moves the item to `target_group_id`. */
     public const ACTION_MOVE_TO_GROUP = 'move_to_group';
 
@@ -292,6 +312,42 @@ class BoardAutomation extends Model
      */
     public const ACTION_GROUP_ITEMS = 'group_items';
 
+    /**
+     * Subscribes people to the item, so its updates show in their Update Feed "Following" tab: the fixed `user_ids`,
+     * whoever the people column `notify_from_people_column_id` holds, every member of `team_id`, and the person
+     * `recipient_source` names (`actor`, `creator`, `owner` or `mentioned`).
+     */
+    public const ACTION_SUBSCRIBE_PEOPLE = 'subscribe_people';
+
+    /** Unsubscribes the same people {@see self::ACTION_SUBSCRIBE_PEOPLE} resolves from the item, or everyone with `everyone`. */
+    public const ACTION_UNSUBSCRIBE_PEOPLE = 'unsubscribe_people';
+
+    /** Notifies everyone subscribed to the item with an optional `message`, leaving out whoever set the automation off unless `include_actor`. */
+    public const ACTION_NOTIFY_SUBSCRIBERS = 'notify_subscribers';
+
+    /** Archives (`operation` `archive`) or deletes (`delete`) every subitem of the item. */
+    public const ACTION_CLEAR_SUBITEMS = 'clear_subitems';
+
+    /**
+     * Turns a subitem into an item of its parent's group (or of `target_group_id`), copying the values of subitem columns
+     * into the item columns with the same label and type.
+     */
+    public const ACTION_CONVERT_SUBITEM = 'convert_subitem';
+
+    /**
+     * Emails a table of the tab's items that pass `digest_rules` (board filter rules combined with `digest_operator`),
+     * only of `target_group_id` when set, showing `column_ids`, to `user_ids` and the members of `team_id`. At most
+     * `max_items` rows, nothing is sent when no item matches unless `send_when_empty`. Works without an item, so a
+     * recurring trigger can send it every week.
+     */
+    public const ACTION_SEND_DIGEST = 'send_digest';
+
+    /** Where a dynamic value comes from, see {@see AutomationDynamicValueResolver}. */
+    public const DYNAMIC_SOURCES = ['actor', 'creator', 'owner', 'mentioned', 'today', 'column'];
+
+    /** The people a recipient token can stand for, besides fixed people and people columns. */
+    public const RECIPIENT_SOURCES = ['actor', 'creator', 'owner', 'mentioned', 'subscribers'];
+
     public const FAILURE_ALERT_APP = 'app';
 
     public const FAILURE_ALERT_APP_AND_EMAIL = 'app_and_email';
@@ -331,7 +387,17 @@ class BoardAutomation extends Model
             self::TRIGGER_BUTTON_CLICKED, self::TRIGGER_NUMBER_THRESHOLD, self::TRIGGER_ITEM_MOVED_TO_BOARD,
             self::TRIGGER_ITEM_RESTORED, self::TRIGGER_CHECKLIST_COMPLETED, self::TRIGGER_CHECKLIST_ITEM_CHECKED,
             self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED, self::TRIGGER_ITEM_OVERDUE,
+            self::TRIGGER_SUBITEM_COLUMN_CHANGED, self::TRIGGER_USER_MENTIONED, self::TRIGGER_UPDATE_REPLIED,
+            self::TRIGGER_UPDATE_KEYWORD,
         ];
+    }
+
+    /**
+     * Where a `subitem_column_changed` automation runs its actions: `parent` (default) or `subitem`.
+     */
+    public function runsOnSubitem(): bool
+    {
+        return $this->trigger_type === self::TRIGGER_SUBITEM_COLUMN_CHANGED && ($this->trigger_config['run_on'] ?? 'parent') === 'subitem';
     }
 
     /**
@@ -366,7 +432,7 @@ class BoardAutomation extends Model
             self::TRIGGER_ALL_SUBITEMS_STATUS, self::TRIGGER_ALL_GROUP_ITEMS_STATUS, self::TRIGGER_DATE_CHANGED,
             self::TRIGGER_BUTTON_CLICKED, self::TRIGGER_NUMBER_THRESHOLD, self::TRIGGER_CHECKLIST_COMPLETED,
             self::TRIGGER_CHECKLIST_ITEM_CHECKED, self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED,
-            self::TRIGGER_ITEM_OVERDUE,
+            self::TRIGGER_ITEM_OVERDUE, self::TRIGGER_SUBITEM_COLUMN_CHANGED,
         ];
     }
 
@@ -410,6 +476,8 @@ class BoardAutomation extends Model
             self::ACTION_WAIT, self::ACTION_SHIFT_DEPENDENTS, self::ACTION_ASSIGN_ROUND_ROBIN,
             self::ACTION_SET_SUBITEMS_VALUE, self::ACTION_SET_PARENT_VALUE, self::ACTION_ADD_CHECKLIST_ITEMS,
             self::ACTION_RENAME_ITEM, self::ACTION_CHANGE_VALUES, self::ACTION_UPDATE_CONNECTED_ITEMS, self::ACTION_GROUP_ITEMS,
+            self::ACTION_SUBSCRIBE_PEOPLE, self::ACTION_UNSUBSCRIBE_PEOPLE, self::ACTION_NOTIFY_SUBSCRIBERS,
+            self::ACTION_CLEAR_SUBITEMS, self::ACTION_CONVERT_SUBITEM, self::ACTION_SEND_DIGEST,
         ];
     }
 
@@ -433,6 +501,7 @@ class BoardAutomation extends Model
             self::ACTION_CREATE_ITEM, self::ACTION_NOTIFY_PERSON, self::ACTION_SEND_EMAIL, self::ACTION_SLACK_NOTIFY_CHANNEL,
             self::ACTION_SLACK_NOTIFY_PERSON, self::ACTION_CREATE_GROUP, self::ACTION_DUPLICATE_GROUP, self::ACTION_ARCHIVE_GROUP,
             self::ACTION_NOTIFY_TEAM, self::ACTION_SEND_WEBHOOK, self::ACTION_WAIT, self::ACTION_GROUP_ITEMS,
+            self::ACTION_SEND_DIGEST,
         ];
     }
 

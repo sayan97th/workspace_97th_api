@@ -49,10 +49,14 @@ class AutomationConditionEvaluator
 
     private const NUMBER_OPERATORS = ['equals', 'not_equals', 'greater_than', 'greater_or_equal', 'less_than', 'less_or_equal', 'between'];
 
+    /** Set on a rule whose dynamic value named nothing on this run, see {@see self::resolveDynamicRules()}. */
+    private const UNRESOLVED_FLAG = '__dynamic_unresolved';
+
     public function __construct(
         private readonly BoardFormulaResolver $formula_resolver,
         private readonly MirrorColumnResolver $mirror_resolver,
         private readonly BoardAutomationMessageRenderer $renderer,
+        private readonly AutomationDynamicValueResolver $dynamic_values,
     ) {}
 
     /**
@@ -70,12 +74,43 @@ class AutomationConditionEvaluator
 
         $evaluator = new BoardItemFilterEvaluator($scoped, null, Carbon::today()->toDateString(), null, [], 'UTC', $this->extension($columns, $scoped, $actor));
 
-        return $evaluator->matches($item->relationLoaded('values') ? $item : $item->load('values'), [
+        return $evaluator->matches($item->relationLoaded('values') ? $item : $item->load('values'), $this->resolveDynamicRules([
             'advanced_filter_rows' => [],
             'advanced_filter_groups' => [],
             'advanced_filter_operator' => 'and',
             ...$filter_state,
-        ]);
+        ], $automation, $item, $actor, $columns));
+    }
+
+    /**
+     * Reads every rule's dynamic value ("today + 3 days", "the person who made the change", another
+     * column) for this item. A rule whose source names nothing is flagged, so it fails instead of
+     * being skipped like an incomplete rule would be.
+     *
+     * @param  array<string, mixed>  $filter_state
+     * @param  Collection<string, BoardColumn>  $columns
+     * @return array<string, mixed>
+     */
+    private function resolveDynamicRules(array $filter_state, BoardAutomation $automation, BoardItem $item, ?User $actor, Collection $columns): array
+    {
+        $resolve = function (mixed $rule) use ($automation, $item, $actor, $columns): mixed {
+            if (! is_array($rule) || ! AutomationDynamicValueResolver::isDynamic($rule['dynamic'] ?? null)) {
+                return $rule;
+            }
+
+            return $this->dynamic_values->forRule($rule, $item, $actor, $automation, $columns) ?? [...$rule, self::UNRESOLVED_FLAG => true];
+        };
+
+        $filter_state['advanced_filter_rows'] = array_map($resolve, (array) $filter_state['advanced_filter_rows']);
+        $filter_state['advanced_filter_groups'] = array_map(function (mixed $group) use ($resolve): mixed {
+            if (is_array($group)) {
+                $group['rules'] = array_map($resolve, (array) ($group['rules'] ?? []));
+            }
+
+            return $group;
+        }, (array) $filter_state['advanced_filter_groups']);
+
+        return $filter_state;
     }
 
     /**
@@ -96,6 +131,10 @@ class AutomationConditionEvaluator
     private function extension(Collection $all_columns, Collection $columns, ?User $actor): Closure
     {
         return function (BoardItem $item, array $rule) use ($all_columns, $columns, $actor): ?array {
+            if (! empty($rule[self::UNRESOLVED_FLAG])) {
+                return ['result' => false];
+            }
+
             $field_id = (string) ($rule['column_id'] ?? '');
             $operator = (string) ($rule['condition'] ?? '');
             $value = (string) ($rule['value'] ?? '');

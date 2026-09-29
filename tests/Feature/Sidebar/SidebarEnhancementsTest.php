@@ -26,7 +26,8 @@ test('the profile always returns a complete default sidebar layout', function ()
     $this->actingAs($user, 'api')->getJson('/api/profile')
         ->assertOk()
         ->assertJsonPath('data.sidebar_preferences.sections.0', ['key' => 'home', 'is_visible' => true])
-        ->assertJsonCount(4, 'data.sidebar_preferences.sections')
+        ->assertJsonPath('data.sidebar_preferences.sections.2', ['key' => 'automations', 'is_visible' => true])
+        ->assertJsonCount(5, 'data.sidebar_preferences.sections')
         ->assertJsonPath('data.sidebar_preferences.collapsed_sections', []);
 });
 

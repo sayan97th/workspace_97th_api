@@ -14,7 +14,8 @@ use Illuminate\Support\Str;
  * Fills in the text an automation writes: a notification, email, Slack message or update body,
  * an email subject and the name of an item it creates. Supported tokens: `{item_name}`,
  * `{board_name}`, `{actor_name}`, `{column_name}`, `{old_value}`, `{new_value}`, `{update_text}`,
- * `{automation_name}`, `{date}` (today, `YYYY-MM-DD`), `{week}` (ISO week number), `{month}` (e.g.
+ * `{subitem_name}` (the subitem a subitem column trigger fired for), `{mentioned_name}` (the person a
+ * mention trigger fired for), `{automation_name}`, `{date}` (today, `YYYY-MM-DD`), `{week}` (ISO week number), `{month}` (e.g.
  * "October 2026") and, for a webhook trigger, `{payload.some.key}` (a value of the JSON it received,
  * read with dot notation). `{column:12}` is the value column 12 holds on the item, as the board shows
  * it (a status by its label, people by name), an item column read from a subitem's parent. An
@@ -98,6 +99,8 @@ class BoardAutomationMessageRenderer
             '{old_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['old_value'] ?? null) : (string) ($context['old_text'] ?? ''),
             '{new_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['new_value'] ?? null) : (string) ($context['new_text'] ?? ''),
             '{update_text}' => Str::limit(trim((string) ($context['update_text'] ?? '')), 300),
+            '{subitem_name}' => isset($context['subitem_id']) ? (string) (BoardItem::withTrashed()->whereKey((int) $context['subitem_id'])->value('name') ?? '') : '',
+            '{mentioned_name}' => isset($context['mentioned_user_id']) ? (string) (User::whereKey((int) $context['mentioned_user_id'])->first()?->full_name ?? '') : '',
             '{automation_name}' => $automation->name ?: 'Automation',
             '{date}' => $today->toDateString(),
             '{week}' => (string) $today->isoWeek(),
@@ -195,6 +198,10 @@ class BoardAutomationMessageRenderer
             BoardAutomation::TRIGGER_ITEM_RESTORED => '"{item_name}" was restored on {board_name}.',
             BoardAutomation::TRIGGER_CHECKLIST_COMPLETED => 'Every task of {column_name} is done on "{item_name}".',
             BoardAutomation::TRIGGER_CHECKLIST_ITEM_CHECKED => '"{new_value}" was checked in {column_name} on "{item_name}".',
+            BoardAutomation::TRIGGER_SUBITEM_COLUMN_CHANGED => '{column_name} changed to "{new_value}" on the subitem "{subitem_name}" of "{item_name}".',
+            BoardAutomation::TRIGGER_USER_MENTIONED => '{actor_name} mentioned {mentioned_name} on "{item_name}": {update_text}',
+            BoardAutomation::TRIGGER_UPDATE_REPLIED => '{actor_name} replied on "{item_name}": {update_text}',
+            BoardAutomation::TRIGGER_UPDATE_KEYWORD => '{actor_name} wrote on "{item_name}": {update_text}',
             default => 'An automation ran on "{item_name}".',
         };
     }

@@ -19,6 +19,7 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
 use App\Support\AutomationSchedule;
+use App\Support\MarkdownPlainText;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -129,6 +130,50 @@ class BoardAutomationService
         }
 
         $this->handleColumnChanged($item, $column, $old_value, $new_value, $actor);
+
+        // A subitem only ever holds values of subitem columns (see `BoardItemValueService::sync()`,
+        // which also loads the column without its scope), so its parent is all that needs checking.
+        if ($item->parent_id !== null) {
+            $this->handleSubitemColumnChanged($item, $column, $old_value, $new_value, $actor);
+        }
+    }
+
+    /**
+     * Fires every `subitem_column_changed` automation watching the subitem column that just changed,
+     * on the parent item (or on the subitem itself with `trigger_config.run_on` `subitem`). Only once
+     * the new value passes `trigger_config.match` when one is set, read by the column's type like
+     * {@see self::changeMatches()}. The subitem is kept in the context as `subitem_id`, which
+     * `{subitem_name}` reads.
+     */
+    private function handleSubitemColumnChanged(BoardItem $subitem, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
+        if ($this->valuesAreEqual($old_value, $new_value)) {
+            return;
+        }
+
+        $automations = $this->enabledAutomations($subitem, BoardAutomation::TRIGGER_SUBITEM_COLUMN_CHANGED, $column->id);
+        if ($automations->isEmpty()) {
+            return;
+        }
+
+        $parent = null;
+        foreach ($automations as $automation) {
+            $match = $automation->trigger_config['match'] ?? null;
+            if (is_array($match) && ! empty($match['operator']) && ! $this->changeMatches($column, $old_value, $new_value, $match)) {
+                continue;
+            }
+
+            $subject = $subitem;
+            if (! $automation->runsOnSubitem()) {
+                $parent ??= BoardItem::with('group')->find($subitem->parent_id);
+                if (! $parent || $parent->is_archived) {
+                    continue;
+                }
+                $subject = $parent;
+            }
+
+            $this->executeAutomation($automation, $subject, $actor, [...$this->changeContext($column, $old_value, $new_value), 'subitem_id' => $subitem->id]);
+        }
     }
 
     /**
@@ -473,17 +518,83 @@ class BoardAutomationService
     }
 
     /**
-     * Reacts to a top-level update having just been posted on `$item`, replies do not count.
+     * Reacts to an update or a reply having just been posted on `$item`: `update_posted` (updates
+     * only), `update_replied` (replies only), `update_keyword` (updates, and replies when the
+     * automation asks for them) and `user_mentioned` (once for every person mentioned in either).
+     * Called wherever an update goes live, so mentions must already be stored.
      */
     public function handleUpdatePosted(BoardItem $item, BoardItemComment $comment, ?User $actor): void
     {
-        if ($comment->parent_id !== null) {
+        $context = ['update_text' => MarkdownPlainText::convert((string) $comment->body)];
+        $is_reply = $comment->parent_id !== null;
+
+        if (! $is_reply) {
+            foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_UPDATE_POSTED) as $automation) {
+                $this->executeAutomation($automation, $item, $actor, $context);
+            }
+        } else {
+            foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_UPDATE_REPLIED) as $automation) {
+                if ($automation->trigger_value !== null && (string) $automation->trigger_value !== (string) $actor?->id) {
+                    continue;
+                }
+                $this->executeAutomation($automation, $item, $actor, $context);
+            }
+        }
+
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_UPDATE_KEYWORD) as $automation) {
+            $config = (array) ($automation->trigger_config ?? []);
+            if ($is_reply && empty($config['include_replies'])) {
+                continue;
+            }
+            if ($this->matchedKeyword($context['update_text'], (array) ($config['keywords'] ?? [])) !== null) {
+                $this->executeAutomation($automation, $item, $actor, $context);
+            }
+        }
+
+        $this->handleMentions($item, $comment, $actor, $context);
+    }
+
+    /**
+     * Fires `user_mentioned` once for every person the update mentions, a `trigger_value` of null
+     * watches for anyone being mentioned, a user id only for that person. The person is kept in the
+     * context as `mentioned_user_id`, which "the mentioned person" and `{mentioned_name}` read.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function handleMentions(BoardItem $item, BoardItemComment $comment, ?User $actor, array $context): void
+    {
+        $mentioned_ids = $comment->mentions()->pluck('user_id')->map(fn ($id) => (int) $id)->unique()->values();
+        if ($mentioned_ids->isEmpty()) {
             return;
         }
 
-        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_UPDATE_POSTED) as $automation) {
-            $this->executeAutomation($automation, $item, $actor, ['update_text' => (string) $comment->body]);
+        $automations = $this->enabledAutomations($item, BoardAutomation::TRIGGER_USER_MENTIONED);
+        foreach ($mentioned_ids as $mentioned_id) {
+            foreach ($automations as $automation) {
+                if ($automation->trigger_value !== null && (string) $automation->trigger_value !== (string) $mentioned_id) {
+                    continue;
+                }
+                $this->executeAutomation($automation, $item, $actor, [...$context, 'mentioned_user_id' => $mentioned_id]);
+            }
         }
+    }
+
+    /**
+     * The first of `$keywords` found in `$text`, compared without case, null when none is.
+     *
+     * @param  array<int, mixed>  $keywords
+     */
+    public function matchedKeyword(string $text, array $keywords): ?string
+    {
+        $haystack = mb_strtolower($text);
+        foreach ($keywords as $keyword) {
+            $needle = mb_strtolower(trim(is_scalar($keyword) ? (string) $keyword : ''));
+            if ($needle !== '' && str_contains($haystack, $needle)) {
+                return (string) $keyword;
+            }
+        }
+
+        return null;
     }
 
     /**

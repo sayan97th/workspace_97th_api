@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\BoardAutomation;
 use App\Models\BoardColumn;
+use App\Services\Board\AutomationDynamicValueResolver;
 
 /**
  * Turns one board's automation into a definition any board can start from, for the account wide
@@ -60,6 +61,8 @@ final class PortableAutomationDefinition
                     'condition' => (string) ($condition['condition'] ?? ''),
                     'value' => $clears_values ? '' : (string) ($condition['value'] ?? ''),
                     'values' => $clears_values ? [] : array_values((array) ($condition['values'] ?? [])),
+                    // A dynamic value travels unless it reads a column of this board, that one is picked again.
+                    ...(AutomationDynamicValueResolver::isDynamic($condition['dynamic'] ?? null) && $condition['dynamic']['source'] !== 'column' ? ['dynamic' => $condition['dynamic']] : []),
                 ];
             }
 

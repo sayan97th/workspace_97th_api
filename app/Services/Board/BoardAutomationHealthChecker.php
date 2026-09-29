@@ -106,15 +106,7 @@ class BoardAutomationHealthChecker
     private function conditionProblems(BoardAutomation $automation, Collection $columns): array
     {
         $problems = [];
-        $is_missing = function (mixed $condition) use ($columns): bool {
-            $field_id = (string) (is_array($condition) ? ($condition['column_id'] ?? '') : '');
-            if (! in_array($field_id, self::VIRTUAL_FIELDS, true) && ! $columns->has((int) $field_id)) {
-                return true;
-            }
-            $nested = is_array($condition) ? ($condition['subitem_rule'] ?? null) : null;
-
-            return is_array($nested) && ! in_array((string) ($nested['column_id'] ?? ''), self::VIRTUAL_FIELDS, true) && ! $columns->has((int) ($nested['column_id'] ?? 0));
-        };
+        $is_missing = fn (mixed $condition): bool => $this->ruleIsMissingColumn($condition, $columns);
 
         foreach (array_values((array) ($automation->conditions ?? [])) as $index => $condition) {
             if ($is_missing($condition)) {
@@ -208,6 +200,27 @@ class BoardAutomationHealthChecker
         if ($type === BoardAutomation::ACTION_NOTIFY_TEAM && ! AccountTeam::whereKey((int) ($params['team_id'] ?? 0))->exists()) {
             $problems[] = $this->problem($path, 'The team this action notifies was deleted.');
         }
+        if ($type !== BoardAutomation::ACTION_NOTIFY_TEAM && ! empty($params['team_id']) && ! AccountTeam::whereKey((int) $params['team_id'])->exists()) {
+            $problems[] = $this->problem($path, 'The team this action reaches was deleted.');
+        }
+
+        $dynamic_column_id = is_array($params['dynamic_value'] ?? null) ? ($params['dynamic_value']['column_id'] ?? null) : null;
+        if (! empty($dynamic_column_id) && ! $columns->has((int) $dynamic_column_id)) {
+            $problems[] = $this->problem($path, 'The column this action reads its value from was deleted.');
+        }
+
+        foreach ((array) ($params['column_ids'] ?? []) as $column_id) {
+            if (! $columns->has((int) $column_id)) {
+                $problems[] = $this->problem($path, 'A column the digest shows was deleted.');
+                break;
+            }
+        }
+        foreach ((array) ($params['digest_rules'] ?? []) as $rule) {
+            if ($this->ruleIsMissingColumn($rule, $columns)) {
+                $problems[] = $this->problem($path, 'A column the digest filters on was deleted.');
+                break;
+            }
+        }
 
         $rotation = array_map('intval', (array) ($params['user_ids'] ?? []));
         if ($type === BoardAutomation::ACTION_ASSIGN_ROUND_ROBIN && $rotation !== [] && ! User::whereIn('id', $rotation)->where('is_active', true)->exists()) {
@@ -215,6 +228,33 @@ class BoardAutomationHealthChecker
         }
 
         return $problems;
+    }
+
+    /**
+     * Whether a condition or filter rule reads a column that no longer exists: its own field, the
+     * field of its nested subitem rule, or the column its dynamic value is read from.
+     *
+     * @param  Collection<int, BoardColumn>  $columns
+     */
+    private function ruleIsMissingColumn(mixed $rule, Collection $columns): bool
+    {
+        if (! is_array($rule)) {
+            return false;
+        }
+
+        $field_id = (string) ($rule['column_id'] ?? '');
+        if (! in_array($field_id, self::VIRTUAL_FIELDS, true) && ! $columns->has((int) $field_id)) {
+            return true;
+        }
+
+        $nested = $rule['subitem_rule'] ?? null;
+        if (is_array($nested) && ! in_array((string) ($nested['column_id'] ?? ''), self::VIRTUAL_FIELDS, true) && ! $columns->has((int) ($nested['column_id'] ?? 0))) {
+            return true;
+        }
+
+        $dynamic = $rule['dynamic'] ?? null;
+
+        return is_array($dynamic) && ($dynamic['source'] ?? null) === 'column' && ! $columns->has((int) ($dynamic['column_id'] ?? 0));
     }
 
     /**

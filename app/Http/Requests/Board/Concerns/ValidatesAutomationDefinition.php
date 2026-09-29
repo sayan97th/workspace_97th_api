@@ -11,9 +11,11 @@ use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Rules\SlackActionHasConnectedWorkspace;
 use App\Services\Board\AutomationConditionEvaluator;
+use App\Services\Board\AutomationDynamicValueResolver;
 use App\Support\AutomationSchedule;
 use App\Support\BoardEditGate;
 use App\Support\OutboundWebhookUrl;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Validator as ValidatorFacade;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -58,6 +60,25 @@ trait ValidatesAutomationDefinition
     private const MAX_ROTATION_PEOPLE = 50;
 
     private const MAX_EMAIL_ADDRESSES = 10;
+
+    private const MAX_KEYWORDS = 20;
+
+    private const MAX_SUBSCRIPTION_PEOPLE = 50;
+
+    private const MAX_DIGEST_RULES = 10;
+
+    private const MAX_DIGEST_COLUMNS = 8;
+
+    private const MAX_DIGEST_RECIPIENTS = 50;
+
+    /** Column types "change column value" can fill from a dynamic value, see `AutomationDynamicValueResolver::forColumn()`. */
+    private const DYNAMIC_TARGET_TYPES = [
+        BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_VOTE, BoardColumn::TYPE_DATE, BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING,
+        BoardColumn::TYPE_PROGRESS, BoardColumn::TYPE_TEXT, BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_EMAIL, BoardColumn::TYPE_PHONE,
+    ];
+
+    /** A condition may compare with a dynamic value unless its operator needs no value or two of them. */
+    private const DYNAMIC_OPERATORS_EXCLUDED = ['between', 'is_empty', 'is_not_empty', 'is_checked', 'is_unchecked', 'all_match', 'any_match', 'none_match', 'all_done', 'has_unfinished', 'is_running', 'is_not_running'];
 
     /** The longest a "wait" step may be, in minutes, {@see BoardAutomation::MAX_WAIT_DAYS}. */
     private const MAX_WAIT_MINUTES = BoardAutomation::MAX_WAIT_DAYS * 24 * 60;
@@ -117,6 +138,10 @@ trait ValidatesAutomationDefinition
             'trigger_config.match.value' => ['sometimes', 'nullable', 'string', 'max:255'],
             'trigger_config.match.values' => ['sometimes', 'nullable', 'array', 'max:50'],
             'trigger_config.match.values.*' => ['nullable', 'string', 'max:255'],
+            'trigger_config.run_on' => ['sometimes', 'nullable', Rule::in(['parent', 'subitem'])],
+            'trigger_config.keywords' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_KEYWORDS],
+            'trigger_config.keywords.*' => ['string', 'max:60'],
+            'trigger_config.include_replies' => ['sometimes', 'boolean'],
             'conditions' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_CONDITIONS],
             'conditions.*' => ['array'],
             'conditions.*.column_id' => ['required', 'string', 'max:64'],
@@ -125,6 +150,7 @@ trait ValidatesAutomationDefinition
             'conditions.*.values' => ['sometimes', 'nullable', 'array', 'max:50'],
             'conditions.*.values.*' => ['nullable', 'string', 'max:255'],
             ...$this->subitemRuleRules('conditions.*'),
+            ...$this->dynamicValueRules('conditions.*.dynamic'),
             'condition_operator' => ['sometimes', Rule::in(['and', 'or'])],
             'condition_groups' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_CONDITION_GROUPS],
             'condition_groups.*' => ['array'],
@@ -137,6 +163,7 @@ trait ValidatesAutomationDefinition
             'condition_groups.*.rules.*.values' => ['sometimes', 'nullable', 'array', 'max:50'],
             'condition_groups.*.rules.*.values.*' => ['nullable', 'string', 'max:255'],
             ...$this->subitemRuleRules('condition_groups.*.rules.*'),
+            ...$this->dynamicValueRules('condition_groups.*.rules.*.dynamic'),
             // Older clients, already folded into `actions` by `prepareForValidation()`.
             'action_type' => ['sometimes', 'string', Rule::in(BoardAutomation::actionTypes()), new SlackActionHasConnectedWorkspace],
             'action_params' => ['sometimes', 'nullable', 'array'],
@@ -171,6 +198,23 @@ trait ValidatesAutomationDefinition
     }
 
     /**
+     * A dynamic value, `{source, offset_days, use_working_days, column_id}`, see
+     * {@see AutomationDynamicValueResolver}.
+     *
+     * @return array<string, mixed>
+     */
+    private function dynamicValueRules(string $prefix): array
+    {
+        return [
+            $prefix => ['sometimes', 'nullable', 'array'],
+            "{$prefix}.source" => ['required_with:'.$prefix, 'string', Rule::in(BoardAutomation::DYNAMIC_SOURCES)],
+            "{$prefix}.offset_days" => ['sometimes', 'nullable', 'integer', 'between:-3650,3650'],
+            "{$prefix}.use_working_days" => ['sometimes', 'boolean'],
+            "{$prefix}.column_id" => ['sometimes', 'nullable', 'integer'],
+        ];
+    }
+
+    /**
      * The checks that depend on more than one field: the trigger's column and config for its
      * type, each action's params and where cross-board actions point.
      *
@@ -199,7 +243,8 @@ trait ValidatesAutomationDefinition
             $this->validateWaits($validator, 'actions');
         }
 
-        if ($this->filled('else_actions')) {
+        // `filled()` counts an empty list as filled, and the builder always sends one.
+        if (! empty($this->input('else_actions'))) {
             if (in_array($trigger_type, BoardAutomation::itemlessTriggers(), true) || $trigger_type === BoardAutomation::TRIGGER_ITEM_SCAN) {
                 $validator->errors()->add('else_actions', 'This trigger has no conditions to fail, so it cannot have "Otherwise" actions.');
 
@@ -244,10 +289,11 @@ trait ValidatesAutomationDefinition
             $column = $column_id ? BoardColumn::where('board_view_id', $view_id)->find((int) $column_id) : null;
             $allowed_types = BoardAutomation::triggerColumnTypes($trigger_type);
             $required_scope = match ($trigger_type) {
-                BoardAutomation::TRIGGER_ALL_SUBITEMS_STATUS => BoardColumn::SCOPE_SUBITEM,
+                BoardAutomation::TRIGGER_ALL_SUBITEMS_STATUS, BoardAutomation::TRIGGER_SUBITEM_COLUMN_CHANGED => BoardColumn::SCOPE_SUBITEM,
                 BoardAutomation::TRIGGER_ALL_GROUP_ITEMS_STATUS => BoardColumn::SCOPE_ITEM,
                 default => null,
             };
+            $needs_every_item_label = in_array($trigger_type, [BoardAutomation::TRIGGER_ALL_SUBITEMS_STATUS, BoardAutomation::TRIGGER_ALL_GROUP_ITEMS_STATUS], true);
 
             if (! $column) {
                 $validator->errors()->add('trigger_column_id', 'Choose the column this automation watches.');
@@ -256,10 +302,24 @@ trait ValidatesAutomationDefinition
             } elseif ($allowed_types === null && in_array($column->type, BoardColumn::READ_ONLY_TYPES, true)) {
                 $validator->errors()->add('trigger_column_id', 'Calculated columns never change on their own, choose another column.');
             } elseif ($required_scope !== null && $column->scope !== $required_scope) {
-                $validator->errors()->add('trigger_column_id', $required_scope === BoardColumn::SCOPE_SUBITEM ? 'Choose a subitem status column.' : 'Choose an item status column.');
-            } elseif ($required_scope !== null && ! collect($column->config['options'] ?? [])->contains(fn ($option) => (string) ($option['id'] ?? '') === (string) $this->input('trigger_value'))) {
+                $validator->errors()->add('trigger_column_id', match (true) {
+                    $trigger_type === BoardAutomation::TRIGGER_SUBITEM_COLUMN_CHANGED => 'Choose a subitem column.',
+                    $required_scope === BoardColumn::SCOPE_SUBITEM => 'Choose a subitem status column.',
+                    default => 'Choose an item status column.',
+                });
+            } elseif ($needs_every_item_label && ! collect($column->config['options'] ?? [])->contains(fn ($option) => (string) ($option['id'] ?? '') === (string) $this->input('trigger_value'))) {
                 $validator->errors()->add('trigger_value', 'Choose the label every item must have.');
             }
+        }
+
+        if (in_array($trigger_type, [BoardAutomation::TRIGGER_USER_MENTIONED, BoardAutomation::TRIGGER_UPDATE_REPLIED], true) && $this->input('trigger_value') !== null
+            && (! is_numeric($this->input('trigger_value')) || ! User::whereKey((int) $this->input('trigger_value'))->exists())) {
+            $validator->errors()->add('trigger_value', 'Choose a person of this account, or anyone.');
+        }
+
+        if ($trigger_type === BoardAutomation::TRIGGER_UPDATE_KEYWORD
+            && collect((array) ($config['keywords'] ?? []))->filter(fn ($keyword) => is_string($keyword) && trim($keyword) !== '')->isEmpty()) {
+            $validator->errors()->add('trigger_config.keywords', 'Type at least one word the update must contain.');
         }
 
         if (! empty($config['group_id']) && ! BoardGroup::where('board_view_id', $view_id)->whereKey((int) $config['group_id'])->exists()) {
@@ -300,7 +360,7 @@ trait ValidatesAutomationDefinition
             }
         }
 
-        if ($trigger_type === BoardAutomation::TRIGGER_COLUMN_CHANGED && ! empty($config['match']['operator'])) {
+        if (in_array($trigger_type, [BoardAutomation::TRIGGER_COLUMN_CHANGED, BoardAutomation::TRIGGER_SUBITEM_COLUMN_CHANGED], true) && ! empty($config['match']['operator'])) {
             $match = (array) $config['match'];
             if (in_array($match['operator'], ['between'], true) && count((array) ($match['values'] ?? [])) !== 2) {
                 $validator->errors()->add('trigger_config.match.values', 'Enter both ends of the range.');
@@ -336,12 +396,23 @@ trait ValidatesAutomationDefinition
     private function validateConditions(Validator $validator, int $view_id): void
     {
         $columns = BoardColumn::where('board_view_id', $view_id)->get(['id', 'type', 'scope'])->keyBy(fn (BoardColumn $column) => (string) $column->id);
-        $check = function (mixed $condition, string $key) use ($validator, $columns) {
+        $dynamic_values = app(AutomationDynamicValueResolver::class);
+        $check = function (mixed $condition, string $key) use ($validator, $columns, $dynamic_values) {
             $field_id = (string) (is_array($condition) ? ($condition['column_id'] ?? '') : '');
             if (! $columns->has($field_id) && ! in_array($field_id, AutomationConditionEvaluator::VIRTUAL_FIELDS, true)) {
                 $validator->errors()->add("{$key}.column_id", 'This column does not belong to this table.');
 
                 return;
+            }
+
+            $dynamic = $condition['dynamic'] ?? null;
+            if (is_array($dynamic) && ! empty($dynamic['source'])) {
+                $problem = in_array($condition['condition'] ?? '', self::DYNAMIC_OPERATORS_EXCLUDED, true)
+                    ? 'A dynamic value cannot be used with this operator.'
+                    : $this->dynamicValueProblem($dynamic, $dynamic_values->ruleFamily($field_id, $columns), $columns, false);
+                if ($problem !== null) {
+                    $validator->errors()->add("{$key}.dynamic", $problem);
+                }
             }
 
             if ($field_id === AutomationConditionEvaluator::SUBITEMS_FIELD) {
@@ -373,6 +444,47 @@ trait ValidatesAutomationDefinition
     }
 
     /**
+     * Why a dynamic value cannot stand for a value of `$family` (`people`, `date`, `number`,
+     * `text`), null when it can. `mentioned` is only known to actions, conditions never see it.
+     *
+     * @param  array<string, mixed>  $dynamic
+     * @param  Collection<string, BoardColumn>  $columns  the tab's columns keyed by id
+     */
+    private function dynamicValueProblem(array $dynamic, ?string $family, Collection $columns, bool $allow_mentioned): ?string
+    {
+        $source = (string) ($dynamic['source'] ?? '');
+        $allowed = match ($family) {
+            'people' => ['actor', 'creator', 'owner', 'mentioned', 'column'],
+            'date' => ['today', 'column'],
+            'number' => ['column'],
+            'text' => ['actor', 'creator', 'owner', 'mentioned', 'column'],
+            default => [],
+        };
+        if (! $allow_mentioned) {
+            $allowed = array_values(array_diff($allowed, ['mentioned']));
+        }
+
+        if ($allowed === []) {
+            return 'This column cannot take a dynamic value.';
+        }
+        if (! in_array($source, $allowed, true)) {
+            return 'This dynamic value does not fit this column.';
+        }
+        if ($source !== 'column') {
+            return null;
+        }
+
+        $source_column = $columns->get((string) ($dynamic['column_id'] ?? ''));
+        if (! $source_column) {
+            return 'Choose a column of this table to read the value from.';
+        }
+
+        return app(AutomationDynamicValueResolver::class)->columnFamily($source_column) === $family
+            ? null
+            : 'The column the value is read from holds another kind of value.';
+    }
+
+    /**
      * @param  array<string, mixed>  $action
      */
     private function validateAction(Validator $validator, int $view_id, ?WorkspaceNavigationItem $board, string $trigger_type, int $index, array $action, string $branch_key = 'actions'): void
@@ -390,9 +502,18 @@ trait ValidatesAutomationDefinition
         $group_in_view = Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id));
         $column_in_scope = fn (string $scope) => Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', $scope)->whereNotIn('type', BoardColumn::READ_ONLY_TYPES));
         $recipient_rules = [
-            'notify_user_id' => ['required_without:notify_from_people_column_id', 'nullable', 'integer', Rule::exists('users', 'id')],
-            'notify_from_people_column_id' => ['required_without:notify_user_id', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
+            'notify_user_id' => ['required_without_all:notify_from_people_column_id,recipient_source', 'nullable', 'integer', Rule::exists('users', 'id')],
+            'notify_from_people_column_id' => ['required_without_all:notify_user_id,recipient_source', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
+            'recipient_source' => ['required_without_all:notify_user_id,notify_from_people_column_id', 'nullable', Rule::in(BoardAutomation::RECIPIENT_SOURCES)],
             'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
+        ];
+        // Who a subscribe or unsubscribe action names, at least one of them.
+        $people_selection_rules = [
+            'user_ids' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_SUBSCRIPTION_PEOPLE],
+            'user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id')],
+            'notify_from_people_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
+            'team_id' => ['sometimes', 'nullable', 'integer', Rule::exists(AccountTeam::class, 'id')->whereNull('deleted_at')],
+            'recipient_source' => ['sometimes', 'nullable', Rule::in(array_values(array_diff(BoardAutomation::RECIPIENT_SOURCES, ['subscribers'])))],
         ];
 
         $rules = match ($type) {
@@ -405,11 +526,18 @@ trait ValidatesAutomationDefinition
                 'copy_values' => ['sometimes', 'boolean'],
             ],
             BoardAutomation::ACTION_CREATE_SUBITEM => [
-                'subitem_names' => ['required', 'array', 'min:1', 'max:'.self::MAX_SUBITEM_NAMES],
+                'subitem_names' => ['required_without:source_column_id', 'array', 'max:'.self::MAX_SUBITEM_NAMES],
                 'subitem_names.*' => ['required', 'string', 'max:255'],
+                'source_column_id' => ['sometimes', 'nullable', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', BoardColumn::SCOPE_ITEM)->whereIn('type', [
+                    BoardColumn::TYPE_TEXT, BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_CHECKLIST, BoardColumn::TYPE_TAGS, BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_PEOPLE,
+                ]))],
             ],
             BoardAutomation::ACTION_DUPLICATE_ITEM => ['with_subitems' => ['sometimes', 'boolean']],
-            BoardAutomation::ACTION_SET_COLUMN_VALUE => ['target_column_id' => ['required', 'integer', $column_in_view()], 'value' => ['present', 'nullable']],
+            BoardAutomation::ACTION_SET_COLUMN_VALUE => [
+                'target_column_id' => ['required', 'integer', $column_in_view()],
+                'value' => ['present', 'nullable'],
+                ...$this->dynamicValueRules('dynamic_value'),
+            ],
             BoardAutomation::ACTION_CLEAR_COLUMN => ['target_column_id' => ['required', 'integer', $column_in_view()]],
             BoardAutomation::ACTION_ASSIGN_PERSON => [
                 'target_column_id' => ['required', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
@@ -433,6 +561,7 @@ trait ValidatesAutomationDefinition
             BoardAutomation::ACTION_NOTIFY_PERSON, BoardAutomation::ACTION_SLACK_NOTIFY_PERSON => $recipient_rules,
             BoardAutomation::ACTION_SEND_EMAIL => [
                 'notify_user_id' => ['sometimes', 'nullable', 'integer', Rule::exists('users', 'id')],
+                'recipient_source' => ['sometimes', 'nullable', Rule::in(BoardAutomation::RECIPIENT_SOURCES)],
                 'notify_from_people_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
                 'email_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_EMAIL])],
                 'email_addresses' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_EMAIL_ADDRESSES],
@@ -558,6 +687,35 @@ trait ValidatesAutomationDefinition
                 'value' => ['required_if:operation,set_column_value', 'nullable'],
                 'destination_group_id' => ['required_if:operation,move_to_group', 'nullable', 'integer', $group_in_view],
             ],
+            BoardAutomation::ACTION_SUBSCRIBE_PEOPLE => $people_selection_rules,
+            BoardAutomation::ACTION_UNSUBSCRIBE_PEOPLE => [...$people_selection_rules, 'everyone' => ['sometimes', 'boolean']],
+            BoardAutomation::ACTION_NOTIFY_SUBSCRIBERS => [
+                'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
+                'include_actor' => ['sometimes', 'boolean'],
+            ],
+            BoardAutomation::ACTION_CLEAR_SUBITEMS => ['operation' => ['required', Rule::in(['archive', 'delete'])]],
+            BoardAutomation::ACTION_CONVERT_SUBITEM => ['target_group_id' => ['sometimes', 'nullable', 'integer', $group_in_view]],
+            BoardAutomation::ACTION_SEND_DIGEST => [
+                'user_ids' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_DIGEST_RECIPIENTS],
+                'user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id')],
+                'team_id' => ['sometimes', 'nullable', 'integer', Rule::exists(AccountTeam::class, 'id')->whereNull('deleted_at')],
+                'subject' => ['sometimes', 'nullable', 'string', 'max:150'],
+                'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
+                'target_group_id' => ['sometimes', 'nullable', 'integer', $group_in_view],
+                'column_ids' => ['sometimes', 'array', 'max:'.self::MAX_DIGEST_COLUMNS],
+                'column_ids.*' => ['integer', 'distinct', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', BoardColumn::SCOPE_ITEM))],
+                'digest_rules' => ['sometimes', 'array', 'max:'.self::MAX_DIGEST_RULES],
+                'digest_rules.*' => ['array'],
+                'digest_rules.*.column_id' => ['required', 'string', 'max:64'],
+                'digest_rules.*.condition' => ['required', 'string', Rule::in(self::CONDITION_OPERATORS)],
+                'digest_rules.*.value' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'digest_rules.*.values' => ['sometimes', 'nullable', 'array', 'max:50'],
+                'digest_rules.*.values.*' => ['nullable', 'string', 'max:255'],
+                ...$this->dynamicValueRules('digest_rules.*.dynamic'),
+                'digest_operator' => ['sometimes', Rule::in(['and', 'or'])],
+                'max_items' => ['sometimes', 'integer', 'between:1,200'],
+                'send_when_empty' => ['sometimes', 'boolean'],
+            ],
             default => [],
         };
         if ($type === BoardAutomation::ACTION_CREATE_ITEM) {
@@ -584,8 +742,25 @@ trait ValidatesAutomationDefinition
             $validator->errors()->add("{$branch_key}.{$index}.type", 'This action needs an item, add "create an item" before it.');
         }
         if ($type === BoardAutomation::ACTION_SEND_EMAIL && empty($params['notify_user_id']) && empty($params['notify_from_people_column_id'])
-            && empty($params['email_column_id']) && empty($params['email_addresses'])) {
+            && empty($params['email_column_id']) && empty($params['email_addresses']) && empty($params['recipient_source'])) {
             $validator->errors()->add("{$prefix}.notify_user_id", 'Choose who the email goes to.');
+        }
+        if (in_array($type, [BoardAutomation::ACTION_SUBSCRIBE_PEOPLE, BoardAutomation::ACTION_UNSUBSCRIBE_PEOPLE], true) && empty($params['everyone'])
+            && empty($params['user_ids']) && empty($params['notify_from_people_column_id']) && empty($params['team_id']) && empty($params['recipient_source'])) {
+            $validator->errors()->add("{$prefix}.user_ids", $type === BoardAutomation::ACTION_SUBSCRIBE_PEOPLE ? 'Choose who to subscribe.' : 'Choose who to unsubscribe.');
+        }
+        if ($type === BoardAutomation::ACTION_SEND_DIGEST) {
+            $this->validateDigest($validator, $view_id, $params, $prefix);
+        }
+        if ($type === BoardAutomation::ACTION_SET_COLUMN_VALUE && is_array($params['dynamic_value'] ?? null) && ! empty($params['dynamic_value']['source'])) {
+            $columns = BoardColumn::where('board_view_id', $view_id)->get(['id', 'type', 'scope'])->keyBy(fn (BoardColumn $column) => (string) $column->id);
+            $target = $columns->get((string) $params['target_column_id']);
+            $problem = $target && in_array($target->type, self::DYNAMIC_TARGET_TYPES, true)
+                ? $this->dynamicValueProblem($params['dynamic_value'], app(AutomationDynamicValueResolver::class)->columnFamily($target), $columns, true)
+                : 'This column cannot take a dynamic value.';
+            if ($problem !== null) {
+                $validator->errors()->add("{$prefix}.dynamic_value", $problem);
+            }
         }
         if ($is_itemless_trigger && ! $has_created_item && ! empty($params['from_item_group'])) {
             $validator->errors()->add("{$prefix}.from_item_group", 'There is no item yet, choose the group instead.');
@@ -603,6 +778,42 @@ trait ValidatesAutomationDefinition
 
         if ($is_cross_board) {
             $this->validateCrossBoardTarget($validator, $board, $prefix, $params);
+        }
+    }
+
+    /**
+     * A digest needs someone to email, and its filter rules must read columns of this table, with
+     * dynamic values that fit them.
+     *
+     * @param  array<string, mixed>  $params
+     */
+    private function validateDigest(Validator $validator, int $view_id, array $params, string $prefix): void
+    {
+        if (empty($params['user_ids']) && empty($params['team_id'])) {
+            $validator->errors()->add("{$prefix}.user_ids", 'Choose who receives the digest.');
+        }
+
+        $columns = BoardColumn::where('board_view_id', $view_id)->get(['id', 'type', 'scope'])->keyBy(fn (BoardColumn $column) => (string) $column->id);
+        $dynamic_values = app(AutomationDynamicValueResolver::class);
+        foreach ((array) ($params['digest_rules'] ?? []) as $index => $rule) {
+            $field_id = (string) ($rule['column_id'] ?? '');
+            $column = $columns->get($field_id);
+            $is_item_field = $column ? $column->scope === BoardColumn::SCOPE_ITEM : in_array($field_id, AutomationConditionEvaluator::VIRTUAL_FIELDS, true) && $field_id !== AutomationConditionEvaluator::SUBITEMS_FIELD;
+            if (! $is_item_field || $field_id === AutomationConditionEvaluator::ACTOR_FIELD) {
+                $validator->errors()->add("{$prefix}.digest_rules.{$index}.column_id", 'Choose an item column of this table.');
+
+                continue;
+            }
+
+            $dynamic = $rule['dynamic'] ?? null;
+            if (is_array($dynamic) && ! empty($dynamic['source'])) {
+                $problem = in_array($rule['condition'] ?? '', self::DYNAMIC_OPERATORS_EXCLUDED, true)
+                    ? 'A dynamic value cannot be used with this operator.'
+                    : $this->dynamicValueProblem($dynamic, $dynamic_values->ruleFamily($field_id, $columns), $columns, false);
+                if ($problem !== null) {
+                    $validator->errors()->add("{$prefix}.digest_rules.{$index}.dynamic", $problem);
+                }
+            }
         }
     }
 

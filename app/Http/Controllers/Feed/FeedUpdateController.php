@@ -13,6 +13,7 @@ use App\Models\FeedSavedView;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemActivityService;
 use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
@@ -68,6 +69,7 @@ class FeedUpdateController extends Controller
         private readonly NotificationService $notification_service,
         private readonly FeedService $feed_service,
         private readonly BoardItemActivityService $activity_service,
+        private readonly BoardAutomationService $automation_service,
     ) {}
 
     /**
@@ -1055,6 +1057,8 @@ class FeedUpdateController extends Controller
 
         if ($is_item) {
             $this->feed_service->autoFollowItem($reply->item, $mentioned_user_ids->concat([$actor->id]));
+            // A reply written from the feed sets off the same automations as one written in the item drawer.
+            $this->automation_service->handleUpdatePosted($reply->item, $reply, $actor);
         }
 
         $this->feed_service->broadcastUpdate($this->refreshed($reply), $board, $thread_author);
