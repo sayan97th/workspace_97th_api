@@ -14,7 +14,10 @@ Schedule::command('horizon:snapshot')->everyFiveMinutes();
 
 Schedule::command('feed:publish-scheduled')->everyMinute();
 
-Schedule::command('automations:run-date-triggers')->dailyAt('08:00');
+// Date triggers carry their own day offset and time of day, so they are checked all day long.
+Schedule::command('automations:run-date-triggers')->everyFiveMinutes()->withoutOverlapping();
+
+Schedule::command('automations:run-scheduled')->everyMinute()->withoutOverlapping();
 
 Schedule::command('automations:prune-run-logs')->dailyAt('03:00');
 

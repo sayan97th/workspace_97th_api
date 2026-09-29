@@ -119,5 +119,6 @@ test('a status_changed automation archives the item once it matches the watched 
         'values' => [(string) $status_column->id => 'done'],
     ])->assertOk();
 
-    $this->assertSoftDeleted('board_items', ['id' => $item->id]);
+    // Archived like the board's own Archive action, so it stays restorable instead of being deleted.
+    $this->assertDatabaseHas('board_items', ['id' => $item->id, 'is_archived' => true, 'deleted_at' => null]);
 });

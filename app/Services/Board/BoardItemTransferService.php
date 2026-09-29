@@ -89,6 +89,48 @@ class BoardItemTransferService
     }
 
     /**
+     * Creates a new top-level item named `$name` at the end of `$target_group`, which may belong
+     * to another board, the cross-board "create an item" automation action. With `$copy_values`
+     * the source item's values are copied onto the target columns with the same label and type,
+     * using the same mapping {@see moveToBoard()} uses. The source item is left untouched.
+     */
+    public function createCopyInGroup(?BoardItem $source_item, BoardGroup $target_group, string $name, bool $copy_values, ?int $created_by_id): BoardItem
+    {
+        return DB::transaction(function () use ($source_item, $target_group, $name, $copy_values, $created_by_id) {
+            $position = (int) BoardItem::where('board_id', $target_group->board_id)
+                ->where('group_id', $target_group->id)
+                ->whereNull('parent_id')
+                ->max('position') + 1;
+
+            $copy = BoardItem::create([
+                'board_id' => $target_group->board_id,
+                'group_id' => $target_group->id,
+                'parent_id' => null,
+                'name' => $name,
+                'position' => $position,
+                'created_by_id' => $created_by_id,
+            ]);
+
+            if ($copy_values && $source_item !== null && $source_item->parent_id === null) {
+                $source_item->loadMissing(['group', 'values']);
+                $column_map = $this->buildColumnMap($source_item->group->board_view_id, $target_group->board_view_id, BoardColumn::SCOPE_ITEM);
+
+                foreach ($source_item->values as $value) {
+                    $mapping = $column_map[$value->column_id] ?? null;
+                    $carried_value = $mapping ? $this->carryValue($mapping['source'], $mapping['target'], $value->value) : null;
+                    if ($carried_value !== null) {
+                        $copy->values()->create(['column_id' => $mapping['target']->id, 'value' => $carried_value]);
+                    }
+                }
+            }
+
+            $this->assignAutoNumberValues($copy, $target_group->board_view_id, BoardColumn::SCOPE_ITEM);
+
+            return $copy->fresh(['values']);
+        });
+    }
+
+    /**
      * Maps every source column id in `$scope` to the target tab's column of
      * the same type and (case-insensitive) label. Each target column is used
      * at most once, so two same-named source columns never collide on one

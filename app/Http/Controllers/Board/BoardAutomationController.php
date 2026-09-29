@@ -7,8 +7,10 @@ use App\Http\Requests\Board\StoreBoardAutomationRequest;
 use App\Http\Requests\Board\UpdateBoardAutomationRequest;
 use App\Http\Resources\BoardAutomationResource;
 use App\Http\Resources\BoardAutomationRunLogResource;
+use App\Http\Resources\BoardAutomationTemplateResource;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationRunLog;
+use App\Models\BoardAutomationTemplate;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardViewResolver;
 use Illuminate\Http\JsonResponse;
@@ -43,7 +45,7 @@ class BoardAutomationController extends Controller
         }
 
         $automations = BoardAutomation::where('board_view_id', $view->id)
-            ->with('creator')
+            ->with(['creator', 'owner'])
             ->withCount('runLogs')
             ->withMax('runLogs', 'created_at')
             ->orderByDesc('id')
@@ -65,13 +67,12 @@ class BoardAutomationController extends Controller
             'board_id' => $item->id,
             'board_view_id' => $validated['view_id'],
             'name' => $validated['name'] ?? null,
+            'description' => $validated['description'] ?? null,
             'is_enabled' => $validated['is_enabled'] ?? true,
-            'trigger_type' => $validated['trigger_type'],
-            'trigger_column_id' => $validated['trigger_column_id'] ?? null,
-            'trigger_value' => $validated['trigger_value'] ?? null,
-            'action_type' => $validated['action_type'],
-            'action_params' => $validated['action_params'] ?? [],
+            'importance' => $validated['importance'] ?? BoardAutomation::IMPORTANCE_MINOR,
+            ...$this->definitionAttributes($validated),
             'created_by_id' => $request->user()?->id,
+            'owner_id' => $request->user()?->id,
         ]);
 
         return response()->json([
@@ -91,7 +92,24 @@ class BoardAutomationController extends Controller
     {
         $this->ensureAutomationBelongsToBoard($item, $automation);
 
-        $automation->fill($request->validated())->save();
+        $validated = $request->validated();
+        $automation->fill(collect($validated)->only(['name', 'description', 'is_enabled', 'importance', 'owner_id'])->all());
+
+        // The sentence builder always saves the whole definition, so a changed trigger never keeps
+        // the column, value or config of the one it replaced.
+        if (array_key_exists('trigger_type', $validated) || array_key_exists('actions', $validated)) {
+            $automation->fill($this->definitionAttributes([
+                'trigger_type' => $automation->trigger_type,
+                'trigger_column_id' => $automation->trigger_column_id,
+                'trigger_value' => $automation->trigger_value,
+                'trigger_config' => $automation->trigger_config,
+                'conditions' => $automation->conditions,
+                'actions' => $automation->resolvedActions(),
+                ...$validated,
+            ]));
+        }
+
+        $automation->save();
 
         return response()->json([
             'message' => 'Automation updated successfully.',
@@ -113,6 +131,8 @@ class BoardAutomationController extends Controller
         $copy->name = $automation->name ? Str::limit($automation->name, 245, '').' (copy)' : null;
         $copy->is_enabled = false;
         $copy->created_by_id = $request->user()?->id;
+        $copy->owner_id = $request->user()?->id;
+        $copy->last_scheduled_run_at = $automation->trigger_type === BoardAutomation::TRIGGER_RECURRING ? now() : null;
         $copy->save();
 
         return response()->json([
@@ -259,7 +279,105 @@ class BoardAutomationController extends Controller
      */
     private function withRunStats(BoardAutomation $automation): BoardAutomation
     {
-        return $automation->load('creator')->loadCount('runLogs')->loadMax('runLogs', 'created_at');
+        return $automation->load(['creator', 'owner'])->loadCount('runLogs')->loadMax('runLogs', 'created_at');
+    }
+
+    /**
+     * GET /api/boards/{item}/automations/templates
+     *
+     * The board's saved templates, newest first, shown in the Create tab next to the built-in ones.
+     */
+    public function templates(WorkspaceNavigationItem $item): JsonResponse
+    {
+        $templates = BoardAutomationTemplate::where('board_id', $item->id)->with('creator')->latest('id')->get();
+
+        return response()->json(['data' => BoardAutomationTemplateResource::collection($templates)]);
+    }
+
+    /**
+     * POST /api/boards/{item}/automations/{automation}/template
+     *
+     * "Save as template" on an automation card, copies its definition (not its state).
+     */
+    public function saveAsTemplate(Request $request, WorkspaceNavigationItem $item, BoardAutomation $automation): JsonResponse
+    {
+        $this->ensureAutomationBelongsToBoard($item, $automation);
+
+        $validated = $request->validate([
+            'name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        $template = BoardAutomationTemplate::create([
+            'board_id' => $item->id,
+            'name' => trim((string) ($validated['name'] ?? '')) ?: ($automation->name ?: 'Saved automation'),
+            'description' => $validated['description'] ?? $automation->description,
+            'definition' => [
+                'trigger_type' => $automation->trigger_type,
+                'trigger_column_id' => $automation->trigger_column_id,
+                'trigger_value' => $automation->trigger_value,
+                'trigger_config' => $automation->trigger_config,
+                'conditions' => $automation->conditions ?? [],
+                'actions' => $automation->resolvedActions(),
+            ],
+            'created_by_id' => $request->user()?->id,
+        ]);
+
+        return response()->json([
+            'message' => 'Template saved successfully.',
+            'template' => new BoardAutomationTemplateResource($template->load('creator')),
+        ], 201);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/automations/templates/{template}
+     */
+    public function destroyTemplate(WorkspaceNavigationItem $item, BoardAutomationTemplate $template): JsonResponse
+    {
+        abort_if($template->board_id !== $item->id, 404);
+
+        $template->delete();
+
+        return response()->json(['message' => 'Template deleted successfully.']);
+    }
+
+    /**
+     * The columns an automation's trigger, conditions and actions are stored in, read from a
+     * validated sentence builder payload. `action_type`/`action_params` mirror the first action.
+     *
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function definitionAttributes(array $validated): array
+    {
+        $trigger_type = (string) $validated['trigger_type'];
+        $actions = array_values(array_map(
+            fn (array $action) => ['type' => (string) $action['type'], 'params' => (array) ($action['params'] ?? [])],
+            array_filter((array) ($validated['actions'] ?? []), 'is_array')
+        ));
+        $conditions = array_values(array_map(
+            fn (array $rule) => [
+                'column_id' => (string) $rule['column_id'],
+                'condition' => (string) $rule['condition'],
+                'value' => (string) ($rule['value'] ?? ''),
+                'values' => array_values(array_map('strval', array_filter((array) ($rule['values'] ?? []), 'is_scalar'))),
+            ],
+            array_filter((array) ($validated['conditions'] ?? []), 'is_array')
+        ));
+        $trigger_config = array_filter((array) ($validated['trigger_config'] ?? []), fn ($value) => $value !== null && $value !== '');
+
+        return [
+            'trigger_type' => $trigger_type,
+            'trigger_column_id' => in_array($trigger_type, BoardAutomation::columnTriggers(), true) ? ($validated['trigger_column_id'] ?? null) : null,
+            'trigger_value' => $validated['trigger_value'] ?? null,
+            'trigger_config' => $trigger_config ?: null,
+            'conditions' => $conditions ?: null,
+            'actions' => $actions,
+            'action_type' => $actions[0]['type'],
+            'action_params' => $actions[0]['params'],
+            // A recurring schedule counts from the moment it is saved, never catching up on the past.
+            'last_scheduled_run_at' => $trigger_type === BoardAutomation::TRIGGER_RECURRING ? now() : null,
+        ];
     }
 
     /**

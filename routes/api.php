@@ -437,8 +437,11 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // Manage tab data, declared before the `{automation}` wildcard routes so these literal segments win.
             Route::get('runs', [BoardAutomationController::class, 'runs']);
             Route::get('usage', [BoardAutomationController::class, 'usage']);
+            Route::get('templates', [BoardAutomationController::class, 'templates']);
+            Route::delete('templates/{template}', [BoardAutomationController::class, 'destroyTemplate']);
 
             Route::post('{automation}/duplicate', [BoardAutomationController::class, 'duplicate']);
+            Route::post('{automation}/template', [BoardAutomationController::class, 'saveAsTemplate']);
             Route::patch('{automation}', [BoardAutomationController::class, 'update']);
             Route::delete('{automation}', [BoardAutomationController::class, 'destroy']);
         });

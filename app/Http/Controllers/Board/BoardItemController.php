@@ -263,10 +263,12 @@ class BoardItemController extends Controller
         BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $validated = $request->validated();
+        $from_group_id = $board_item->group_id;
         $board_item->fill($validated)->save();
 
         if (array_key_exists('group_id', $validated)) {
             $this->cascadeGroupToDescendants($board_item, $validated['group_id']);
+            $this->automation_service->handleItemMoved($board_item->fresh('group'), $from_group_id, $request->user());
         }
 
         return response()->json([
@@ -418,6 +420,7 @@ class BoardItemController extends Controller
         BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $this->deleteSubtree($board_item);
+        $this->automation_service->handleItemDeleted($board_item, $request->user());
 
         return response()->json([
             'message' => 'Item deleted successfully.',
@@ -476,11 +479,13 @@ class BoardItemController extends Controller
         $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
 
         foreach ($items as $board_item) {
+            $from_group_id = $board_item->group_id;
             $board_item->update([
                 'group_id' => $group_id,
                 'position' => $this->nextPosition($item, $group_id),
             ]);
             $this->cascadeGroupToDescendants($board_item, $group_id);
+            $this->automation_service->handleItemMoved($board_item->fresh('group'), $from_group_id, $request->user());
         }
 
         return response()->json([
@@ -537,13 +542,15 @@ class BoardItemController extends Controller
 
         $validated = $request->validated();
         $touched_ids = [];
+        $moved = null;
 
-        DB::transaction(function () use ($item, $validated, &$touched_ids) {
+        DB::transaction(function () use ($item, $validated, &$touched_ids, &$moved) {
             if ($validated['scope'] === 'root') {
                 $moved_item = $item->items()->findOrFail($validated['moved_item_id']);
                 $this->ensureItemBelongsToBoard($item, $moved_item);
 
                 if ($moved_item->group_id !== (int) $validated['target_group_id']) {
+                    $moved = [$moved_item, $moved_item->group_id];
                     $moved_item->update(['group_id' => (int) $validated['target_group_id']]);
                     $this->cascadeGroupToDescendants($moved_item, (int) $validated['target_group_id']);
                 }
@@ -570,6 +577,11 @@ class BoardItemController extends Controller
             }
         });
 
+        // Run once the new order is committed, so an automation that moves the item again wins.
+        if ($moved !== null) {
+            $this->automation_service->handleItemMoved($moved[0]->fresh('group'), $moved[1], $request->user());
+        }
+
         $items = BoardItem::whereIn('id', $touched_ids)->with('values')->get();
 
         return response()->json([
@@ -589,7 +601,12 @@ class BoardItemController extends Controller
     {
         $this->authorizeItems($item, $request, $item->items()->whereIn('id', $request->validated()['item_ids'])->get());
 
+        $archived_items = $item->items()->whereIn('id', $request->validated()['item_ids'])->where('is_archived', false)->get();
         $item->items()->whereIn('id', $request->validated()['item_ids'])->update(['is_archived' => true]);
+
+        foreach ($archived_items as $archived_item) {
+            $this->automation_service->handleItemArchived($archived_item, $request->user());
+        }
 
         return response()->json([
             'message' => 'Items archived successfully.',
@@ -612,6 +629,7 @@ class BoardItemController extends Controller
 
         foreach ($items as $board_item) {
             $this->deleteSubtree($board_item);
+            $this->automation_service->handleItemDeleted($board_item, $request->user());
         }
 
         return response()->json([

@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\Board\BoardAutomationService;
 use App\Services\Board\ColumnPermissionService;
 use App\Services\Favorite\UserFavoriteService;
 use Carbon\CarbonImmutable;
@@ -22,6 +23,9 @@ class AppServiceProvider extends ServiceProvider
         // Memoizes column permission lookups for the lifetime of one request.
         $this->app->scoped(ColumnPermissionService::class);
         $this->app->scoped(UserFavoriteService::class);
+        // One instance per request or job, so a chain of automations setting each other off shares
+        // one loop guard, see BoardAutomationService::MAX_CHAIN_DEPTH.
+        $this->app->scoped(BoardAutomationService::class);
     }
 
     /**

@@ -10,7 +10,7 @@ class RunDueDateAutomationsCommand extends Command
 {
     protected $signature = 'automations:run-date-triggers';
 
-    protected $description = 'Runs every board automation whose date-column trigger has arrived today — see BoardAutomation::TRIGGER_DATE_ARRIVED';
+    protected $description = 'Runs every board automation whose date-column trigger has arrived, with its day offset and time, see BoardAutomation::TRIGGER_DATE_ARRIVED';
 
     public function __construct(private readonly BoardAutomationService $automation_service)
     {

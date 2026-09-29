@@ -4,9 +4,6 @@ namespace App\Services\Board;
 
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Http\Controllers\Board\BoardItemController;
-use App\Jobs\SendEmailJob;
-use App\Mail\Automations\AutomationEmail;
-use App\Models\BoardActivityLog;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationRun;
 use App\Models\BoardAutomationRunLog;
@@ -17,42 +14,57 @@ use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
-use App\Services\Slack\SlackNotifier;
+use App\Support\AutomationSchedule;
+use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
 
 /**
- * Runs the rule-based (no AI) automation recipes a board tab can define, see
- * {@see BoardAutomation}'s own doc comment for the trigger/action vocabulary:
+ * Runs the rule-based (no AI) automations a board tab defines, see {@see BoardAutomation}'s own
+ * doc comment for the trigger, condition and action vocabulary. Every trigger ends up in
+ * {@see executeAutomation()}, which checks the "and only if" conditions and then runs each action
+ * in order through {@see BoardAutomationActionRunner}.
  *
- * - "When `trigger_column_id` changes to `trigger_value`, run `action_type`" —
- *   {@see handleValueChanged()}, called synchronously from the same choke
- *   point every column-value write already goes through,
- *   {@see BoardItemValueService::sync()}. Covers `status_changed`,
- *   `person_assigned`.
- * - "When `trigger_column_id`'s date arrives, run `action_type`" —
- *   {@see runDueDateTriggers()}, called once daily by the scheduled
- *   `automations:run-date-triggers` command.
- * - "When an item/subitem is created, run `action_type`" —
- *   {@see handleItemCreated()}, called synchronously from
- *   {@see BoardItemController::store()}.
- * - "When an update is posted on an item, run `action_type`" —
- *   {@see handleUpdatePosted()}, called synchronously from
- *   {@see BoardItemCommentController::store()}.
+ * - Column triggers ({@see handleValueChanged()}) are called synchronously from
+ *   {@see BoardItemValueService::sync()}, the choke point every column-value write goes through.
+ * - Item triggers are called from {@see BoardItemController} (created, moved, archived, deleted)
+ *   and {@see BoardItemCommentController} (update posted).
+ * - Date triggers ({@see runDueDateTriggers()}) and recurring ones ({@see runScheduledTriggers()})
+ *   are called by scheduled commands.
  *
- * Any trigger can be paired with a communication action (email, Slack channel, Slack
- * direct message), whose message is a template filled in by {@see renderMessage()}.
+ * Actions can set off other automations (a status an action sets is a status change like any
+ * other). Bound as a scoped singleton so the whole chain shares one instance, which stops a chain
+ * deeper than {@see self::MAX_CHAIN_DEPTH} and never runs the same automation twice on the same
+ * item within one chain, so two automations can never trigger each other forever.
  */
 class BoardAutomationService
 {
+    /** How many automations may set each other off in a row before the chain is stopped. */
+    public const MAX_CHAIN_DEPTH = 5;
+
+    /** The owner hears about failures of one automation at most once in this many minutes. */
+    private const FAILURE_NOTICE_MINUTES = 60;
+
+    /** A date trigger without its own time fires from this time of day, like before times existed. */
+    private const DEFAULT_DATE_TRIGGER_TIME = '08:00';
+
+    private int $depth = 0;
+
+    /** @var array<string, true> `automation_id:item_id` pairs running in the current chain */
+    private array $running = [];
+
     public function __construct(
+        private readonly BoardAutomationActionRunner $action_runner,
+        private readonly BoardAutomationMessageRenderer $renderer,
         private readonly NotificationService $notification_service,
-        private readonly BoardActivityLogger $activity_logger,
-        private readonly SlackNotifier $slack_notifier,
     ) {}
+
+    // ── Column triggers ───────────────────────────────────────────────────────
 
     /**
      * Reacts to one column's value having just changed on `$item`. Status/label and
@@ -71,8 +83,8 @@ class BoardAutomationService
     }
 
     /**
-     * Fires every enabled `column_changed` automation watching `$column` once the value
-     * it holds is different from what was stored before this write.
+     * Fires every `column_changed` automation watching `$column` once the value it holds is
+     * different from what was stored, or only once it becomes the automation's `trigger_value`.
      */
     private function handleColumnChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
     {
@@ -80,107 +92,75 @@ class BoardAutomationService
             return;
         }
 
-        $automations = BoardAutomation::query()
-            ->where('board_view_id', $item->group->board_view_id)
-            ->where('is_enabled', true)
-            ->where('trigger_type', BoardAutomation::TRIGGER_COLUMN_CHANGED)
-            ->where('trigger_column_id', $column->id)
-            ->get();
-
-        foreach ($automations as $automation) {
-            $this->executeAction($automation, $item, $actor, [
-                'column' => $column,
-                'old_value' => $old_value,
-                'new_value' => $new_value,
-            ]);
-        }
-    }
-
-    /**
-     * A single-select column's value is a plain option id string — comparing
-     * the raw values is enough to tell whether this write actually changed
-     * which option is selected, versus an unrelated re-save of the same one.
-     */
-    private function handleStatusChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
-    {
-        if ($new_value === $old_value) {
-            return;
-        }
-
-        $automations = BoardAutomation::query()
-            ->where('board_view_id', $item->group->board_view_id)
-            ->where('is_enabled', true)
-            ->where('trigger_type', BoardAutomation::TRIGGER_STATUS_CHANGED)
-            ->where('trigger_column_id', $column->id)
-            ->get();
-
-        foreach ($automations as $automation) {
-            if ((string) $automation->trigger_value !== (string) $new_value) {
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_COLUMN_CHANGED, $column->id) as $automation) {
+            if ($automation->trigger_value !== null && ! $this->valueMatches($column, $new_value, $automation->trigger_value)) {
                 continue;
             }
 
-            $this->executeAction($automation, $item, $actor, [
-                'column' => $column,
-                'old_value' => $old_value,
-                'new_value' => $new_value,
-            ]);
+            $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, $old_value, $new_value));
         }
     }
 
     /**
-     * Fires once for every person newly added to a `people` column's value
-     * (comparing against what was stored before this write) — a
-     * `trigger_value` of null watches for anyone being assigned; a specific
-     * user id only fires when that exact person is the one newly added.
+     * A single-select column's value is a plain option id string. `trigger_value` null means
+     * "changes to anything" (clearing the value does not count), `trigger_config.from_value`
+     * narrows it to changes away from one option.
+     */
+    private function handleStatusChanged(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
+    {
+        if ((string) $new_value === (string) $old_value) {
+            return;
+        }
+
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_STATUS_CHANGED, $column->id) as $automation) {
+            $to_value = $automation->trigger_value;
+            $from_value = $automation->trigger_config['from_value'] ?? null;
+
+            if ($to_value === null ? ($new_value === null || $new_value === '') : (string) $to_value !== (string) $new_value) {
+                continue;
+            }
+            if ($from_value !== null && $from_value !== '' && (string) $from_value !== (string) $old_value) {
+                continue;
+            }
+
+            $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, $old_value, $new_value));
+        }
+    }
+
+    /**
+     * Fires once for every person newly added to a `people` column's value, a `trigger_value` of
+     * null watches for anyone being assigned, a specific user id only for that person.
      */
     private function handlePersonAssigned(BoardItem $item, BoardColumn $column, mixed $old_value, mixed $new_value, ?User $actor): void
     {
-        $old_ids = is_array($old_value) ? $old_value : [];
-        $new_ids = is_array($new_value) ? $new_value : [];
-        $newly_added_ids = array_diff($new_ids, $old_ids);
+        $old_ids = array_map('strval', is_array($old_value) ? $old_value : []);
+        $new_ids = array_map('strval', is_array($new_value) ? $new_value : []);
+        $newly_added_ids = array_values(array_diff($new_ids, $old_ids));
 
         if (empty($newly_added_ids)) {
             return;
         }
 
-        $automations = BoardAutomation::query()
-            ->where('board_view_id', $item->group->board_view_id)
-            ->where('is_enabled', true)
-            ->where('trigger_type', BoardAutomation::TRIGGER_PERSON_ASSIGNED)
-            ->where('trigger_column_id', $column->id)
-            ->get();
-
-        foreach ($automations as $automation) {
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_PERSON_ASSIGNED, $column->id) as $automation) {
             $watched_user_id = $automation->trigger_value;
-            $matches = $watched_user_id === null || in_array((string) $watched_user_id, array_map('strval', $newly_added_ids), true);
-
-            if ($matches) {
-                $this->executeAction($automation, $item, $actor, [
-                    'column' => $column,
-                    'old_value' => $old_value,
-                    'new_value' => $new_value,
-                ]);
+            if ($watched_user_id === null || in_array((string) $watched_user_id, $newly_added_ids, true)) {
+                $this->executeAutomation($automation, $item, $actor, $this->changeContext($column, $old_value, $new_value));
             }
         }
     }
 
+    // ── Item triggers ─────────────────────────────────────────────────────────
+
     /**
-     * Reacts to `$item` having just been created — fires every enabled
-     * `item_created` (root item) or `subitem_created` (has a parent)
-     * automation on the item's tab.
+     * Reacts to `$item` having just been created, fires every `item_created` (root item) or
+     * `subitem_created` (has a parent) automation on the item's tab.
      */
     public function handleItemCreated(BoardItem $item, ?User $actor): void
     {
         $trigger_type = $item->parent_id === null ? BoardAutomation::TRIGGER_ITEM_CREATED : BoardAutomation::TRIGGER_SUBITEM_CREATED;
 
-        $automations = BoardAutomation::query()
-            ->where('board_view_id', $item->group->board_view_id)
-            ->where('is_enabled', true)
-            ->where('trigger_type', $trigger_type)
-            ->get();
-
-        foreach ($automations as $automation) {
-            $this->executeAction($automation, $item, $actor);
+        foreach ($this->enabledAutomations($item, $trigger_type) as $automation) {
+            $this->executeAutomation($automation, $item, $actor);
         }
     }
 
@@ -193,64 +173,113 @@ class BoardAutomationService
             return;
         }
 
-        $automations = BoardAutomation::query()
-            ->where('board_view_id', $item->group->board_view_id)
-            ->where('is_enabled', true)
-            ->where('trigger_type', BoardAutomation::TRIGGER_UPDATE_POSTED)
-            ->get();
-
-        foreach ($automations as $automation) {
-            $this->executeAction($automation, $item, $actor, ['update_text' => (string) $comment->body]);
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_UPDATE_POSTED) as $automation) {
+            $this->executeAutomation($automation, $item, $actor, ['update_text' => (string) $comment->body]);
         }
     }
 
     /**
-     * Scans every enabled `date_arrived` automation for items whose trigger
-     * column's stored date is today, runs the action once per (automation,
-     * item) pair not already recorded in {@see BoardAutomationRun} for today.
+     * Reacts to a top-level item having just moved from `$from_group_id` into another group of the
+     * same tab. `trigger_config.group_id` narrows an automation to one destination group.
+     */
+    public function handleItemMoved(BoardItem $item, int $from_group_id, ?User $actor): void
+    {
+        if ($item->parent_id !== null || $item->group_id === $from_group_id) {
+            return;
+        }
+
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_ITEM_MOVED_TO_GROUP) as $automation) {
+            $group_id = $automation->trigger_config['group_id'] ?? null;
+            if ($group_id !== null && (int) $group_id !== $item->group_id) {
+                continue;
+            }
+
+            $this->executeAutomation($automation, $item, $actor);
+        }
+    }
+
+    public function handleItemArchived(BoardItem $item, ?User $actor): void
+    {
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_ITEM_ARCHIVED) as $automation) {
+            $this->executeAutomation($automation, $item, $actor);
+        }
+    }
+
+    public function handleItemDeleted(BoardItem $item, ?User $actor): void
+    {
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_ITEM_DELETED) as $automation) {
+            $this->executeAutomation($automation, $item, $actor);
+        }
+    }
+
+    // ── Scheduled triggers ────────────────────────────────────────────────────
+
+    /**
+     * Runs every `date_arrived` automation whose date has arrived: the item's date is today
+     * minus `trigger_config.offset_days` (so -2 fires two days before the date, 1 the day after it)
+     * in the automation's time zone, and the configured time has passed. Without a configured time
+     * a date that carries its own time (`YYYY-MM-DDTHH:mm`) fires at that time, any other date from
+     * {@see self::DEFAULT_DATE_TRIGGER_TIME}. Each (automation, item) pair runs at most once a day,
+     * recorded in {@see BoardAutomationRun}.
      *
      * @return int How many (automation, item) pairs ran, for the calling command to report.
      */
-    public function runDueDateTriggers(): int
+    public function runDueDateTriggers(?CarbonInterface $now = null): int
     {
-        $today = Carbon::today()->toDateString();
+        $now = CarbonImmutable::instance($now ?? Carbon::now());
         $ran_count = 0;
 
         $automations = BoardAutomation::query()
             ->where('is_enabled', true)
             ->where('trigger_type', BoardAutomation::TRIGGER_DATE_ARRIVED)
+            ->whereNotNull('trigger_column_id')
+            ->with(['triggerColumn', 'board', 'creator', 'owner'])
             ->get();
 
         foreach ($automations as $automation) {
+            $config = (array) ($automation->trigger_config ?? []);
+            $local_now = $now->setTimezone(AutomationSchedule::timezone($config['timezone'] ?? null));
+            $today = $local_now->toDateString();
+            $offset_days = (int) ($config['offset_days'] ?? 0);
+            $target_date = $local_now->subDays($offset_days)->toDateString();
+            $configured_time = $config['time'] ?? null;
+
+            if ($configured_time !== null && ! $this->timeHasPassed($local_now, $configured_time)) {
+                continue;
+            }
+
             $already_ran_item_ids = BoardAutomationRun::where('automation_id', $automation->id)
-                ->where('ran_on', $today)
+                ->whereDate('ran_on', $today)
                 ->pluck('board_item_id');
 
             $due_values = BoardItemValue::where('column_id', $automation->trigger_column_id)
-                ->whereRaw('JSON_UNQUOTE(`value`) = ?', [$today])
+                ->where(fn ($query) => DB::connection()->getDriverName() === 'mysql'
+                    ? $query->whereRaw('JSON_UNQUOTE(`value`) LIKE ?', [$target_date.'%'])
+                    : $query->where('value', 'like', '"'.$target_date.'%'))
                 ->whereNotIn('item_id', $already_ran_item_ids)
                 ->with('item.group')
                 ->get();
 
             foreach ($due_values as $value) {
-                // `BoardItem` uses `SoftDeletes`, so its relation's default global
-                // scope filters out a soft-deleted item, this can be null despite
-                // `item_id`'s FK cascade (which only ever fires on a hard delete).
+                // `BoardItem` uses `SoftDeletes`, so a soft-deleted item reads as null here.
                 $item = $value->item;
-                if (! $item) {
+                if (! $item || $item->is_archived) {
                     continue;
                 }
 
-                $this->executeAction($automation, $item, null, [
-                    'column' => $automation->triggerColumn,
-                    'new_value' => $today,
-                ]);
+                $own_time = is_string($value->value) && preg_match('/T(\d{2}:\d{2})/', $value->value, $matches) === 1 ? $matches[1] : null;
+                $effective_time = $configured_time ?? ($offset_days === 0 ? $own_time : null) ?? self::DEFAULT_DATE_TRIGGER_TIME;
+                if (! $this->timeHasPassed($local_now, $effective_time)) {
+                    continue;
+                }
 
                 BoardAutomationRun::create([
                     'automation_id' => $automation->id,
                     'board_item_id' => $item->id,
                     'ran_on' => $today,
                 ]);
+
+                $this->executeAutomation($automation, $item, null, $this->changeContext($automation->triggerColumn, null, $value->value));
                 $ran_count++;
             }
         }
@@ -259,55 +288,150 @@ class BoardAutomationService
     }
 
     /**
-     * Runs one automation's configured action against one item, then logs it
-     * through {@see BoardActivityLogger} the same way every other board
-     * mutation does.
+     * Runs every `recurring` automation whose schedule came due since its last run. The time of
+     * the last run is written before the actions run, so an overlapping scheduler tick can never
+     * run the same occurrence twice.
      *
-     * `$context` carries whatever the trigger knows about what just happened
-     * (`column`, `old_value`, `new_value`, `update_text`), used to fill in the
-     * message of a communication action.
-     *
-     * Every call is written to {@see BoardAutomationRunLog} for the Manage tab's "Run history".
-     * An exception thrown while acting is caught and recorded as a failed run, so one broken
-     * automation can never break the change that triggered it.
-     *
-     * @param  array<string, mixed>  $context
+     * @return int How many automations ran.
      */
-    private function executeAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context = []): void
+    public function runScheduledTriggers(?CarbonInterface $now = null): int
     {
-        try {
-            [$status, $message] = $this->performAction($automation, $item, $actor, $context);
-        } catch (Throwable $exception) {
-            report($exception);
-            [$status, $message] = [BoardAutomationRunLog::STATUS_FAILED, 'The action failed unexpectedly.'];
+        $now = CarbonImmutable::instance($now ?? Carbon::now());
+        $ran_count = 0;
+
+        $automations = BoardAutomation::query()
+            ->where('is_enabled', true)
+            ->where('trigger_type', BoardAutomation::TRIGGER_RECURRING)
+            ->with(['board', 'creator', 'owner'])
+            ->get();
+
+        foreach ($automations as $automation) {
+            $occurrence = AutomationSchedule::latestOccurrence((array) ($automation->trigger_config['schedule'] ?? []), $now);
+            if ($occurrence === null) {
+                continue;
+            }
+
+            $last_run_at = $automation->last_scheduled_run_at ?? $automation->created_at;
+            if ($last_run_at !== null && $occurrence->lessThanOrEqualTo($last_run_at)) {
+                continue;
+            }
+
+            $automation->forceFill(['last_scheduled_run_at' => $now])->saveQuietly();
+            $this->executeAutomation($automation, null, null);
+            $ran_count++;
         }
 
-        $this->recordRun($automation, $item, $actor, $status, $message);
+        return $ran_count;
+    }
+
+    // ── Running ───────────────────────────────────────────────────────────────
+
+    /**
+     * Checks the conditions, then runs every action of `$automation` in order and writes one run
+     * history row per action. An action that throws is recorded as failed and never breaks the
+     * change that triggered the automation. The owner is told about failures.
+     *
+     * @param  array<string, mixed>  $context  what the trigger knows (`column`, `old_value`, `new_value`, `update_text`)
+     */
+    private function executeAutomation(BoardAutomation $automation, ?BoardItem $item, ?User $actor, array $context = []): void
+    {
+        $actions = $automation->resolvedActions();
+        $first_action_type = $actions[0]['type'] ?? $automation->action_type;
+        $key = $automation->id.':'.($item?->id ?? 'none');
+
+        if ($this->depth >= self::MAX_CHAIN_DEPTH) {
+            $this->recordRun($automation, $item, $actor, $first_action_type, BoardAutomationActionOutcome::skipped(
+                'Stopped because too many automations triggered each other in a row.'
+            ));
+
+            return;
+        }
+
+        if (isset($this->running[$key])) {
+            $this->recordRun($automation, $item, $actor, $first_action_type, BoardAutomationActionOutcome::skipped(
+                'Skipped to prevent a loop, this automation already ran on this item in the same chain.'
+            ));
+
+            return;
+        }
+
+        $this->running[$key] = true;
+        $this->depth++;
+
+        try {
+            if ($item !== null && ! $this->conditionsMatch($automation, $item)) {
+                $this->recordRun($automation, $item, $actor, $first_action_type, BoardAutomationActionOutcome::skipped('The conditions were not met.'));
+
+                return;
+            }
+
+            $subject = $item;
+            foreach ($actions as $action) {
+                try {
+                    $outcome = $this->action_runner->run($automation, $action, $subject, $actor, $context);
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $outcome = BoardAutomationActionOutcome::failed('The action failed unexpectedly.');
+                }
+
+                $this->recordRun($automation, $subject ?? $outcome->created_item, $actor, $action['type'], $outcome);
+
+                if ($outcome->status === BoardAutomationRunLog::STATUS_FAILED) {
+                    $this->notifyOwnerOfFailure($automation, $subject, $outcome->message);
+                }
+                if ($subject === null && $outcome->created_item !== null) {
+                    $subject = $outcome->created_item;
+                }
+                if ($outcome->stops_chain) {
+                    break;
+                }
+            }
+        } finally {
+            $this->depth--;
+            unset($this->running[$key]);
+        }
     }
 
     /**
-     * @return array{0: string, 1: string} The run status and a one sentence outcome.
+     * Whether `$item` passes every "and only if" rule, evaluated by the same engine the board's
+     * Advanced filters use. A rule on a column that no longer exists is ignored.
      */
-    private function outcome(string $status, string $message): array
+    private function conditionsMatch(BoardAutomation $automation, BoardItem $item): bool
     {
-        return [$status, $message];
+        $rules = array_values(array_filter((array) ($automation->conditions ?? []), 'is_array'));
+        if ($rules === []) {
+            return true;
+        }
+
+        $scope = $item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
+        $columns = BoardColumn::where('board_view_id', $automation->board_view_id)
+            ->where('scope', $scope)
+            ->get()
+            ->keyBy(fn (BoardColumn $column) => (string) $column->id);
+
+        $evaluator = new BoardItemFilterEvaluator($columns, null, Carbon::today()->toDateString());
+
+        return $evaluator->matches($item->load('values'), [
+            'advanced_filter_rows' => $rules,
+            'advanced_filter_operator' => 'and',
+        ]);
     }
 
-    private function recordRun(BoardAutomation $automation, BoardItem $item, ?User $actor, string $status, string $message): void
+    private function recordRun(BoardAutomation $automation, ?BoardItem $item, ?User $actor, string $action_type, BoardAutomationActionOutcome $outcome): void
     {
         try {
             BoardAutomationRunLog::create([
                 'automation_id' => $automation->id,
                 'board_id' => $automation->board_id,
                 'board_view_id' => $automation->board_view_id,
-                'board_item_id' => $item->id,
+                'board_item_id' => $item?->exists && ! $item->trashed() ? $item->id : null,
                 'actor_id' => $actor?->id,
                 'automation_name' => $automation->name,
-                'item_name' => Str::limit((string) $item->name, 250, ''),
+                'item_name' => $item ? Str::limit((string) $item->name, 250, '') : null,
                 'trigger_type' => $automation->trigger_type,
-                'action_type' => $automation->action_type,
-                'status' => $status,
-                'message' => $message,
+                'action_type' => $action_type,
+                'status' => $outcome->status,
+                'message' => $outcome->message,
             ]);
         } catch (Throwable $exception) {
             // Keeping the history is best effort, it must never break the change that triggered the automation.
@@ -316,295 +440,110 @@ class BoardAutomationService
     }
 
     /**
-     * Does the work of one automation and reports what came of it, see {@see executeAction()}.
-     *
-     * @param  array<string, mixed>  $context
-     * @return array{0: string, 1: string}
+     * Tells the automation's owner that a run failed, at most once an hour per automation so a
+     * broken automation on a busy board does not flood their notifications.
      */
-    private function performAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context): array
+    private function notifyOwnerOfFailure(BoardAutomation $automation, ?BoardItem $item, string $message): void
     {
-        $automation_label = $automation->name ?: 'Automation';
-
-        if (in_array($automation->action_type, BoardAutomation::communicationActions(), true)) {
-            return $this->executeCommunicationAction($automation, $item, $actor, $context);
+        $owner = $automation->responsibleUser();
+        if (! $owner || ! $owner->is_active) {
+            return;
+        }
+        if (! Cache::add("automation_failure_notice:{$automation->id}", true, now()->addMinutes(self::FAILURE_NOTICE_MINUTES))) {
+            return;
         }
 
-        if ($automation->action_type === BoardAutomation::ACTION_MOVE_TO_GROUP) {
-            $target_group_id = (int) ($automation->action_params['target_group_id'] ?? 0);
-            if (! $target_group_id) {
-                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'No target table is set.');
-            }
-            if ($item->group_id === $target_group_id) {
-                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'The item was already in the target table.');
-            }
-
-            DB::transaction(function () use ($item, $target_group_id) {
-                $item->update(['group_id' => $target_group_id]);
-                $this->cascadeGroupToDescendants($item, $target_group_id);
-            });
-
-            $this->activity_logger->log(
-                $item->board,
-                $actor,
-                BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" moved \"{$item->name}\" to a different table",
-                ['item_id' => $item->id]
-            );
-
-            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Moved the item to a different table.');
-        }
-
-        if ($automation->action_type === BoardAutomation::ACTION_NOTIFY_PERSON) {
-            $recipient = $this->resolveNotifyTarget($automation, $item);
-            if (! $recipient) {
-                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'Found nobody to notify.');
-            }
-
+        try {
             $this->notification_service->notify(
-                recipient: $recipient,
-                actor: $actor,
+                recipient: $owner,
+                actor: null,
                 type: Notification::TYPE_AUTOMATION,
-                board: $item->board,
-                action_label: "Automation \"{$automation_label}\"",
-                action_target: sprintf('ran on "%s" on the Board "%s"', $item->name, $item->board->label),
-                link: "/boards/{$item->board_id}/pulses/{$item->id}",
-                board_item: $item,
+                board: $automation->board,
+                action_label: 'Automation "'.($automation->name ?: 'Automation').'" failed',
+                action_target: $message,
+                link: $item && ! $item->trashed() ? "/boards/{$item->board_id}/pulses/{$item->id}" : "/boards/{$automation->board_id}",
+                board_item: $item && ! $item->trashed() ? $item : null,
             );
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+    }
 
-            $this->activity_logger->log(
-                $item->board,
-                $actor,
-                BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" notified {$recipient->full_name}",
-                ['item_id' => $item->id]
-            );
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, "Notified {$recipient->full_name}.");
+    /**
+     * @return EloquentCollection<int, BoardAutomation>
+     */
+    private function enabledAutomations(BoardItem $item, string $trigger_type, ?int $column_id = null): EloquentCollection
+    {
+        $view_id = $item->group?->board_view_id;
+        if ($view_id === null) {
+            return new EloquentCollection;
         }
 
-        if ($automation->action_type === BoardAutomation::ACTION_ARCHIVE_ITEM) {
-            $item->delete();
-
-            $this->activity_logger->log(
-                $item->board,
-                $actor,
-                BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" archived \"{$item->name}\"",
-                ['item_id' => $item->id]
-            );
-
-            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Archived the item.');
-        }
-
-        if ($automation->action_type === BoardAutomation::ACTION_SET_COLUMN_VALUE) {
-            $target_column_id = $automation->action_params['target_column_id'] ?? null;
-            if (! $target_column_id) {
-                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'No column to update is set.');
-            }
-
-            $item->values()->updateOrCreate(
-                ['column_id' => $target_column_id],
-                ['value' => $automation->action_params['value'] ?? null]
-            );
-
-            $this->activity_logger->log(
-                $item->board,
-                $actor,
-                BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" updated a column on \"{$item->name}\"",
-                ['item_id' => $item->id]
-            );
-
-            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Updated a column on the item.');
-        }
-
-        if ($automation->action_type === BoardAutomation::ACTION_CREATE_ITEM) {
-            $target_group_id = (int) ($automation->action_params['target_group_id'] ?? 0);
-            if (! $target_group_id) {
-                return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'No target table is set.');
-            }
-
-            $position = (int) BoardItem::where('group_id', $target_group_id)->whereNull('parent_id')->max('position') + 1;
-
-            BoardItem::create([
-                'board_id' => $item->board_id,
-                'group_id' => $target_group_id,
-                'parent_id' => null,
-                'name' => $automation->action_params['item_name'] ?? 'New item',
-                'position' => $position,
-                'created_by_id' => $actor?->id,
-            ]);
-
-            $this->activity_logger->log(
-                $item->board,
-                $actor,
-                BoardActivityLog::ACTION_AUTOMATION_RAN,
-                "Automation \"{$automation_label}\" created a new item",
-                ['item_id' => $item->id]
-            );
-
-            return $this->outcome(BoardAutomationRunLog::STATUS_SUCCESS, 'Created a new item.');
-        }
-
-        return $this->outcome(BoardAutomationRunLog::STATUS_SKIPPED, 'This action type is not supported.');
+        return BoardAutomation::query()
+            ->where('board_view_id', $view_id)
+            ->where('is_enabled', true)
+            ->where('trigger_type', $trigger_type)
+            ->when($column_id !== null, fn ($query) => $query->where('trigger_column_id', $column_id))
+            ->with(['board', 'creator', 'owner'])
+            ->orderBy('id')
+            ->get();
     }
 
     /**
-     * Delivers one email, Slack channel post or Slack direct message. Failures that are
-     * the recipient's or the workspace's setup (nobody to notify, Slack not connected,
-     * a member who never linked Slack) are written to the board's activity log instead of
-     * being thrown, since they must not break the change that triggered the automation.
-     *
-     * @param  array<string, mixed>  $context
-     * @return array{0: string, 1: string} Failed when anything could not be delivered, skipped when there was nobody to reach.
+     * @return array<string, mixed>
      */
-    private function executeCommunicationAction(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context): array
+    private function changeContext(?BoardColumn $column, mixed $old_value, mixed $new_value): array
     {
-        $automation_label = $automation->name ?: 'Automation';
-        $message = $this->renderMessage($automation, $item, $actor, $context);
-        $link = "/boards/{$item->board_id}/pulses/{$item->id}";
-        $board_label = $item->board->label;
-        $outcomes = [];
-        $delivered_count = 0;
-        $failed_count = 0;
+        return ['column' => $column, 'old_value' => $old_value, 'new_value' => $new_value];
+    }
 
-        if ($automation->action_type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL) {
-            $channel_id = (string) ($automation->action_params['slack_channel_id'] ?? '');
-            $channel_name = (string) ($automation->action_params['slack_channel_name'] ?? $channel_id);
+    private function timeHasPassed(CarbonImmutable $local_now, string $time): bool
+    {
+        [$hour, $minute] = AutomationSchedule::parseTime($time);
 
-            $was_sent = $channel_id !== '' && $this->slack_notifier->notifyChannel($channel_id, $message, $link, $board_label);
-            $outcomes[] = $was_sent ? "posted to Slack channel #{$channel_name}" : 'could not post to Slack because Slack is not connected';
-            $was_sent ? $delivered_count++ : $failed_count++;
-        } else {
-            $recipients = $this->resolveRecipients($automation, $item);
+        return $local_now->greaterThanOrEqualTo($local_now->setTime($hour, $minute));
+    }
 
-            if ($recipients->isEmpty()) {
-                $outcomes[] = 'found nobody to notify';
-            }
+    /**
+     * Whether a column's new value is the one a `column_changed` automation waits for, read the
+     * way each column type stores its value.
+     */
+    public function valueMatches(BoardColumn $column, mixed $value, mixed $expected): bool
+    {
+        if ($column->type === BoardColumn::TYPE_CHECKBOX) {
+            $is_checked = in_array($value, [true, 1, '1', 'true'], true);
 
-            foreach ($recipients as $recipient) {
-                if ($automation->action_type === BoardAutomation::ACTION_SEND_EMAIL) {
-                    SendEmailJob::dispatch(
-                        new AutomationEmail($this->renderSubject($automation, $item), $message, $board_label, $link),
-                        $recipient->email,
-                    );
-                    $outcomes[] = "emailed {$recipient->full_name}";
-                    $delivered_count++;
-
-                    continue;
-                }
-
-                $was_sent = $this->slack_notifier->notifyUser($recipient, $message, $link, $board_label);
-                $outcomes[] = $was_sent
-                    ? "sent a Slack message to {$recipient->full_name}"
-                    : "could not reach {$recipient->full_name} on Slack because they have not connected their Slack account";
-                $was_sent ? $delivered_count++ : $failed_count++;
-            }
+            return $is_checked === in_array($expected, [true, 1, '1', 'true', 'checked'], true);
         }
 
-        $this->activity_logger->log(
-            $item->board,
-            $actor,
-            BoardActivityLog::ACTION_AUTOMATION_RAN,
-            "Automation \"{$automation_label}\" ".implode(', ', $outcomes),
-            ['item_id' => $item->id]
-        );
-
-        $status = match (true) {
-            $failed_count > 0 => BoardAutomationRunLog::STATUS_FAILED,
-            $delivered_count > 0 => BoardAutomationRunLog::STATUS_SUCCESS,
-            default => BoardAutomationRunLog::STATUS_SKIPPED,
-        };
-
-        return $this->outcome($status, ucfirst(implode(', ', $outcomes)).'.');
-    }
-
-    /**
-     * Fills in the automation's `action_params.message` template, or a default sentence
-     * for its trigger when none was written. Supported tokens: `{item_name}`, `{board_name}`,
-     * `{actor_name}`, `{column_name}`, `{old_value}`, `{new_value}` and `{update_text}`.
-     * An unknown token is left as typed rather than dropped.
-     *
-     * @param  array<string, mixed>  $context
-     */
-    public function renderMessage(BoardAutomation $automation, BoardItem $item, ?User $actor, array $context = []): string
-    {
-        $template = trim((string) ($automation->action_params['message'] ?? ''));
-        if ($template === '') {
-            $template = $this->defaultMessageTemplate($automation->trigger_type);
-        }
-
-        $column = $context['column'] ?? null;
-
-        return strtr($template, [
-            '{item_name}' => $item->name,
-            '{board_name}' => $item->board->label,
-            '{actor_name}' => $actor?->full_name ?: 'Someone',
-            '{column_name}' => $column instanceof BoardColumn ? $this->columnLabel($column) : 'a column',
-            '{old_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['old_value'] ?? null) : '',
-            '{new_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['new_value'] ?? null) : '',
-            '{update_text}' => Str::limit(trim((string) ($context['update_text'] ?? '')), 300),
-        ]);
-    }
-
-    /**
-     * `$column` may have been loaded with a partial `select()`, so a missing label is
-     * read from the database instead of being rendered as empty text.
-     */
-    private function columnLabel(BoardColumn $column): string
-    {
-        return (string) ($column->getAttribute('label') ?? BoardColumn::whereKey($column->id)->value('label') ?? 'a column');
-    }
-
-    private function renderSubject(BoardAutomation $automation, BoardItem $item): string
-    {
-        $subject = trim((string) ($automation->action_params['subject'] ?? ''));
-
-        return $subject !== '' ? strtr($subject, ['{item_name}' => $item->name, '{board_name}' => $item->board->label]) : "Update on \"{$item->name}\"";
-    }
-
-    private function defaultMessageTemplate(string $trigger_type): string
-    {
-        return match ($trigger_type) {
-            BoardAutomation::TRIGGER_STATUS_CHANGED, BoardAutomation::TRIGGER_COLUMN_CHANGED => '{column_name} changed to "{new_value}" on "{item_name}".',
-            BoardAutomation::TRIGGER_DATE_ARRIVED => 'The date in {column_name} has arrived on "{item_name}".',
-            BoardAutomation::TRIGGER_ITEM_CREATED => 'A new item "{item_name}" was created on {board_name}.',
-            BoardAutomation::TRIGGER_SUBITEM_CREATED => 'A new subitem "{item_name}" was created on {board_name}.',
-            BoardAutomation::TRIGGER_PERSON_ASSIGNED => '{new_value} was assigned to "{item_name}".',
-            BoardAutomation::TRIGGER_UPDATE_POSTED => '{actor_name} posted an update on "{item_name}": {update_text}',
-            default => 'An automation ran on "{item_name}".',
-        };
-    }
-
-    /**
-     * A human readable version of a raw stored value: a status/label option id becomes
-     * its label, a people value becomes names, other arrays are joined with commas.
-     */
-    private function displayValue(BoardColumn $column, mixed $value): string
-    {
         if ($value === null || $value === '' || $value === []) {
-            return '';
+            return false;
         }
 
-        if (in_array($column->type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL], true)) {
-            foreach ($column->config['options'] ?? [] as $option) {
-                if ((string) ($option['id'] ?? '') === (string) $value) {
-                    return (string) ($option['label'] ?? $value);
-                }
-            }
+        if (is_array($value)) {
+            $held = array_map('strval', array_filter($value, 'is_scalar'));
+            $wanted = array_map('strval', array_filter((array) $expected, 'is_scalar'));
+
+            return array_intersect($held, $wanted) !== [];
         }
 
-        if ($column->type === BoardColumn::TYPE_PEOPLE && is_array($value)) {
-            return User::whereIn('id', $value)->get()->map(fn (User $user) => $user->full_name)->implode(', ');
+        if (in_array($column->type, [BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS], true)) {
+            return is_numeric($value) && is_numeric($expected) && (float) $value === (float) $expected;
         }
 
-        return is_array($value) ? collect($value)->flatten()->implode(', ') : (string) $value;
+        if ($column->type === BoardColumn::TYPE_DATE) {
+            return substr((string) $value, 0, 10) === substr((string) $expected, 0, 10);
+        }
+
+        return mb_strtolower(trim((string) $value)) === mb_strtolower(trim(is_scalar($expected) ? (string) $expected : ''));
     }
 
     /**
      * Treats null, an empty string and an empty array as the same "no value".
      */
-    private function valuesAreEqual(mixed $old_value, mixed $new_value): bool
+    public function valuesAreEqual(mixed $old_value, mixed $new_value): bool
     {
         $normalize = fn (mixed $value) => ($value === null || $value === '' || $value === []) ? null : $value;
 
@@ -612,69 +551,14 @@ class BoardAutomationService
     }
 
     /**
-     * Everyone a communication action should reach: a fixed `notify_user_id`, or every
-     * person `notify_from_people_column_id` currently holds. Deactivated accounts are skipped.
+     * Fills in the first action's `message` template, see {@see BoardAutomationMessageRenderer}.
      *
-     * @return Collection<int, User>
+     * @param  array<string, mixed>  $context
      */
-    private function resolveRecipients(BoardAutomation $automation, BoardItem $item): Collection
+    public function renderMessage(BoardAutomation $automation, ?BoardItem $item, ?User $actor, array $context = []): string
     {
-        if ($user_id = $automation->action_params['notify_user_id'] ?? null) {
-            return User::whereKey($user_id)->where('is_active', true)->get();
-        }
+        $message = $automation->resolvedActions()[0]['params']['message'] ?? null;
 
-        if ($people_column_id = $automation->action_params['notify_from_people_column_id'] ?? null) {
-            $value = BoardItemValue::where('item_id', $item->id)->where('column_id', $people_column_id)->first();
-            $person_ids = is_array($value?->value) ? $value->value : [];
-
-            return $person_ids ? User::whereIn('id', $person_ids)->where('is_active', true)->get() : new Collection;
-        }
-
-        return new Collection;
-    }
-
-    /**
-     * A fixed `notify_user_id`, or whoever `notify_from_people_column_id`
-     * currently holds (the first assigned person, when more than one).
-     */
-    private function resolveNotifyTarget(BoardAutomation $automation, BoardItem $item): ?User
-    {
-        if ($user_id = $automation->action_params['notify_user_id'] ?? null) {
-            return User::find($user_id);
-        }
-
-        if ($people_column_id = $automation->action_params['notify_from_people_column_id'] ?? null) {
-            $value = BoardItemValue::where('item_id', $item->id)->where('column_id', $people_column_id)->first();
-            $person_ids = is_array($value?->value) ? $value->value : [];
-
-            return $person_ids ? User::find($person_ids[0]) : null;
-        }
-
-        return null;
-    }
-
-    /**
-     * Propagates a new `group_id` onto every descendant of `$item` — mirrors
-     * {@see BoardItemController::cascadeGroupToDescendants()},
-     * duplicated here (rather than reused) since that method is private on
-     * the controller and this service has no other reason to depend on it.
-     */
-    private function cascadeGroupToDescendants(BoardItem $item, int $group_id): void
-    {
-        $item->loadMissing('childrenRecursive');
-
-        $flatten = function (iterable $items) use (&$flatten): array {
-            $flat = [];
-            foreach ($items as $child) {
-                $flat[] = $child;
-                $flat = array_merge($flat, $flatten($child->childrenRecursive));
-            }
-
-            return $flat;
-        };
-
-        foreach ($flatten($item->childrenRecursive) as $descendant) {
-            $descendant->update(['group_id' => $group_id]);
-        }
+        return $this->renderer->render(is_string($message) ? $message : null, $automation, $item, $actor, $context);
     }
 }

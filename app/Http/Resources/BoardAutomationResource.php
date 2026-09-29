@@ -22,19 +22,30 @@ class BoardAutomationResource extends JsonResource
             'board_id' => $this->board_id,
             'board_view_id' => $this->board_view_id,
             'name' => $this->name,
+            'description' => $this->description,
             'is_enabled' => $this->is_enabled,
+            'importance' => $this->importance ?? BoardAutomation::IMPORTANCE_MINOR,
             'trigger_type' => $this->trigger_type,
             'trigger_column_id' => $this->trigger_column_id,
             'trigger_value' => $this->trigger_value,
+            'trigger_config' => $this->trigger_config ?? (object) [],
+            'conditions' => $this->conditions ?? [],
             'action_type' => $this->action_type,
             'action_params' => $this->action_params,
+            'actions' => $this->resource->resolvedActions(),
             'created_at' => $this->created_at,
+            'updated_at' => $this->updated_at,
             // Filled in by `BoardAutomationController`, which loads the run stats and the creator.
             'run_count' => (int) ($this->run_logs_count ?? 0),
             'last_run_at' => $this->run_logs_max_created_at ? Carbon::parse($this->run_logs_max_created_at)->toIso8601String() : null,
             'created_by' => $this->whenLoaded('creator', fn () => $this->creator ? [
                 'id' => $this->creator->id,
                 'name' => $this->creator->full_name,
+            ] : null),
+            // Whoever answers for the automation, the creator until ownership is transferred.
+            'owner' => $this->whenLoaded('owner', fn () => ($this->owner ?? $this->creator) ? [
+                'id' => ($this->owner ?? $this->creator)->id,
+                'name' => ($this->owner ?? $this->creator)->full_name,
             ] : null),
         ];
     }
