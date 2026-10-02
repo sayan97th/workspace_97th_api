@@ -90,8 +90,25 @@ class BoardColumn extends Model
     /** Stores a `{start, end}` date-range value (both `YYYY-MM-DD`) — what the Gantt view's bars are actually driven by, mirroring monday.com's own Timeline column. */
     public const TYPE_TIMELINE = 'timeline';
 
-    /** Stores an array of predecessor item ids (Finish-to-Start only, mirroring the most common of monday.com's four dependency modes) — drives the Gantt view's arrows and auto-reschedule. */
+    /**
+     * Stores an array of predecessor item ids, drives the Gantt view's arrows. Like monday.com's
+     * Dependency column it also schedules the item from them: `config.date_column_id` names the
+     * Date or Timeline column it moves, `config.dependency_mode` how (see the `DEPENDENCY_MODE_*`
+     * constants) and `config.use_working_days` whether lags count working days of the board's
+     * calendar. Each link's type and lag live in {@see BoardItemDependencyLink}.
+     */
     public const TYPE_DEPENDENCY = 'dependency';
+
+    /** Dependent items keep their exact lag: they move whenever a predecessor's date moves, earlier or later. */
+    public const DEPENDENCY_MODE_STRICT = 'strict';
+
+    /** Dependent items only move later, when a predecessor's date would break their lag. */
+    public const DEPENDENCY_MODE_FLEXIBLE = 'flexible';
+
+    /** Links are shown only, no date ever moves. */
+    public const DEPENDENCY_MODE_NONE = 'none';
+
+    public const DEPENDENCY_MODES = [self::DEPENDENCY_MODE_STRICT, self::DEPENDENCY_MODE_FLEXIBLE, self::DEPENDENCY_MODE_NONE];
 
     /** A single-select colored pill styled as an outline badge (vs. Status's filled pill) — e.g. Priority. */
     public const TYPE_LABEL = 'label';
@@ -147,6 +164,27 @@ class BoardColumn extends Model
      * @var array<int, string>
      */
     public const READ_ONLY_TYPES = [self::TYPE_FORMULA, self::TYPE_MIRROR, self::TYPE_AUTO_NUMBER, self::TYPE_BUTTON];
+
+    /**
+     * A Dependency column's scheduling mode. A column saved before modes existed has none and
+     * keeps its old behavior, links only.
+     */
+    public function dependencyMode(): string
+    {
+        $mode = $this->config['dependency_mode'] ?? null;
+
+        return in_array($mode, self::DEPENDENCY_MODES, true) ? $mode : self::DEPENDENCY_MODE_NONE;
+    }
+
+    /**
+     * The Date or Timeline column a Dependency column schedules, when it names one.
+     */
+    public function dependencyDateColumnId(): ?int
+    {
+        $id = $this->config['date_column_id'] ?? null;
+
+        return is_numeric($id) ? (int) $id : null;
+    }
 
     /**
      * The board (navigation leaf) this column belongs to.

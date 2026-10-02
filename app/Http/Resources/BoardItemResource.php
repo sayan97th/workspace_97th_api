@@ -81,6 +81,10 @@ class BoardItemResource extends JsonResource
                 ?? ($this->relationLoaded('checklistItems') ? $this->checklistItems->count() : 0),
             'checklist_done_count' => $this->checklist_done_count
                 ?? ($this->relationLoaded('checklistItems') ? $this->checklistItems->where('is_done', true)->count() : 0),
+            // Each Dependency cell's link settings, `{column_id: {predecessor_id: {type, lag_days}}}`,
+            // see BoardItemDependencyLink. Loaded by `index()`, `show()` and the value writes; an
+            // empty object otherwise. Objects all the way down for the same reason as `values` below.
+            'dependency_links' => $this->dependencyLinksMap($request),
             // Cast to a plain object: if every column id in this map happens to be an
             // integer key, Laravel's JsonResource::removeMissingValues() treats the
             // array as a list and silently reindexes it from 0 via array_values(),
@@ -108,6 +112,25 @@ class BoardItemResource extends JsonResource
                 (object) $this->visibleValues($request, $this->mirror_values ?? [])
             ),
         ];
+    }
+
+    private function dependencyLinksMap(Request $request): object
+    {
+        if (! $this->relationLoaded('dependencyLinks')) {
+            return (object) [];
+        }
+
+        $hidden_ids = array_map('intval', app(ColumnPermissionService::class)->hiddenColumnIds((int) $this->board_id, $request->user()));
+        $map = [];
+        foreach ($this->dependencyLinks as $link) {
+            if (in_array($link->column_id, $hidden_ids, true)) {
+                continue;
+            }
+            $map[(string) $link->column_id] ??= new \stdClass;
+            $map[(string) $link->column_id]->{(string) $link->predecessor_id} = ['type' => $link->type, 'lag_days' => $link->lag_days];
+        }
+
+        return (object) $map;
     }
 
     /**

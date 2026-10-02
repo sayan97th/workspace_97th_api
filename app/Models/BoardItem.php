@@ -40,6 +40,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItem> $children
  * @property-read Collection<int, BoardItem> $childrenRecursive
  * @property-read Collection<int, BoardItemValue> $values
+ * @property-read Collection<int, BoardItemDependencyLink> $dependencyLinks
  * @property-read Collection<int, BoardItemComment> $comments
  * @property-read Collection<int, BoardItemCommentAttachment> $commentAttachments
  * @property-read Collection<int, BoardItemChecklistItem> $checklistItems
@@ -116,7 +117,7 @@ class BoardItem extends Model
      */
     public function childrenRecursive(): HasMany
     {
-        return $this->children()->with(['childrenRecursive', 'values'])->withCount([
+        return $this->children()->with(['childrenRecursive', 'values', 'dependencyLinks'])->withCount([
             'comments',
             'commentAttachments',
             'attachments',
@@ -134,6 +135,17 @@ class BoardItem extends Model
     public function values(): HasMany
     {
         return $this->hasMany(BoardItemValue::class, 'item_id');
+    }
+
+    /**
+     * How this item is scheduled from each of its predecessors, per Dependency column: the
+     * link's type and lag. See {@see BoardItemDependencyLink}.
+     *
+     * @return HasMany<BoardItemDependencyLink, $this>
+     */
+    public function dependencyLinks(): HasMany
+    {
+        return $this->hasMany(BoardItemDependencyLink::class, 'item_id');
     }
 
     /**

@@ -96,7 +96,7 @@ class BoardColumnController extends Controller
             'scope' => $scope,
             'position' => $position,
             'width' => $validated['width'] ?? 180,
-            'config' => $validated['config'] ?? $this->defaultConfigFor($validated['type']),
+            'config' => $this->withDependencyDefaults($validated['type'], $validated['config'] ?? $this->defaultConfigFor($validated['type']), $view->id, $scope),
             'hideable' => $validated['hideable'] ?? true,
             'pinnable' => $validated['pinnable'] ?? true,
         ]);
@@ -122,6 +122,11 @@ class BoardColumnController extends Controller
             BoardEditGate::authorize($item, $request->user());
         } else {
             BoardEditGate::authorizeStructure($item, $request->user());
+        }
+
+        // A column turned into a Dependency column starts scheduling right away, like a new one.
+        if (($validated['type'] ?? null) === BoardColumn::TYPE_DEPENDENCY && $column->type !== BoardColumn::TYPE_DEPENDENCY) {
+            $validated['config'] = $this->withDependencyDefaults(BoardColumn::TYPE_DEPENDENCY, $validated['config'] ?? $column->config, $column->board_view_id, $column->scope);
         }
 
         $column->fill($validated)->save();
@@ -368,6 +373,33 @@ class BoardColumnController extends Controller
      *
      * @return array<string, mixed>|null
      */
+    /**
+     * A new Dependency column schedules the first Date or Timeline column of its table in Strict
+     * mode, so setting a lag on a link moves the dependent item's date right away, like
+     * monday.com. Settings already given are kept.
+     *
+     * @param  array<string, mixed>|null  $config
+     * @return array<string, mixed>|null
+     */
+    private function withDependencyDefaults(string $type, ?array $config, int $view_id, string $scope): ?array
+    {
+        if ($type !== BoardColumn::TYPE_DEPENDENCY) {
+            return $config;
+        }
+
+        $date_column_id = BoardColumn::where('board_view_id', $view_id)
+            ->where('scope', $scope)
+            ->whereIn('type', [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])
+            ->orderBy('position')
+            ->value('id');
+
+        return ($config ?? []) + [
+            'date_column_id' => $date_column_id,
+            'dependency_mode' => BoardColumn::DEPENDENCY_MODE_STRICT,
+            'use_working_days' => false,
+        ];
+    }
+
     private function defaultConfigFor(string $type): ?array
     {
         if ($type === BoardColumn::TYPE_STATUS) {

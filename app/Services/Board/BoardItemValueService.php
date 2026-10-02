@@ -15,7 +15,8 @@ use App\Services\Notification\NotificationService;
  * bulk "Edit column" action and the comment composer's "Assign" action so all
  * of them get the same side effects: the "Assigned you" notification, board
  * automations and the item activity entry the Update Feed shows. A write an
- * automation makes is also written down in its run's journal, for "Undo".
+ * automation makes is also written down in its run's journal, for "Undo". A
+ * changed date also reschedules the items that depend on it.
  */
 class BoardItemValueService
 {
@@ -24,6 +25,7 @@ class BoardItemValueService
         private readonly BoardAutomationService $automation_service,
         private readonly BoardItemActivityService $activity_service,
         private readonly BoardAutomationRunJournal $journal,
+        private readonly BoardDependencyScheduler $dependency_scheduler,
     ) {}
 
     /**
@@ -79,6 +81,9 @@ class BoardItemValueService
             }
 
             $this->automation_service->handleValueChanged($board_item, $column, $old_value, $value, $actor);
+
+            // Moves the dates of items that depend on this one, see BoardDependencyScheduler.
+            $this->dependency_scheduler->handleValueChanged($board_item, $column, $old_value, $value, $actor);
         }
     }
 

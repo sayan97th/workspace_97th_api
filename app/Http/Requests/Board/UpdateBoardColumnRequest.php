@@ -90,6 +90,12 @@ class UpdateBoardColumnRequest extends FormRequest
             // Number columns only: which aggregation the Table view's group summary footer shows for this column. Defaults to "sum" when unset.
             'config.aggregation' => ['sometimes', 'nullable', 'string', Rule::in(['sum', 'avg', 'min', 'max', 'count'])],
             // Date columns only: notifies everyone assigned in a People column on the same item once the date is this many days away — see DueDateReminderService.
+            // Dependency columns only: which Date or Timeline column of the same table they schedule, how, and whether lags count working days only.
+            'config.date_column_id' => ['sometimes', 'nullable', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query
+                ->whereIn('type', [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE])
+                ->when($column instanceof BoardColumn, fn ($same_table) => $same_table->where('board_view_id', $column->board_view_id)->where('scope', $column->scope)))],
+            'config.dependency_mode' => ['sometimes', 'string', Rule::in(BoardColumn::DEPENDENCY_MODES)],
+            'config.use_working_days' => ['sometimes', 'boolean'],
             'config.reminder' => ['sometimes', 'nullable', 'array'],
             'config.reminder.enabled' => ['sometimes', 'boolean'],
             'config.reminder.days_before' => ['sometimes', 'integer', 'min:0', 'max:365'],

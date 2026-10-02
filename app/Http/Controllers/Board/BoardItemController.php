@@ -19,6 +19,7 @@ use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
+use App\Services\Board\BoardDependencyScheduler;
 use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardItemScopeConversionService;
 use App\Services\Board\BoardItemValueService;
@@ -41,6 +42,7 @@ class BoardItemController extends Controller
         private readonly MirrorColumnResolver $mirror_resolver,
         private readonly BoardAutomationService $automation_service,
         private readonly BoardItemValueService $value_service,
+        private readonly BoardDependencyScheduler $dependency_scheduler,
         private readonly BoardItemScopeConversionService $scope_conversion_service,
         private readonly ColumnPermissionService $column_permissions,
     ) {}
@@ -82,6 +84,7 @@ class BoardItemController extends Controller
             ->whereHas('group', fn ($q) => $q->where('board_view_id', $view->id)->where('is_archived', false))
             ->with([
                 'values',
+                'dependencyLinks',
                 'recurrence',
                 // An archived subitem is hidden like an archived root item, it
                 // only comes back through the board's archive panel.
@@ -160,7 +163,7 @@ class BoardItemController extends Controller
     {
         $this->ensureItemBelongsToBoard($item, $board_item);
 
-        $board_item->load(['values', 'group', 'creator', 'checklistItems']);
+        $board_item->load(['values', 'dependencyLinks', 'group', 'creator', 'checklistItems']);
         $this->attachMirrorValues(collect([$board_item]), $board_item->group->board_view_id, $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM);
 
         return response()->json(new BoardItemDetailResource($board_item));
@@ -411,7 +414,9 @@ class BoardItemController extends Controller
 
         return response()->json([
             'message' => 'Item updated successfully.',
-            'item' => new BoardItemResource($board_item->fresh('values')),
+            'item' => new BoardItemResource($board_item->fresh(['values', 'dependencyLinks'])),
+            // Items whose dates moved because they depend on this one, see BoardDependencyScheduler.
+            'moved_items' => BoardItemResource::collection($this->dependency_scheduler->movedItems($board_item->id)),
         ]);
     }
 
