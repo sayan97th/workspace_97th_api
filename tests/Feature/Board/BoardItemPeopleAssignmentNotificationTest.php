@@ -107,3 +107,31 @@ test('the notify_on_assignment column preference can be toggled through the colu
     $this->assertDatabaseHas('board_columns', ['id' => $column->id]);
     expect($column->fresh()->config)->toBe(['notify_on_assignment' => false]);
 });
+
+test('saving a confirmed people selection in one request stores it and only notifies the newly added people once', function () {
+    Queue::fake();
+
+    [$board, , $column, $item] = createPeopleAssignmentTestBoard();
+    $actor = User::factory()->create();
+    $kept_assignee = User::factory()->create();
+    $removed_assignee = User::factory()->create();
+    $first_new_assignee = User::factory()->create();
+    $second_new_assignee = User::factory()->create();
+    $item->values()->create(['column_id' => $column->id, 'value' => [$kept_assignee->id, $removed_assignee->id]]);
+
+    // The People picker's "Save" button sends the whole drafted list at once.
+    $this->actingAs($actor, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/values", [
+        'values' => [(string) $column->id => [(string) $kept_assignee->id, (string) $first_new_assignee->id, (string) $second_new_assignee->id]],
+    ])->assertOk();
+
+    expect(array_map('intval', $item->values()->where('column_id', $column->id)->first()->value))
+        ->toBe([$kept_assignee->id, $first_new_assignee->id, $second_new_assignee->id]);
+
+    foreach ([$first_new_assignee, $second_new_assignee] as $new_assignee) {
+        expect(Notification::where('user_id', $new_assignee->id)->where('type', Notification::TYPE_ASSIGNED)->count())->toBe(1);
+    }
+    foreach ([$kept_assignee, $removed_assignee] as $untouched_assignee) {
+        expect(Notification::where('user_id', $untouched_assignee->id)->count())->toBe(0);
+    }
+    Queue::assertPushed(SendEmailJob::class, 2);
+});
