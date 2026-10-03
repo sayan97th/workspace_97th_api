@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\SlackAppSetting;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
@@ -9,12 +10,7 @@ use Illuminate\Support\Facades\Http;
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
 
-    config([
-        'services.slack.client_id' => '1234.5678',
-        'services.slack.client_secret' => 'client-secret',
-        'services.slack.signing_secret' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
-        'services.slack.redirect' => 'https://api.example.com/api/integrations/slack/callback',
-    ]);
+    saveSlackAppCredentials();
 });
 
 function makeDiagnosticsInstallation(array $overrides = []): SlackInstallation
@@ -42,7 +38,7 @@ function makeDiagnosticsAdmin(): User
 function signSlackRequest(string $body, ?int $timestamp = null, ?string $secret = null): array
 {
     $timestamp ??= now()->getTimestamp();
-    $secret ??= (string) config('services.slack.signing_secret');
+    $secret ??= (string) SlackAppSetting::current()?->signing_secret;
 
     return [
         'X-Slack-Request-Timestamp' => (string) $timestamp,
@@ -65,7 +61,7 @@ test('only administrators can run the slack diagnostics', function () {
 });
 
 test('diagnostics report missing credentials and skip the checks that depend on them', function () {
-    config(['services.slack.client_id' => null, 'services.slack.client_secret' => null, 'services.slack.signing_secret' => null]);
+    SlackAppSetting::query()->delete();
     Http::fake();
 
     $checks = $this->actingAs(makeDiagnosticsAdmin(), 'api')->getJson('/api/integrations/slack/diagnostics')->assertOk()->json('checks');
@@ -112,7 +108,7 @@ test('diagnostics pass end to end with a healthy installation, without leaking s
 });
 
 test('diagnostics flag a revoked bot token, missing scopes and a plain http redirect url', function () {
-    config(['services.slack.redirect' => 'http://localhost:8000/api/integrations/slack/callback']);
+    SlackAppSetting::current()->update(['redirect_uri' => 'http://localhost:8000/api/integrations/slack/callback']);
     makeDiagnosticsInstallation(['scopes' => 'chat:write']);
 
     Http::fake(['slack.com/api/auth.test' => Http::response(['ok' => false, 'error' => 'token_revoked'])]);

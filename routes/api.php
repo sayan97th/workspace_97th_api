@@ -159,7 +159,7 @@ Route::prefix('auth')->group(function () {
 Route::get('integrations/slack/callback', SlackOAuthCallbackController::class);
 
 // Event Subscriptions request URL of the Slack app. Public as well, but only requests signed
-// with SLACK_SIGNING_SECRET get through, see `VerifySlackSignature`.
+// with the signing secret saved in Administration get through, see `VerifySlackSignature`.
 Route::post('integrations/slack/events', SlackEventController::class)->middleware(['slack.signature', 'throttle:120,1']);
 
 // ─── Authenticated routes ───────────────────────────────────────────────────

@@ -68,7 +68,7 @@ class SlackService
     ) {}
 
     /**
-     * Whether the Slack app's credentials are set, in Administration or in the environment.
+     * Whether the Slack app's credentials were saved in Administration.
      */
     public function isConfigured(): bool
     {

@@ -10,8 +10,8 @@ return new class extends Migration
      * Run the migrations.
      *
      * The credentials of the Slack app, managed from Administration > Integrations instead of
-     * the API environment. A single row, see `SlackAppSetting::current()`. While it is empty
-     * the SLACK_* environment values are used, see `App\Services\Slack\SlackAppCredentials`.
+     * the API environment. A single row, see `SlackAppSetting::current()` and
+     * `App\Services\Slack\SlackAppCredentials`.
      */
     public function up(): void
     {

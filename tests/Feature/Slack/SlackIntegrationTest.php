@@ -4,6 +4,7 @@ use App\Models\BoardAutomation;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardView;
+use App\Models\SlackAppSetting;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
@@ -19,12 +20,8 @@ use Illuminate\Support\Sleep;
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
 
-    config([
-        'services.slack.client_id' => 'client-id',
-        'services.slack.client_secret' => 'client-secret',
-        'services.slack.redirect' => 'http://localhost/api/integrations/slack/callback',
-        'app.frontend_url' => 'http://frontend.test',
-    ]);
+    saveSlackAppCredentials(['client_id' => 'client-id', 'redirect_uri' => 'http://localhost/api/integrations/slack/callback']);
+    config(['app.frontend_url' => 'http://frontend.test']);
 });
 
 function makeSlackInstallation(array $overrides = []): SlackInstallation
@@ -85,7 +82,7 @@ test('only administrators can request the install url', function () {
 });
 
 test('the install url is refused while the server has no slack credentials', function () {
-    config(['services.slack.client_id' => null]);
+    SlackAppSetting::query()->delete();
 
     $this->actingAs(makeAdminUser(), 'api')->postJson('/api/integrations/slack/install-url')->assertStatus(503);
 });

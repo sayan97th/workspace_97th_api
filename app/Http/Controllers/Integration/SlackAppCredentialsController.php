@@ -13,7 +13,7 @@ use Illuminate\Http\Request;
 
 /**
  * Administration > Integrations > Slack app (admin, super_admin). The Slack app credentials
- * are managed here instead of the API environment, so an administrator can point the
+ * are managed only here, never in the API environment, so an administrator can point the
  * integration at a different Slack app at any time. Secrets are write only, the API only
  * ever answers with their last four characters.
  */
@@ -52,7 +52,7 @@ class SlackAppCredentialsController extends Controller
     /**
      * DELETE /api/integrations/slack/app
      *
-     * Forgets the saved credentials, the values of the API environment apply again.
+     * Forgets the saved credentials. Connected workspaces keep working, new ones cannot be added until an app is saved again.
      */
     public function destroy(Request $request): JsonResponse
     {

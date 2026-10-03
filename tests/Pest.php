@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\SlackAppSetting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -47,4 +48,20 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+/**
+ * Saves the Slack app credentials the way an administrator does from Administration >
+ * Integrations, the only place the Slack integration reads them from.
+ */
+function saveSlackAppCredentials(array $overrides = []): SlackAppSetting
+{
+    SlackAppSetting::query()->delete();
+
+    return SlackAppSetting::create(array_merge([
+        'client_id' => '1234.5678',
+        'client_secret' => 'client-secret',
+        'signing_secret' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        'redirect_uri' => 'https://api.example.com/api/integrations/slack/callback',
+    ], $overrides));
 }

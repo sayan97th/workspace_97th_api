@@ -9,7 +9,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Rejects any request that was not signed by Slack with the app's signing secret, see
- * {@see SlackAppCredentials::acceptedSigningSecrets()}.
+ * {@see SlackAppCredentials::signingSecret()}.
  *
  * Slack signs `v0:{timestamp}:{raw body}` with HMAC SHA256 and sends the result in
  * `X-Slack-Signature`. Requests older than five minutes are refused as well, so a captured
@@ -25,19 +25,17 @@ class VerifySlackSignature
 
     public function handle(Request $request, Closure $next): Response
     {
-        $signing_secrets = $this->credentials->acceptedSigningSecrets();
+        $signing_secret = $this->credentials->signingSecret();
 
-        if ($signing_secrets === []) {
-            return response()->json(['message' => 'Slack is not configured on this server.'], 503);
+        if ($signing_secret === null) {
+            return response()->json(['message' => 'Slack is not configured yet.'], 503);
         }
 
-        foreach ($signing_secrets as $signing_secret) {
-            if ($this->hasValidSignature($request, $signing_secret)) {
-                return $next($request);
-            }
+        if (! $this->hasValidSignature($request, $signing_secret)) {
+            return response()->json(['message' => 'Invalid Slack signature.'], 401);
         }
 
-        return response()->json(['message' => 'Invalid Slack signature.'], 401);
+        return $next($request);
     }
 
     private function hasValidSignature(Request $request, string $signing_secret): bool

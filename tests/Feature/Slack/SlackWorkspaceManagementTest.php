@@ -16,13 +16,8 @@ use Illuminate\Testing\TestResponse;
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
 
-    config([
-        'services.slack.client_id' => '111.222',
-        'services.slack.client_secret' => 'environmentsecret0001',
-        'services.slack.signing_secret' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
-        'services.slack.redirect' => 'https://api.example.com/api/integrations/slack/callback',
-        'app.frontend_url' => 'http://frontend.test',
-    ]);
+    saveSlackAppCredentials(['client_id' => '111.222', 'client_secret' => 'firstappsecret0001']);
+    config(['app.frontend_url' => 'http://frontend.test']);
 });
 
 function connectSlackWorkspace(string $team_id, string $team_name, array $overrides = []): SlackInstallation
@@ -42,7 +37,7 @@ function connectSlackWorkspace(string $team_id, string $team_name, array $overri
 function signedSlackHeaders(string $body, ?string $secret = null): array
 {
     $timestamp = now()->getTimestamp();
-    $secret ??= (string) config('services.slack.signing_secret');
+    $secret ??= (string) SlackAppSetting::current()?->signing_secret;
 
     return [
         'X-Slack-Request-Timestamp' => (string) $timestamp,
@@ -274,13 +269,14 @@ test('installing a workspace matches members by email right away', function () {
     expect($amanda->slackLink()->first()->slack_user_id)->toBe('UAMANDA');
 });
 
-test('app credentials saved in administration win over the environment and never leak', function () {
+test('administrators change the slack app from the site and secrets never leak', function () {
     $owner = makeWorkspaceOwner();
 
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack/app')
         ->assertOk()
-        ->assertJsonPath('source', 'environment')
-        ->assertJsonPath('client_id', '111.222');
+        ->assertJsonPath('source', 'database')
+        ->assertJsonPath('client_id', '111.222')
+        ->assertJsonMissing(['client_secret' => 'firstappsecret0001']);
 
     $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', [
         'client_id' => '999.888',
@@ -288,12 +284,12 @@ test('app credentials saved in administration win over the environment and never
         'signing_secret' => 'f0e1d2c3b4a5968778695a4b3c2d1e0f',
     ])
         ->assertOk()
-        ->assertJsonPath('source', 'database')
         ->assertJsonPath('client_id', '999.888')
         ->assertJsonPath('client_secret_hint', '••••0001')
         ->assertJsonMissing(['client_secret' => 'savedclientsecret0001']);
 
-    expect(DB::table('slack_app_settings')->value('client_secret'))->not->toBe('savedclientsecret0001');
+    expect(DB::table('slack_app_settings')->value('client_secret'))->not->toBe('savedclientsecret0001')
+        ->and(SlackAppSetting::count())->toBe(1);
 
     $url = $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/install-url')->json('url');
     parse_str(parse_url($url, PHP_URL_QUERY), $query);
@@ -326,29 +322,35 @@ test('invalid app credentials are rejected', function () {
     ])->assertJsonValidationErrors(['client_id', 'client_secret', 'redirect_uri']);
 });
 
-test('removing the saved credentials falls back to the environment', function () {
+test('without saved credentials slack is not configured, whatever the environment holds', function () {
+    config(['services.slack.client_id' => '111.222', 'services.slack.client_secret' => 'environmentsecret0001']);
     $owner = makeWorkspaceOwner();
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', ['client_id' => '999.888', 'client_secret' => 'savedclientsecret0001'])->assertOk();
 
     $this->actingAs($owner, 'api')->deleteJson('/api/integrations/slack/app')
         ->assertOk()
-        ->assertJsonPath('source', 'environment')
-        ->assertJsonPath('client_id', '111.222');
+        ->assertJsonPath('source', 'none')
+        ->assertJsonPath('is_configured', false)
+        ->assertJsonPath('client_id', null);
+
+    $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/install-url')->assertStatus(503);
+    $this->actingAs($owner, 'api')->getJson('/api/integrations/slack')->assertJsonPath('is_configured', false);
 });
 
-test('events signed with the saved or the environment signing secret are both accepted', function () {
+test('events are verified with the signing secret saved in administration only', function () {
     $owner = makeWorkspaceOwner();
-    $saved_secret = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
+    $new_secret = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
     $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', [
-        'client_id' => '999.888', 'client_secret' => 'savedclientsecret0001', 'signing_secret' => $saved_secret,
+        'client_id' => '999.888', 'client_secret' => 'savedclientsecret0001', 'signing_secret' => $new_secret,
     ])->assertOk();
 
     $body = json_encode(['type' => 'url_verification', 'challenge' => 'abc']);
     $send = fn (string $secret) => $this->call('POST', '/api/integrations/slack/events', [], [], [], $this->transformHeadersToServerVars(signedSlackHeaders($body, $secret)), $body);
 
-    $send($saved_secret)->assertOk()->assertJsonPath('challenge', 'abc');
-    $send('a1b2c3d4e5f60718293a4b5c6d7e8f90')->assertOk();
-    $send('00000000000000000000000000000000')->assertUnauthorized();
+    $send($new_secret)->assertOk()->assertJsonPath('challenge', 'abc');
+    $send('a1b2c3d4e5f60718293a4b5c6d7e8f90')->assertUnauthorized();
+
+    SlackAppSetting::query()->delete();
+    $send($new_secret)->assertStatus(503);
 });
 
 test('the manifest carries the redirect url, events url and scopes', function () {

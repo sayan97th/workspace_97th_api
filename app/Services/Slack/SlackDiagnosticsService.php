@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Cache;
 
 /**
  * Checks every piece the Slack integration depends on, one at a time, so an administrator
- * can see exactly which one is broken: the credentials in the environment, the redirect URL, the signing secret, the installed workspace, its bot
+ * can see exactly which one is broken: the saved app credentials, the redirect URL, the signing secret, the installed workspace, its bot
  * token and scopes, the channel list and the caller's own linked account.
  *
  * A check that depends on an earlier one which failed is reported as `skipped` rather than

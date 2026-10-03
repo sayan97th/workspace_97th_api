@@ -6,30 +6,22 @@ use App\Models\SlackAppSetting;
 use App\Models\User;
 
 /**
- * Where the Slack app credentials come from. An administrator can save them from
- * Administration > Integrations, those always win. While nothing was saved there the SLACK_*
- * values of the API environment are used, so an existing deployment keeps working untouched.
- *
- * The two sources are never mixed field by field: a saved client id with the environment's
- * secret would belong to two different Slack apps and fail in a confusing way.
+ * The Slack app credentials, saved by an administrator from Administration > Integrations.
+ * Like monday.com, nothing about Slack is read from the API environment: the app, the
+ * workspaces connected to it and the active workspace are all managed from the site.
  */
 class SlackAppCredentials
 {
-    public const SOURCE_DATABASE = 'database';
+    /** Where the callback route lives, relative to APP_URL. */
+    private const CALLBACK_PATH = '/api/integrations/slack/callback';
 
-    public const SOURCE_ENVIRONMENT = 'environment';
+    public const SOURCE_DATABASE = 'database';
 
     public const SOURCE_NONE = 'none';
 
     public function source(): string
     {
-        if ($this->setting()) {
-            return self::SOURCE_DATABASE;
-        }
-
-        return filled(config('services.slack.client_id')) && filled(config('services.slack.client_secret'))
-            ? self::SOURCE_ENVIRONMENT
-            : self::SOURCE_NONE;
+        return $this->setting() ? self::SOURCE_DATABASE : self::SOURCE_NONE;
     }
 
     public function isConfigured(): bool
@@ -39,47 +31,33 @@ class SlackAppCredentials
 
     public function clientId(): ?string
     {
-        $setting = $this->setting();
-
-        return $setting ? $setting->client_id : $this->stringConfig('services.slack.client_id');
+        return $this->setting()?->client_id;
     }
 
     public function clientSecret(): ?string
     {
-        $setting = $this->setting();
-
-        return $setting ? $setting->client_secret : $this->stringConfig('services.slack.client_secret');
+        return $this->setting()?->client_secret;
     }
 
     public function signingSecret(): ?string
     {
-        $setting = $this->setting();
+        $signing_secret = $this->setting()?->signing_secret;
 
-        return $setting ? $setting->signing_secret : $this->stringConfig('services.slack.signing_secret');
-    }
-
-    /**
-     * Every signing secret a genuine Slack request may be signed with. The environment one is
-     * kept next to the saved one, so a workspace installed with the previous app can still
-     * report that it removed the app after an administrator switched to a different app.
-     *
-     * @return array<int, string>
-     */
-    public function acceptedSigningSecrets(): array
-    {
-        return array_values(array_unique(array_filter([
-            $this->setting()?->signing_secret,
-            $this->stringConfig('services.slack.signing_secret'),
-        ], 'filled')));
+        return filled($signing_secret) ? $signing_secret : null;
     }
 
     /**
      * The OAuth redirect URL registered in the Slack app. A saved override is useful behind an
-     * HTTPS tunnel, otherwise it follows SLACK_REDIRECT_URI or APP_URL.
+     * HTTPS tunnel, otherwise it is the API's own callback under APP_URL.
      */
     public function redirectUri(): string
     {
-        return $this->setting()?->redirect_uri ?: (string) config('services.slack.redirect');
+        return $this->setting()?->redirect_uri ?: $this->defaultRedirectUri();
+    }
+
+    public function defaultRedirectUri(): string
+    {
+        return rtrim((string) config('app.url'), '/').self::CALLBACK_PATH;
     }
 
     /**
@@ -133,7 +111,8 @@ class SlackAppCredentials
     }
 
     /**
-     * Forgets the saved credentials, the environment values apply again.
+     * Forgets the saved credentials. Connected workspaces keep their bot tokens, but no new
+     * workspace can be connected until an app is saved again.
      */
     public function clear(): void
     {
@@ -156,10 +135,9 @@ class SlackAppCredentials
             'client_id' => $this->clientId(),
             'client_secret_hint' => $this->hint($this->clientSecret()),
             'signing_secret_hint' => $this->hint($this->signingSecret()),
-            'has_environment_credentials' => filled(config('services.slack.client_id')) && filled(config('services.slack.client_secret')),
             'redirect_uri' => $this->redirectUri(),
             'redirect_uri_override' => $setting?->redirect_uri,
-            'default_redirect_uri' => (string) config('services.slack.redirect'),
+            'default_redirect_uri' => $this->defaultRedirectUri(),
             'events_url' => $this->eventsUrl(),
             'bot_scopes' => SlackService::BOT_SCOPES,
             'user_scopes' => SlackService::USER_SCOPES,
@@ -212,13 +190,6 @@ class SlackAppCredentials
     private function setting(): ?SlackAppSetting
     {
         return SlackAppSetting::current();
-    }
-
-    private function stringConfig(string $key): ?string
-    {
-        $value = config($key);
-
-        return is_string($value) && $value !== '' ? $value : null;
     }
 
     private function hint(?string $secret): ?string
