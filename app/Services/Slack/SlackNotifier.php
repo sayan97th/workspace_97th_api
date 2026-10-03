@@ -63,12 +63,13 @@ class SlackNotifier
     }
 
     /**
-     * Sends a plain text message to a channel. Returns false when Slack is not connected.
+     * Sends a plain text message to a channel. Returns false when Slack is not connected, or
+     * when `$team_id` says the channel belongs to a workspace other than the active one.
      */
-    public function notifyChannel(string $channel_id, string $message, ?string $link = null, ?string $context = null): bool
+    public function notifyChannel(string $channel_id, string $message, ?string $link = null, ?string $context = null, ?string $team_id = null): bool
     {
         $installation = $this->slack_service->installation();
-        if (! $installation) {
+        if (! $installation || ($team_id && $team_id !== $installation->team_id)) {
             return false;
         }
 

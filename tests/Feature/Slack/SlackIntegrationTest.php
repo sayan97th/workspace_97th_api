@@ -319,7 +319,7 @@ test('a revoked bot token explains how to reconnect instead of listing no channe
 
     $this->actingAs(User::factory()->create(), 'api')->getJson('/api/integrations/slack/channels')
         ->assertStatus(422)
-        ->assertJsonPath('message', 'The Slack connection is no longer valid. Reconnect Slack from Administration.');
+        ->assertJsonPath('message', 'The Slack connection is no longer valid. Reconnect the workspace from Administration > Integrations.');
 });
 
 test('the test message goes straight to the linked member and surfaces slack errors', function () {

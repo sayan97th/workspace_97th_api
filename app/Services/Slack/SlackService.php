@@ -5,6 +5,7 @@ namespace App\Services\Slack;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -12,8 +13,10 @@ use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 
 /**
- * Owns the lifecycle of the Slack connection: the administrator's "Add to Slack" install,
- * every member's own "Connect my Slack" link, disconnecting, and reading the channel list.
+ * Owns the lifecycle of the Slack connection, modeled on monday.com's Connections page: an
+ * administrator adds one or more Slack workspaces through "Add to Slack" and picks which one
+ * is active, members are matched to their Slack account by email or link it themselves through
+ * "Connect my Slack", and either side can disconnect. Also reads the channel list.
  *
  * Both OAuth flows share one redirect URI and are told apart by the single use `state`
  * value issued here, which is bound to the user who started the flow. That is what lets the
@@ -22,8 +25,14 @@ use Illuminate\Support\Str;
  */
 class SlackService
 {
-    /** Scopes requested for the app's bot when an administrator installs it. */
-    public const BOT_SCOPES = ['chat:write', 'chat:write.public', 'channels:read', 'groups:read'];
+    /**
+     * Scopes requested for the app's bot when an administrator installs it. `users:read` and
+     * `users:read.email` let the app match members to their Slack account by email.
+     */
+    public const BOT_SCOPES = ['chat:write', 'chat:write.public', 'channels:read', 'groups:read', 'users:read', 'users:read.email'];
+
+    /** Bot scopes only "match members by email" needs, a workspace installed without them still works. */
+    public const OPTIONAL_BOT_SCOPES = ['users:read', 'users:read.email'];
 
     /** Scopes requested when a member proves which Slack account is theirs. */
     public const USER_SCOPES = ['openid', 'profile', 'email'];
@@ -32,6 +41,12 @@ class SlackService
 
     public const PURPOSE_LINK = 'link';
 
+    /** The authorization was opened in its own browser tab, which reports back and closes. */
+    public const DISPLAY_TAB = 'tab';
+
+    /** The authorization took over the current tab, which is sent back to `return_path`. */
+    public const DISPLAY_PAGE = 'page';
+
     private const STATE_TTL_MINUTES = 10;
 
     private const CHANNEL_CACHE_SECONDS = 60;
@@ -39,19 +54,25 @@ class SlackService
     /** 200 channels per page, so up to 10,000 channels, more than any workspace we serve. */
     private const CHANNEL_PAGE_LIMIT = 50;
 
+    /** Same bound for members, 200 per page. */
+    private const MEMBER_PAGE_LIMIT = 50;
+
     /** How long a rate limited page may wait before retrying, longer waits fail the request instead. */
     private const RATE_LIMIT_MAX_WAIT_SECONDS = 5;
 
     private const RATE_LIMIT_MAX_RETRIES = 3;
 
-    public function __construct(private readonly SlackClient $client) {}
+    public function __construct(
+        private readonly SlackClient $client,
+        private readonly SlackAppCredentials $credentials,
+    ) {}
 
     /**
-     * Whether the Slack app's credentials are present in the environment.
+     * Whether the Slack app's credentials are set, in Administration or in the environment.
      */
     public function isConfigured(): bool
     {
-        return filled(config('services.slack.client_id')) && filled(config('services.slack.client_secret'));
+        return $this->credentials->isConfigured();
     }
 
     public function installation(): ?SlackInstallation
@@ -60,47 +81,63 @@ class SlackService
     }
 
     /**
-     * The Slack "Add to Slack" URL an administrator is sent to.
+     * Every connected workspace, the active one first, then the newest.
+     *
+     * @return EloquentCollection<int, SlackInstallation>
+     */
+    public function installations(): EloquentCollection
+    {
+        return SlackInstallation::query()
+            ->with('installedBy')
+            ->withCount(['userLinks' => fn ($query) => $query->whereHas('user')])
+            ->orderByDesc('is_active')
+            ->latest('id')
+            ->get();
+    }
+
+    /**
+     * The Slack "Add to Slack" URL an administrator is sent to. Slack shows its own workspace
+     * picker in the top right corner of that page, which is how a different workspace is added.
      *
      * @throws SlackException
      */
-    public function buildInstallUrl(User $actor, ?string $return_path = null): string
+    public function buildInstallUrl(User $actor, ?string $return_path = null, string $display = self::DISPLAY_PAGE): string
     {
         $this->ensureConfigured();
 
         return 'https://slack.com/oauth/v2/authorize?'.http_build_query([
-            'client_id' => config('services.slack.client_id'),
+            'client_id' => $this->credentials->clientId(),
             'scope' => implode(',', self::BOT_SCOPES),
-            'redirect_uri' => config('services.slack.redirect'),
-            'state' => $this->issueState(self::PURPOSE_INSTALL, $actor, $return_path),
+            'redirect_uri' => $this->credentials->redirectUri(),
+            'state' => $this->issueState(self::PURPOSE_INSTALL, $actor, $return_path, $display),
         ]);
     }
 
     /**
-     * The "Sign in with Slack" URL a member is sent to, pinned to the installed workspace.
+     * The "Sign in with Slack" URL a member is sent to, pinned to the active workspace.
      *
      * @throws SlackException
      */
-    public function buildLinkUrl(User $user, ?string $return_path = null): string
+    public function buildLinkUrl(User $user, ?string $return_path = null, string $display = self::DISPLAY_PAGE): string
     {
         $this->ensureConfigured();
         $installation = $this->requireInstallation();
 
         return 'https://slack.com/openid/connect/authorize?'.http_build_query([
             'response_type' => 'code',
-            'client_id' => config('services.slack.client_id'),
+            'client_id' => $this->credentials->clientId(),
             'scope' => implode(' ', self::USER_SCOPES),
-            'redirect_uri' => config('services.slack.redirect'),
+            'redirect_uri' => $this->credentials->redirectUri(),
             'team' => $installation->team_id,
-            'state' => $this->issueState(self::PURPOSE_LINK, $user, $return_path),
+            'state' => $this->issueState(self::PURPOSE_LINK, $user, $return_path, $display),
         ]);
     }
 
     /**
-     * Redeems a `state` value once. Returns the purpose, the user it was issued for and
-     * the in-app path to send the browser back to, if one was asked for.
+     * Redeems a `state` value once. Returns the purpose, the user it was issued for, the
+     * in-app path to send the browser back to, if one was asked for, and how the flow was opened.
      *
-     * @return array{purpose: string, user: User, return_path: string|null}
+     * @return array{purpose: string, user: User, return_path: string|null, display: string}
      *
      * @throws SlackException
      */
@@ -113,17 +150,24 @@ class SlackService
             throw new SlackException('invalid_state', 'The Slack connection request expired. Please try again.');
         }
 
-        return ['purpose' => $payload['purpose'], 'user' => $user, 'return_path' => $payload['return_path'] ?? null];
+        return [
+            'purpose' => $payload['purpose'],
+            'user' => $user,
+            'return_path' => $payload['return_path'] ?? null,
+            'display' => $payload['display'] ?? self::DISPLAY_PAGE,
+        ];
     }
 
     /**
-     * Finishes the "Add to Slack" flow, storing (or refreshing) the workspace's bot token.
+     * Finishes the "Add to Slack" flow, storing (or refreshing) the workspace's bot token. The
+     * workspace just added becomes the active one, the others stay connected so an administrator
+     * can switch back without authorizing again.
      *
      * @throws SlackException
      */
     public function completeInstall(string $code, User $actor): SlackInstallation
     {
-        $payload = $this->client->exchangeInstallCode($code, (string) config('services.slack.redirect'));
+        $payload = $this->client->exchangeInstallCode($code, $this->credentials->redirectUri());
 
         $team_id = $payload['team']['id'] ?? null;
         $bot_token = $payload['access_token'] ?? null;
@@ -132,29 +176,43 @@ class SlackService
             throw new SlackException('invalid_response', 'Slack did not return a workspace and token.');
         }
 
-        return DB::transaction(function () use ($payload, $team_id, $bot_token, $actor) {
-            $existing = SlackInstallation::current();
+        $installation = SlackInstallation::query()->where('team_id', $team_id)->first();
 
-            // The app is single tenant, so switching Slack workspaces replaces the old
-            // installation and, through the cascade, every member link made against it.
-            if ($existing && $existing->team_id !== $team_id) {
-                $this->revokeQuietly($existing);
-                $existing->delete();
-            }
+        // Reinstalling with a new token, the old one may already be revoked by Slack.
+        if ($installation && $installation->bot_token !== $bot_token) {
+            $this->revokeQuietly($installation);
+        }
 
-            $this->forgetChannels();
+        $installation = SlackInstallation::updateOrCreate(
+            ['team_id' => $team_id],
+            [
+                'team_name' => (string) ($payload['team']['name'] ?? $team_id),
+                'team_url' => $this->fetchTeamUrl($bot_token),
+                'bot_user_id' => $payload['bot_user_id'] ?? null,
+                'app_id' => $payload['app_id'] ?? null,
+                'bot_token' => $bot_token,
+                'scopes' => $payload['scope'] ?? null,
+                'installed_by_id' => $actor->id,
+                'is_active' => false,
+            ],
+        );
 
-            return SlackInstallation::updateOrCreate(
-                ['team_id' => $team_id],
-                [
-                    'team_name' => (string) ($payload['team']['name'] ?? $team_id),
-                    'bot_user_id' => $payload['bot_user_id'] ?? null,
-                    'bot_token' => $bot_token,
-                    'scopes' => $payload['scope'] ?? null,
-                    'installed_by_id' => $actor->id,
-                ],
-            );
+        return $this->activate($installation);
+    }
+
+    /**
+     * Makes `$installation` the workspace notifications and automations use.
+     */
+    public function activate(SlackInstallation $installation): SlackInstallation
+    {
+        DB::transaction(function () use ($installation) {
+            SlackInstallation::query()->whereKeyNot($installation->id)->where('is_active', true)->update(['is_active' => false]);
+            $installation->forceFill(['is_active' => true])->save();
         });
+
+        $this->forgetChannels($installation);
+
+        return $installation->refresh();
     }
 
     /**
@@ -166,7 +224,7 @@ class SlackService
     {
         $installation = $this->requireInstallation();
 
-        $token_payload = $this->client->exchangeUserCode($code, (string) config('services.slack.redirect'));
+        $token_payload = $this->client->exchangeUserCode($code, $this->credentials->redirectUri());
         $access_token = $token_payload['access_token'] ?? null;
 
         if (! is_string($access_token)) {
@@ -185,9 +243,8 @@ class SlackService
         }
 
         return SlackUserLink::updateOrCreate(
-            ['user_id' => $user->id],
+            ['user_id' => $user->id, 'slack_installation_id' => $installation->id],
             [
-                'slack_installation_id' => $installation->id,
                 'slack_user_id' => $slack_user_id,
                 'slack_display_name' => $identity['name'] ?? null,
                 'linked_at' => now(),
@@ -196,29 +253,96 @@ class SlackService
     }
 
     /**
-     * Disconnects the workspace: revokes the bot token, then removes the installation
-     * together with every member link.
+     * Links every active member whose email matches a Slack member of `$installation`, so they
+     * receive Slack notifications without each one signing in to Slack first. A link a member
+     * made themselves is never replaced, and a Slack account already linked to someone else is
+     * never linked twice.
+     *
+     * @return array{matched: int, already_linked: int, unmatched: int}
+     *
+     * @throws SlackException
      */
-    public function disconnect(SlackInstallation $installation): void
+    public function matchMembersByEmail(SlackInstallation $installation): array
+    {
+        if (! $installation->hasScope('users:read.email')) {
+            throw new SlackException('missing_scope', 'The Slack app needs the users:read.email permission to match members by email.');
+        }
+
+        $slack_members_by_email = $this->fetchMembersByEmail($installation);
+        $existing_links = $installation->userLinks()->get(['user_id', 'slack_user_id']);
+        $linked_user_ids = $existing_links->pluck('user_id')->flip();
+        $taken_slack_ids = $existing_links->pluck('slack_user_id')->flip();
+
+        $matched = 0;
+        $already_linked = 0;
+        $unmatched = 0;
+
+        User::query()->where('is_active', true)->select(['id', 'email'])->chunkById(500, function ($users) use (
+            $installation, $slack_members_by_email, $linked_user_ids, &$taken_slack_ids, &$matched, &$already_linked, &$unmatched
+        ) {
+            foreach ($users as $user) {
+                if ($linked_user_ids->has($user->id)) {
+                    $already_linked++;
+
+                    continue;
+                }
+
+                $member = $slack_members_by_email[mb_strtolower((string) $user->email)] ?? null;
+
+                if (! $member || $taken_slack_ids->has($member['id'])) {
+                    $unmatched++;
+
+                    continue;
+                }
+
+                SlackUserLink::create([
+                    'user_id' => $user->id,
+                    'slack_installation_id' => $installation->id,
+                    'slack_user_id' => $member['id'],
+                    'slack_display_name' => $member['name'],
+                    'linked_at' => now(),
+                ]);
+
+                $taken_slack_ids->put($member['id'], true);
+                $matched++;
+            }
+        });
+
+        return ['matched' => $matched, 'already_linked' => $already_linked, 'unmatched' => $unmatched];
+    }
+
+    /**
+     * Disconnects one workspace: revokes its bot token, then removes it together with every
+     * member link made against it. When it was the active workspace the most recently added
+     * remaining one takes over, which is returned, or null when no workspace is left.
+     */
+    public function disconnect(SlackInstallation $installation): ?SlackInstallation
     {
         $this->revokeQuietly($installation);
-        $installation->delete();
-        $this->forgetChannels();
+
+        return $this->removeInstallation($installation);
     }
 
     /**
      * Called when Slack reports the bot token is no longer valid (an admin removed the app
-     * from their workspace), so the UI stops claiming Slack is connected.
+     * from their workspace), so the UI stops claiming that workspace is connected.
      */
     public function handleRevokedInstallation(SlackInstallation $installation): void
     {
-        $installation->delete();
-        $this->forgetChannels();
+        $this->removeInstallation($installation);
     }
 
+    /**
+     * Removes `$user`'s Slack account from the active workspace only, links to other
+     * workspaces stay for when an administrator switches back.
+     */
     public function unlinkUser(User $user): void
     {
-        SlackUserLink::where('user_id', $user->id)->delete();
+        $installation = $this->installation();
+
+        if ($installation) {
+            SlackUserLink::where('user_id', $user->id)->where('slack_installation_id', $installation->id)->delete();
+        }
     }
 
     /**
@@ -304,13 +428,99 @@ class SlackService
         return $channels;
     }
 
-    private function issueState(string $purpose, User $user, ?string $return_path = null): string
+    /**
+     * Every Slack member with an email address, keyed by the lowercased email. Bots, Slackbot
+     * and deactivated members are left out, a message to them would never be read.
+     *
+     * @return array<string, array{id: string, name: string|null}>
+     *
+     * @throws SlackException
+     */
+    private function fetchMembersByEmail(SlackInstallation $installation): array
+    {
+        $members_by_email = [];
+        $cursor = null;
+        $retries_left = self::RATE_LIMIT_MAX_RETRIES;
+
+        for ($page = 0; $page < self::MEMBER_PAGE_LIMIT; $page++) {
+            try {
+                $payload = $this->client->listUsers($installation->bot_token, $cursor);
+            } catch (SlackException $exception) {
+                $wait_seconds = $exception->retry_after ?? self::RATE_LIMIT_MAX_WAIT_SECONDS;
+
+                if (! $exception->isRateLimited() || $retries_left === 0 || $wait_seconds > self::RATE_LIMIT_MAX_WAIT_SECONDS) {
+                    throw $exception;
+                }
+
+                $retries_left--;
+                $page--;
+                Sleep::for(max(1, $wait_seconds))->seconds();
+
+                continue;
+            }
+
+            foreach ($payload['members'] ?? [] as $member) {
+                $email = $member['profile']['email'] ?? null;
+
+                if (! is_string($email) || $email === '' || ($member['deleted'] ?? false) || ($member['is_bot'] ?? false) || ($member['id'] ?? '') === 'USLACKBOT') {
+                    continue;
+                }
+
+                $display_name = $member['profile']['real_name'] ?? $member['real_name'] ?? $member['name'] ?? null;
+
+                $members_by_email[mb_strtolower($email)] = [
+                    'id' => (string) $member['id'],
+                    'name' => is_string($display_name) && $display_name !== '' ? $display_name : null,
+                ];
+            }
+
+            $cursor = $payload['response_metadata']['next_cursor'] ?? null;
+            if (! $cursor) {
+                break;
+            }
+        }
+
+        return $members_by_email;
+    }
+
+    /**
+     * The workspace's own address, for the "Open in Slack" link. Best effort, a missing URL
+     * only hides that link.
+     */
+    private function fetchTeamUrl(string $bot_token): ?string
+    {
+        try {
+            $url = $this->client->authTest($bot_token)['url'] ?? null;
+        } catch (SlackException) {
+            return null;
+        }
+
+        return is_string($url) && $url !== '' ? $url : null;
+    }
+
+    private function removeInstallation(SlackInstallation $installation): ?SlackInstallation
+    {
+        $was_active = $installation->is_active;
+
+        $this->forgetChannels($installation);
+        $installation->delete();
+
+        $current = SlackInstallation::current();
+
+        if (! $current && $was_active && $next = SlackInstallation::query()->latest('id')->first()) {
+            return $this->activate($next);
+        }
+
+        return $current;
+    }
+
+    private function issueState(string $purpose, User $user, ?string $return_path, string $display): string
     {
         $state = Str::random(40);
 
         Cache::put(
             $this->stateCacheKey($state),
-            ['purpose' => $purpose, 'user_id' => $user->id, 'return_path' => $return_path],
+            ['purpose' => $purpose, 'user_id' => $user->id, 'return_path' => $return_path, 'display' => $display],
             now()->addMinutes(self::STATE_TTL_MINUTES),
         );
 
@@ -344,11 +554,9 @@ class SlackService
         }
     }
 
-    private function forgetChannels(): void
+    private function forgetChannels(SlackInstallation $installation): void
     {
-        if ($installation = SlackInstallation::current()) {
-            Cache::forget($this->channelCacheKey($installation));
-        }
+        Cache::forget($this->channelCacheKey($installation));
     }
 
     private function stateCacheKey(string $state): string

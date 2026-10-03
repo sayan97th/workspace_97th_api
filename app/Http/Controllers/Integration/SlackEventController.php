@@ -17,8 +17,8 @@ use Illuminate\Http\Request;
  * The Event Subscriptions request URL of the Slack app. Public, but every request has
  * already passed {@see VerifySlackSignature}, so it is known to come
  * from Slack. Answers the one time `url_verification` challenge Slack sends when the URL is
- * saved, and forgets the installation when the app is removed from the workspace, so the UI
- * stops claiming Slack is connected.
+ * saved, and forgets a workspace when the app is removed from it, so the UI stops claiming that
+ * workspace is connected.
  */
 class SlackEventController extends Controller
 {
@@ -36,9 +36,10 @@ class SlackEventController extends Controller
         }
 
         if ($type === 'event_callback' && in_array($event_type, self::REVOKING_EVENTS, true)) {
-            $installation = SlackInstallation::current();
+            // Any connected workspace can remove the app, not only the active one.
+            $installation = SlackInstallation::query()->where('team_id', (string) $request->input('team_id'))->first();
 
-            if ($installation && $installation->team_id === $request->input('team_id')) {
+            if ($installation) {
                 $team_name = $installation->team_name;
                 $slack_service->handleRevokedInstallation($installation);
                 AuditLogger::log('slack.uninstalled', "The Slack app was removed from the \"{$team_name}\" workspace.");

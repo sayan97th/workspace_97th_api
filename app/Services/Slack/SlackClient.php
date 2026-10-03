@@ -16,6 +16,8 @@ class SlackClient
 {
     private const API_BASE_URL = 'https://slack.com/api/';
 
+    public function __construct(private readonly SlackAppCredentials $credentials) {}
+
     /**
      * Exchanges the "Add to Slack" authorization code for the bot token.
      *
@@ -95,6 +97,22 @@ class SlackClient
     }
 
     /**
+     * One page of the workspace's members, with their email address when the app holds
+     * `users:read.email`. Used to match app users to Slack members by email.
+     *
+     * @return array<string, mixed>
+     */
+    public function listUsers(string $bot_token, ?string $cursor = null): array
+    {
+        return $this->send('users.list', fn (PendingRequest $request) => $request
+            ->withToken($bot_token)
+            ->get(self::API_BASE_URL.'users.list', array_filter([
+                'limit' => 200,
+                'cursor' => $cursor,
+            ])));
+    }
+
+    /**
      * Checks a token and returns who it belongs to: `team_id`, `team`, `user_id`, `bot_id`, `url`.
      *
      * @return array<string, mixed>
@@ -127,8 +145,8 @@ class SlackClient
         return $this->send($method, function (PendingRequest $request) use ($method, $params, $with_client_credentials) {
             if ($with_client_credentials) {
                 $request = $request->withBasicAuth(
-                    (string) config('services.slack.client_id'),
-                    (string) config('services.slack.client_secret'),
+                    (string) $this->credentials->clientId(),
+                    (string) $this->credentials->clientSecret(),
                 );
             }
 

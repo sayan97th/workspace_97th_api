@@ -24,7 +24,7 @@ function makeDiagnosticsInstallation(array $overrides = []): SlackInstallation
         'team_name' => 'Acme',
         'bot_user_id' => 'UBOT',
         'bot_token' => 'xoxb-secret-token',
-        'scopes' => 'chat:write,chat:write.public,channels:read,groups:read',
+        'scopes' => 'chat:write,chat:write.public,channels:read,groups:read,users:read,users:read.email',
     ], $overrides));
 }
 

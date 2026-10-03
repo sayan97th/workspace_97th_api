@@ -32,6 +32,7 @@ class SlackDiagnosticsService
         private readonly SlackClient $client,
         private readonly SlackService $slack_service,
         private readonly SlackNotifier $slack_notifier,
+        private readonly SlackAppCredentials $credentials,
     ) {}
 
     /**
@@ -75,9 +76,10 @@ class SlackDiagnosticsService
             'ran_at' => now()->toIso8601String(),
             'summary' => $this->summarize($checks),
             'app' => [
-                'client_id' => config('services.slack.client_id') ?: null,
-                'redirect_uri' => (string) config('services.slack.redirect'),
-                'events_url' => $this->eventsUrl(),
+                'client_id' => $this->credentials->clientId(),
+                'redirect_uri' => $this->credentials->redirectUri(),
+                'events_url' => $this->credentials->eventsUrl(),
+                'credentials_source' => $this->credentials->source(),
                 'bot_scopes' => SlackService::BOT_SCOPES,
                 'user_scopes' => SlackService::USER_SCOPES,
             ],
@@ -170,11 +172,11 @@ class SlackDiagnosticsService
         $label = 'Client ID and secret are set';
 
         if (! $is_configured) {
-            return $this->result('credentials', $label, self::STATUS_FAILED, 'Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in the API environment, then run php artisan config:clear.');
+            return $this->result('credentials', $label, self::STATUS_FAILED, 'Add the Slack app credentials in Administration > Integrations > Slack app.');
         }
 
-        if (! preg_match('/^\d+\.\d+$/', (string) config('services.slack.client_id'))) {
-            return $this->result('credentials', $label, self::STATUS_WARNING, 'SLACK_CLIENT_ID does not look like a Slack client ID, which is two numbers joined by a dot.');
+        if (! preg_match('/^\d+\.\d+$/', (string) $this->credentials->clientId())) {
+            return $this->result('credentials', $label, self::STATUS_WARNING, 'The client ID does not look like a Slack client ID, which is two numbers joined by a dot.');
         }
 
         // Slack only checks the secret while exchanging a real authorization code, so there is
@@ -188,14 +190,14 @@ class SlackDiagnosticsService
     private function checkRedirectUri(): array
     {
         $label = 'Redirect URL is usable';
-        $redirect_uri = (string) config('services.slack.redirect');
+        $redirect_uri = $this->credentials->redirectUri();
 
         if (! filter_var($redirect_uri, FILTER_VALIDATE_URL)) {
-            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Check APP_URL or SLACK_REDIRECT_URI.');
+            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Set it in Administration > Integrations > Slack app.');
         }
 
         if (parse_url($redirect_uri, PHP_URL_SCHEME) !== 'https') {
-            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set SLACK_REDIRECT_URI to it and add that URL in the Slack app.');
+            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set it as the redirect URL in Administration > Integrations > Slack app and add that URL in the Slack app.');
         }
 
         return $this->result('redirect_uri', $label, self::STATUS_PASSED, 'Make sure this exact URL is listed under OAuth & Permissions in the Slack app.');
@@ -207,14 +209,14 @@ class SlackDiagnosticsService
     private function checkSigningSecret(): array
     {
         $label = 'Signing secret is verified';
-        $signing_secret = (string) config('services.slack.signing_secret');
+        $signing_secret = (string) $this->credentials->signingSecret();
 
         if ($signing_secret === '') {
-            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Set SLACK_SIGNING_SECRET in the API environment.');
+            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Add the signing secret in Administration > Integrations > Slack app.');
         }
 
         if (! preg_match('/^[a-f0-9]{32}$/', $signing_secret)) {
-            return $this->result('signing_secret', $label, self::STATUS_WARNING, 'SLACK_SIGNING_SECRET does not look like a Slack signing secret, which is 32 hexadecimal characters.');
+            return $this->result('signing_secret', $label, self::STATUS_WARNING, 'The signing secret does not look like a Slack signing secret, which is 32 hexadecimal characters.');
         }
 
         $last_request = Cache::get(self::SIGNED_REQUEST_CACHE_KEY);
@@ -278,7 +280,11 @@ class SlackDiagnosticsService
         $missing_scopes = array_values(array_diff(SlackService::BOT_SCOPES, $granted_scopes));
 
         if ($missing_scopes !== []) {
-            return $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Add to Slack" again.');
+            $only_optional = array_diff($missing_scopes, SlackService::OPTIONAL_BOT_SCOPES) === [];
+
+            return $only_optional
+                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).', so members cannot be matched to Slack by email. Use "Reconnect" on the workspace in Administration > Integrations to grant them.')
+                : $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Reconnect" on the workspace in Administration > Integrations.');
         }
 
         return $this->result('bot_scopes', $label, self::STATUS_PASSED, 'Granted '.implode(', ', SlackService::BOT_SCOPES).'.');
@@ -350,16 +356,5 @@ class SlackDiagnosticsService
         }
 
         return $summary;
-    }
-
-    private function eventsUrl(): string
-    {
-        $redirect_uri = (string) config('services.slack.redirect');
-
-        // The events route sits next to the callback, so it follows SLACK_REDIRECT_URI when a
-        // tunnel is used instead of pointing at the local APP_URL.
-        return str_ends_with($redirect_uri, '/callback')
-            ? substr($redirect_uri, 0, -strlen('/callback')).'/events'
-            : rtrim((string) config('app.url'), '/').'/api/integrations/slack/events';
     }
 }

@@ -297,13 +297,23 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
-     * This user's own Slack account link, present once they have used "Connect my Slack".
+     * This user's Slack account in the active workspace, present once they connected it there.
      *
      * @return HasOne<SlackUserLink, $this>
      */
     public function slackLink(): HasOne
     {
-        return $this->hasOne(SlackUserLink::class);
+        return $this->hasOne(SlackUserLink::class)->whereHas('installation', fn ($query) => $query->where('is_active', true));
+    }
+
+    /**
+     * Every Slack account this user linked, one per connected workspace.
+     *
+     * @return HasMany<SlackUserLink, $this>
+     */
+    public function slackLinks(): HasMany
+    {
+        return $this->hasMany(SlackUserLink::class);
     }
 
     /**

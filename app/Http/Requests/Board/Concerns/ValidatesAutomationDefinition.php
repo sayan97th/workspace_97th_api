@@ -596,6 +596,8 @@ trait ValidatesAutomationDefinition
             BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL => [
                 'slack_channel_id' => ['required', 'string', 'regex:/^[CG][A-Z0-9]{2,}$/'],
                 'slack_channel_name' => ['sometimes', 'nullable', 'string', 'max:120'],
+                // The workspace the channel belongs to, channel ids mean nothing in another one.
+                'slack_team_id' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[TE][A-Z0-9]+$/'],
                 'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
             ],
             BoardAutomation::ACTION_POST_UPDATE => ['message' => ['required', 'string', 'max:2000']],

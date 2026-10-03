@@ -69,9 +69,11 @@ use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\Home\RecentBoardController;
 use App\Http\Controllers\InlineUploadController;
+use App\Http\Controllers\Integration\SlackAppCredentialsController;
 use App\Http\Controllers\Integration\SlackEventController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
 use App\Http\Controllers\Integration\SlackOAuthCallbackController;
+use App\Http\Controllers\Integration\SlackWorkspaceController;
 use App\Http\Controllers\MyWork\MyWorkController;
 use App\Http\Controllers\Notification\NotificationController;
 use App\Http\Controllers\People\MentionTeamController;
@@ -260,8 +262,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('updates/{id}/schedule', [FeedUpdateController::class, 'schedule']);
     });
 
-    // Slack integration, an administrator installs the app into the Slack workspace, then
-    // every member links their own Slack account to receive notifications as direct messages.
+    // Slack integration, an administrator connects one or more Slack workspaces and picks the
+    // active one, members are matched by email or link their own Slack account to receive
+    // notifications as direct messages.
     Route::prefix('integrations/slack')->group(function () {
         Route::get('/', [SlackIntegrationController::class, 'show']);
         Route::get('channels', [SlackIntegrationController::class, 'channels'])->middleware('throttle:60,1');
@@ -271,7 +274,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
         Route::middleware('role:super_admin,admin')->group(function () {
             Route::post('install-url', [SlackIntegrationController::class, 'installUrl']);
-            Route::delete('/', [SlackIntegrationController::class, 'destroy']);
+            Route::delete('/', [SlackWorkspaceController::class, 'destroyActive']);
+            Route::get('workspaces', [SlackWorkspaceController::class, 'index']);
+            Route::post('workspaces/{installation}/activate', [SlackWorkspaceController::class, 'activate']);
+            Route::delete('workspaces/{installation}', [SlackWorkspaceController::class, 'destroy']);
+            Route::post('match-members', [SlackWorkspaceController::class, 'matchMembers'])->middleware('throttle:6,1');
+            Route::get('app', [SlackAppCredentialsController::class, 'show']);
+            Route::put('app', [SlackAppCredentialsController::class, 'update'])->middleware('throttle:20,1');
+            Route::delete('app', [SlackAppCredentialsController::class, 'destroy']);
             Route::get('diagnostics', [SlackIntegrationController::class, 'diagnostics'])->middleware('throttle:10,1');
             Route::post('diagnostics/channel-test', [SlackIntegrationController::class, 'sendChannelTest'])->middleware('throttle:6,1');
             Route::get('diagnostics/recipients', [SlackIntegrationController::class, 'notificationRecipients']);

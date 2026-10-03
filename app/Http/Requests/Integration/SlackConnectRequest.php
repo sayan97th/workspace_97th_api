@@ -2,8 +2,10 @@
 
 namespace App\Http\Requests\Integration;
 
+use App\Services\Slack\SlackService;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class SlackConnectRequest extends FormRequest
 {
@@ -15,12 +17,21 @@ class SlackConnectRequest extends FormRequest
      * leading slash, no scheme, no protocol relative `//` and no backslashes, so the callback
      * can never be turned into an open redirect.
      *
+     * `display` is `tab` when the frontend opened Slack in a new browser tab, the callback then
+     * finishes on a page that reports back to the original tab and closes itself.
+     *
      * @return array<string, ValidationRule|array<mixed>|string>
      */
     public function rules(): array
     {
         return [
             'return_path' => ['sometimes', 'nullable', 'string', 'max:255', 'regex:#^/(?!/)[^\s\\\\]*$#'],
+            'display' => ['sometimes', 'nullable', 'string', Rule::in([SlackService::DISPLAY_TAB, SlackService::DISPLAY_PAGE])],
         ];
+    }
+
+    public function display(): string
+    {
+        return $this->validated('display') ?? SlackService::DISPLAY_PAGE;
     }
 }

@@ -15,10 +15,16 @@ use Illuminate\Support\Carbon;
  * completes the "Add to Slack" OAuth flow. `bot_token` is encrypted at rest and never
  * serialized, it only ever leaves the server inside an `Authorization` header sent to Slack.
  *
+ * Several workspaces can stay connected, like on monday.com, but exactly one is active at a
+ * time: notifications, automations and "Connect my Slack" all use the active one.
+ *
  * @property int $id
  * @property string $team_id
  * @property string $team_name
+ * @property string|null $team_url
+ * @property bool $is_active
  * @property string|null $bot_user_id
+ * @property string|null $app_id
  * @property string $bot_token
  * @property string|null $scopes
  * @property int|null $installed_by_id
@@ -27,16 +33,37 @@ use Illuminate\Support\Carbon;
  * @property-read User|null $installedBy
  * @property-read Collection<int, SlackUserLink> $userLinks
  */
-#[Fillable(['team_id', 'team_name', 'bot_user_id', 'bot_token', 'scopes', 'installed_by_id'])]
+#[Fillable(['team_id', 'team_name', 'team_url', 'is_active', 'bot_user_id', 'app_id', 'bot_token', 'scopes', 'installed_by_id'])]
 #[Hidden(['bot_token'])]
 class SlackInstallation extends Model
 {
     /**
-     * The single installation of this single tenant app, or null when Slack is not connected.
+     * The active workspace, or null when Slack is not connected.
      */
     public static function current(): ?self
     {
-        return static::query()->latest('id')->first();
+        return static::query()->where('is_active', true)->latest('id')->first();
+    }
+
+    /**
+     * The first workspace ever connected becomes the active one on its own, so connecting
+     * Slack for the first time needs no extra "make active" step.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (self $installation) {
+            if ($installation->getAttribute('is_active') === null) {
+                $installation->is_active = ! static::query()->where('is_active', true)->exists();
+            }
+        });
+    }
+
+    /**
+     * Whether the Slack app was granted `$scope` in this workspace.
+     */
+    public function hasScope(string $scope): bool
+    {
+        return in_array($scope, array_map('trim', explode(',', (string) $this->scopes)), true);
     }
 
     /**
@@ -62,6 +89,7 @@ class SlackInstallation extends Model
     {
         return [
             'bot_token' => 'encrypted',
+            'is_active' => 'boolean',
         ];
     }
 }
