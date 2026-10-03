@@ -122,7 +122,7 @@ class BoardInvitationController extends Controller
             $invitation->update(['accepted_at' => now()]);
         });
 
-        $token = $this->guard()->login($user);
+        $token = $this->issueToken($user);
 
         return $this->respondWithToken($token, $user);
     }

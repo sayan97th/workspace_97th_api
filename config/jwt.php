@@ -111,7 +111,9 @@ return [
     | version 2.5.0 and 2.8.2), set "refresh_iat" to true. With this setting, the refresh
     | window will renew with each subsequent refresh.
     |
-    | The refresh ttl defaults to 2 weeks.
+    | The refresh ttl defaults to 30 days so it never cuts a "Keep me logged in"
+    | session short. Each session also carries its own, shorter or equal, end
+    | date in the "session_expires_at" claim, see "session_lifetime" below.
     |
     | You can also set this to null, to yield an infinite refresh time.
     | Some may want this instead of never expiring tokens for e.g. a mobile app.
@@ -121,7 +123,26 @@ return [
     */
 
     'refresh_iat' => env('JWT_REFRESH_IAT', false),
-    'refresh_ttl' => (int) env('JWT_REFRESH_TTL', 20160),
+    'refresh_ttl' => (int) env('JWT_REFRESH_TTL', 43200),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Session lifetimes
+    |--------------------------------------------------------------------------
+    |
+    | How long (in minutes) a sign in keeps working before the user has to enter
+    | their credentials again, counted from the moment they signed in. Access
+    | tokens are still short lived ("ttl" above) and get silently refreshed, but
+    | never past this point.
+    |
+    | "session_lifetime" applies to a normal sign in (1 day), while
+    | "remember_session_lifetime" applies when the user ticks "Keep me logged in"
+    | (30 days). Keep "refresh_ttl" at least as long as the remember lifetime.
+    |
+    */
+
+    'session_lifetime' => (int) env('JWT_SESSION_LIFETIME', 1440),
+    'remember_session_lifetime' => (int) env('JWT_REMEMBER_SESSION_LIFETIME', 43200),
 
     /*
     |--------------------------------------------------------------------------
@@ -171,8 +192,10 @@ return [
     */
 
     'persistent_claims' => [
-        // 'foo',
-        // 'bar',
+        // Carried over on every refresh so a session keeps its original end date
+        // and "Keep me logged in" choice, see `IssuesJwtTokens`.
+        'remember',
+        'session_expires_at',
     ],
 
     /*

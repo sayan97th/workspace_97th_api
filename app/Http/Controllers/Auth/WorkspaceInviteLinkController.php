@@ -106,7 +106,7 @@ class WorkspaceInviteLinkController extends Controller
             $user->save();
         }
 
-        $token = $this->guard()->login($user);
+        $token = $this->issueToken($user);
 
         return $this->respondWithToken($token, $user);
     }

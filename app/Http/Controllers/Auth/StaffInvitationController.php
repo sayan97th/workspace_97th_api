@@ -76,7 +76,7 @@ class StaffInvitationController extends Controller
             return $user;
         });
 
-        $token = $this->guard()->login($user);
+        $token = $this->issueToken($user);
 
         return $this->respondWithToken($token, $user);
     }

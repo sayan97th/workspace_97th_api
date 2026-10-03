@@ -141,10 +141,13 @@ Route::prefix('auth')->group(function () {
         Route::get('callback', [GoogleAuthController::class, 'callback']);
     });
 
+    // Not behind `auth:api`, so a token that expired while the browser was closed can
+    // still be renewed within its session, see `AuthController::refresh()`.
+    Route::post('refresh', [AuthController::class, 'refresh'])->middleware('throttle:60,1');
+
     Route::middleware(['auth:api', 'session.active'])->group(function () {
         Route::get('me', [AuthController::class, 'me']);
         Route::post('logout', [AuthController::class, 'logout']);
-        Route::post('refresh', [AuthController::class, 'refresh']);
     });
 });
 
@@ -166,7 +169,7 @@ Route::prefix('public')->group(function () {
     // The secret URL a "When a webhook is received" automation listens on, see `AutomationWebhookController`.
     Route::post('automation-webhooks/{token}', [AutomationWebhookController::class, 'receive'])->middleware('throttle:60,1');
     Route::post('forms/{token}/submissions', [PublicFormController::class, 'submit'])->middleware('throttle:10,1');
-    Route::post('views/{token}', [PublicSharedViewController::class, 'show'])->middleware('throttle:30,1');
+    Route::post('views/{token}', [PublicSharedViewController::class, 'show'])->middleware('throttle:60,1');
 });
 
 Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
@@ -182,9 +185,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::get('my-work', [MyWorkController::class, 'index']);
     // The account wide Automations center: every automation on the boards the user may open.
     Route::get('automations', [AccountAutomationController::class, 'index']);
-    Route::post('automations/bulk', [AccountAutomationController::class, 'bulk'])->middleware('throttle:30,1');
+    Route::post('automations/bulk', [AccountAutomationController::class, 'bulk'])->middleware('throttle:60,1');
     Route::get('automations/usage', [AccountAutomationController::class, 'usage']);
-    Route::put('automations/usage', [AccountAutomationController::class, 'updateUsage'])->middleware('throttle:30,1');
+    Route::put('automations/usage', [AccountAutomationController::class, 'updateUsage'])->middleware('throttle:60,1');
     Route::get('home/recent-boards', [RecentBoardController::class, 'index']);
 
     // Broadcasting auth (JWT-based) — used by the frontend's Echo client to
@@ -261,7 +264,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // every member links their own Slack account to receive notifications as direct messages.
     Route::prefix('integrations/slack')->group(function () {
         Route::get('/', [SlackIntegrationController::class, 'show']);
-        Route::get('channels', [SlackIntegrationController::class, 'channels'])->middleware('throttle:30,1');
+        Route::get('channels', [SlackIntegrationController::class, 'channels'])->middleware('throttle:60,1');
         Route::post('link-url', [SlackIntegrationController::class, 'linkUrl'])->middleware('account.permission:use_integrations');
         Route::delete('link', [SlackIntegrationController::class, 'unlink']);
         Route::post('link/test', [SlackIntegrationController::class, 'sendTest'])->middleware('throttle:6,1');
@@ -461,8 +464,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('templates', [BoardAutomationController::class, 'templates']);
             Route::delete('templates/{template}', [BoardAutomationController::class, 'destroyTemplate']);
             Route::get('teams', [BoardAutomationController::class, 'teams']);
-            Route::post('test', [BoardAutomationController::class, 'test'])->middleware('throttle:30,1');
-            Route::post('preview', [BoardAutomationController::class, 'preview'])->middleware('throttle:30,1');
+            Route::post('test', [BoardAutomationController::class, 'test'])->middleware('throttle:60,1');
+            Route::post('preview', [BoardAutomationController::class, 'preview'])->middleware('throttle:60,1');
             Route::post('export', [BoardAutomationManageController::class, 'export']);
             Route::post('import', [BoardAutomationManageController::class, 'import'])->middleware('throttle:20,1');
             Route::get('settings', [BoardAutomationManageController::class, 'settings']);
@@ -470,8 +473,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('bulk', [BoardAutomationManageController::class, 'bulk']);
             Route::post('copy', [BoardAutomationManageController::class, 'copy']);
             Route::get('runs/{run}', [BoardAutomationManageController::class, 'run']);
-            Route::post('runs/{run}/retry', [BoardAutomationManageController::class, 'retry'])->middleware('throttle:30,1');
-            Route::post('runs/{run}/undo', [BoardAutomationManageController::class, 'undo'])->middleware('throttle:30,1');
+            Route::post('runs/{run}/retry', [BoardAutomationManageController::class, 'retry'])->middleware('throttle:60,1');
+            Route::post('runs/{run}/undo', [BoardAutomationManageController::class, 'undo'])->middleware('throttle:60,1');
             Route::delete('delayed/{delayed}', [BoardAutomationManageController::class, 'cancelDelayed']);
             Route::get('items/{board_item}', [BoardAutomationManageController::class, 'forItem']);
 

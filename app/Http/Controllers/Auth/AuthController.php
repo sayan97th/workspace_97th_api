@@ -22,6 +22,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Fortify\Contracts\TwoFactorAuthenticationProvider;
 use Laravel\Fortify\Fortify;
+use PHPOpenSourceSaver\JWTAuth\Exceptions\JWTException;
+use PHPOpenSourceSaver\JWTAuth\Facades\JWTAuth;
 
 class AuthController extends Controller
 {
@@ -67,7 +69,7 @@ class AuthController extends Controller
             return $user;
         });
 
-        $token = $this->guard()->login($user);
+        $token = $this->issueToken($user);
 
         return $this->respondWithToken($token, $user);
     }
@@ -100,7 +102,8 @@ class AuthController extends Controller
      */
     public function login(LoginRequest $request): JsonResponse
     {
-        $credentials = $request->validated();
+        $credentials = $request->safe()->only(['email', 'password']);
+        $remember = $request->boolean('remember');
 
         $existing_user = User::where('email', $credentials['email'])->first();
 
@@ -111,9 +114,9 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $token = $this->guard()->attempt($credentials);
-
-        if (! is_string($token)) {
+        // Only check the credentials here, the token is issued once we know
+        // whether a two factor challenge has to come first.
+        if (! $this->guard()->validate($credentials)) {
             return response()->json([
                 'message' => 'The provided credentials are incorrect.',
                 'errors' => [
@@ -123,11 +126,9 @@ class AuthController extends Controller
         }
 
         /** @var User $user */
-        $user = $this->guard()->user();
+        $user = $this->guard()->getLastAttempted();
 
         if ($user->hasEnabledTwoFactorAuthentication()) {
-            $this->guard()->logout();
-
             $two_factor_token = Str::uuid()->toString();
             $email_code = (string) random_int(100000, 999999);
 
@@ -141,6 +142,12 @@ class AuthController extends Controller
                 $email_code,
                 now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
             );
+            // The "Keep me logged in" choice waits here until the challenge is passed.
+            Cache::put(
+                "two_factor_remember:{$two_factor_token}",
+                $remember,
+                now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
+            );
 
             SendEmailJob::dispatch(
                 new TwoFactorCodeMail($user, $email_code, self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
@@ -152,6 +159,8 @@ class AuthController extends Controller
                 'two_factor_token' => $two_factor_token,
             ]);
         }
+
+        $token = $this->issueToken($user, $remember);
 
         return $this->respondWithToken($token, $user);
     }
@@ -204,8 +213,9 @@ class AuthController extends Controller
 
         Cache::forget($cache_key);
         Cache::forget("two_factor_email_code:{$request->two_factor_token}");
+        $remember = (bool) Cache::pull("two_factor_remember:{$request->two_factor_token}");
 
-        $token = $this->guard()->login($user);
+        $token = $this->issueToken($user, $remember);
 
         return $this->respondWithToken($token, $user);
     }
@@ -246,27 +256,67 @@ class AuthController extends Controller
 
     /**
      * POST /api/auth/refresh
+     *
+     * Public on purpose (no `auth:api`): an access token that already expired, for
+     * example because the browser was closed overnight, can still be exchanged for a
+     * new one as long as its session is alive. The session ends at its
+     * `session_expires_at` claim (1 day, or 30 days with "Keep me logged in"), when it
+     * is logged out from Session history, or when the account is disabled.
      */
     public function refresh(): JsonResponse
     {
-        $previous_jti = $this->guard()->payload()->get('jti');
+        try {
+            $jwt = JWTAuth::parseToken();
+            // Refresh flow: skips the `exp` check but still enforces the signature,
+            // the blacklist and `jwt.refresh_ttl`.
+            $previous_payload = $jwt->manager()->setRefreshFlow()->decode($jwt->getToken());
+        } catch (JWTException) {
+            return $this->sessionExpiredResponse();
+        }
 
         // Impersonation tokens are deliberately non-renewable (see
-        // `ImpersonationController::IMPERSONATION_TTL_MINUTES`) — refreshing would silently
+        // `ImpersonationController::IMPERSONATION_TTL_MINUTES`), refreshing would silently
         // strip the `impersonator_id`/`impersonation_session_id` claims and turn what's meant
         // to be a short, logged session into an ordinary, indefinitely-renewable one.
-        if ($this->guard()->payload()->get('impersonator_id')) {
+        if ($previous_payload->get('impersonator_id')) {
             return response()->json([
                 'message' => 'Impersonation sessions cannot be refreshed. Stop impersonating and start a new session if you need more time.',
             ], 422);
         }
 
-        $token = $this->guard()->refresh();
+        $previous_jti = $previous_payload->get('jti');
+        $session_expires_at = $this->sessionExpiresAt($previous_payload);
+        $seconds_left = $session_expires_at->timestamp - now()->timestamp;
 
-        /** @var User $user */
-        $user = $this->guard()->user();
+        if ($seconds_left <= 0) {
+            return $this->sessionExpiredResponse();
+        }
+
+        if (UserSession::where('jti', $previous_jti)->whereNotNull('revoked_at')->exists()) {
+            return response()->json(['message' => 'This session has been logged out. Please sign in again.'], 401);
+        }
+
+        $user = User::find($previous_payload->get('sub'));
+
+        if (! $user || ! $user->is_active) {
+            return $this->sessionExpiredResponse();
+        }
+
+        // Never hand out an access token that outlives its session.
+        $ttl_minutes = min($this->guard()->factory()->getTTL(), (int) ceil($seconds_left / 60));
+        $this->guard()->setTTL($ttl_minutes);
+
+        $token = $jwt->refresh();
 
         return $this->respondWithToken($token, $user, $previous_jti);
+    }
+
+    private function sessionExpiredResponse(): JsonResponse
+    {
+        return response()->json([
+            'message' => 'Your session has expired. Please sign in again.',
+            'code' => 'session_expired',
+        ], 401);
     }
 
     /**
