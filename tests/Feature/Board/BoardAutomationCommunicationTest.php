@@ -175,6 +175,32 @@ test('a slack channel automation posts the templated message to the channel', fu
     ]);
 });
 
+test('a slack recipe template fills the item, board, group and person fields', function () {
+    Queue::fake();
+    [$board, $view, $group] = createCommunicationTestBoard();
+    $group->update(['name' => 'Launch week']);
+    SlackInstallation::create(['team_id' => 'T100', 'team_name' => 'Acme', 'bot_token' => 'xoxb-secret-token']);
+    $actor = User::factory()->create();
+
+    createCommunicationAutomation($board, $view, [
+        'trigger_type' => BoardAutomation::TRIGGER_ITEM_CREATED,
+        'action_type' => BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL,
+        'action_params' => [
+            'slack_channel_id' => 'C123',
+            'slack_channel_name' => 'launches',
+            'message' => 'A new item, {item_name}, was created in the {board_name} board by {actor_name}. Group: {group_name}',
+        ],
+    ]);
+
+    $this->actingAs($actor, 'api')->postJson("/api/boards/{$board->id}/items", [
+        'group_id' => $group->id,
+        'name' => 'Brand new task',
+    ])->assertCreated();
+
+    Queue::assertPushed(SendSlackMessageJob::class, fn (SendSlackMessageJob $job) => $job->channel === 'C123'
+        && $job->text === "A new item, Brand new task, was created in the Launch board board by {$actor->full_name}. Group: Launch week");
+});
+
 test('a slack person automation messages linked members and logs those who are not linked', function () {
     Queue::fake();
     [$board, $view, , $item] = createCommunicationTestBoard();

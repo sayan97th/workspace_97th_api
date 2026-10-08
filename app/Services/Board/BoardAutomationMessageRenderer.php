@@ -13,7 +13,7 @@ use Illuminate\Support\Str;
 /**
  * Fills in the text an automation writes: a notification, email, Slack message or update body,
  * an email subject and the name of an item it creates. Supported tokens: `{item_name}`,
- * `{board_name}`, `{actor_name}`, `{column_name}`, `{old_value}`, `{new_value}`, `{update_text}`,
+ * `{board_name}`, `{group_name}` (the group the item is in), `{actor_name}`, `{column_name}`, `{old_value}`, `{new_value}`, `{update_text}`,
  * `{subitem_name}` (the subitem a subitem column trigger fired for), `{mentioned_name}` (the person a
  * mention trigger fired for), `{automation_name}`, `{date}` (today, `YYYY-MM-DD`), `{week}` (ISO week number), `{month}` (e.g.
  * "October 2026") and, for a webhook trigger, `{payload.some.key}` (a value of the JSON it received,
@@ -94,6 +94,7 @@ class BoardAutomationMessageRenderer
         return strtr($filled, [
             '{item_name}' => $item?->name ?? '',
             '{board_name}' => $item?->board?->label ?? $automation->board?->label ?? '',
+            '{group_name}' => $item?->group?->name ?? '',
             '{actor_name}' => $actor?->full_name ?: 'Someone',
             '{column_name}' => $column instanceof BoardColumn ? $this->columnLabel($column) : 'a column',
             '{old_value}' => $column instanceof BoardColumn ? $this->displayValue($column, $context['old_value'] ?? null) : (string) ($context['old_text'] ?? ''),
