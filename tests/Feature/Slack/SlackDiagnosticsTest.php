@@ -4,6 +4,7 @@ use App\Models\SlackAppSetting;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
+use App\Services\Slack\SlackService;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Http;
 
@@ -20,7 +21,7 @@ function makeDiagnosticsInstallation(array $overrides = []): SlackInstallation
         'team_name' => 'Acme',
         'bot_user_id' => 'UBOT',
         'bot_token' => 'xoxb-secret-token',
-        'scopes' => 'chat:write,chat:write.public,channels:read,groups:read,users:read,users:read.email',
+        'scopes' => implode(',', SlackService::BOT_SCOPES),
     ], $overrides));
 }
 

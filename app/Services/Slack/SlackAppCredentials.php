@@ -209,7 +209,7 @@ class SlackAppCredentials
                 // when Slack can reach it, a local API would make the whole manifest fail.
                 'event_subscriptions' => $this->canReceiveEvents() ? [
                     'request_url' => $this->eventsUrl(),
-                    'bot_events' => ['app_uninstalled', 'tokens_revoked'],
+                    'bot_events' => ['app_uninstalled', 'tokens_revoked', 'app_mention'],
                 ] : null,
                 'org_deploy_enabled' => false,
                 'socket_mode_enabled' => false,

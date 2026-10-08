@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Middleware\VerifySlackSignature;
 use App\Models\SlackInstallation;
 use App\Services\Slack\SlackDiagnosticsService;
+use App\Services\Slack\SlackNotificationTestRunner;
 use App\Services\Slack\SlackService;
 use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
@@ -18,13 +19,13 @@ use Illuminate\Http\Request;
  * already passed {@see VerifySlackSignature}, so it is known to come
  * from Slack. Answers the one time `url_verification` challenge Slack sends when the URL is
  * saved, and forgets a workspace when the app is removed from it, so the UI stops claiming that
- * workspace is connected.
+ * workspace is connected. An `app_mention` is remembered for the notification test suite.
  */
 class SlackEventController extends Controller
 {
     private const REVOKING_EVENTS = ['app_uninstalled', 'tokens_revoked'];
 
-    public function __invoke(Request $request, SlackService $slack_service, SlackDiagnosticsService $diagnostics_service): JsonResponse
+    public function __invoke(Request $request, SlackService $slack_service, SlackDiagnosticsService $diagnostics_service, SlackNotificationTestRunner $test_runner): JsonResponse
     {
         $type = (string) $request->input('type');
         $event_type = (string) $request->input('event.type');
@@ -44,6 +45,11 @@ class SlackEventController extends Controller
                 $slack_service->handleRevokedInstallation($installation);
                 AuditLogger::log('slack.uninstalled', "The Slack app was removed from the \"{$team_name}\" workspace.");
             }
+        }
+
+        // Only remembered, never answered, it proves the app_mention subscription for the notification test suite.
+        if ($type === 'event_callback' && $event_type === 'app_mention') {
+            $test_runner->recordAppMention((string) $request->input('team_id'), (array) $request->input('event', []));
         }
 
         // Slack only needs a fast 200, anything else makes it retry the delivery.

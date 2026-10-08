@@ -60,12 +60,14 @@ class SlackClient
 
     /**
      * Posts a message. `$channel` is a channel id, or a Slack member id to reach that
-     * member through the app's direct message conversation.
+     * member through the app's direct message conversation. `$options` adds any other
+     * chat.postMessage argument, such as `thread_ts` to answer in a thread.
      *
      * @param  array<int, array<string, mixed>>  $blocks
+     * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */
-    public function postMessage(string $bot_token, string $channel, string $text, array $blocks = []): array
+    public function postMessage(string $bot_token, string $channel, string $text, array $blocks = [], array $options = []): array
     {
         return $this->send('chat.postMessage', fn (PendingRequest $request) => $request
             ->withToken($bot_token)
@@ -76,7 +78,167 @@ class SlackClient
                 'blocks' => $blocks ?: null,
                 'unfurl_links' => false,
                 'unfurl_media' => false,
+                ...$options,
             ], fn ($value) => $value !== null)));
+    }
+
+    /**
+     * Posts a message in `$channel` that only `$slack_user_id` can see. Slack answers
+     * `user_not_in_channel` when that member is not in the channel.
+     *
+     * @return array<string, mixed>
+     */
+    public function postEphemeral(string $bot_token, string $channel, string $slack_user_id, string $text): array
+    {
+        return $this->postJson('chat.postEphemeral', $bot_token, [
+            'channel' => $channel,
+            'user' => $slack_user_id,
+            'text' => $text,
+        ]);
+    }
+
+    /**
+     * Replaces the text of a message the bot posted earlier, identified by its `ts`.
+     *
+     * @return array<string, mixed>
+     */
+    public function updateMessage(string $bot_token, string $channel, string $ts, string $text): array
+    {
+        return $this->postJson('chat.update', $bot_token, [
+            'channel' => $channel,
+            'ts' => $ts,
+            'text' => $text,
+        ]);
+    }
+
+    /**
+     * Schedules a message for `$post_at` (a Unix timestamp in the future). Returns
+     * `scheduled_message_id` and `post_at`.
+     *
+     * @return array<string, mixed>
+     */
+    public function scheduleMessage(string $bot_token, string $channel, int $post_at, string $text): array
+    {
+        return $this->postJson('chat.scheduleMessage', $bot_token, [
+            'channel' => $channel,
+            'post_at' => $post_at,
+            'text' => $text,
+        ]);
+    }
+
+    /**
+     * The https://<workspace>.slack.com link that opens one message.
+     *
+     * @return array<string, mixed>
+     */
+    public function getPermalink(string $bot_token, string $channel, string $ts): array
+    {
+        return $this->getJson('chat.getPermalink', $bot_token, ['channel' => $channel, 'message_ts' => $ts]);
+    }
+
+    /**
+     * Adds the `$name` emoji (without colons, e.g. `white_check_mark`) to a message.
+     *
+     * @return array<string, mixed>
+     */
+    public function addReaction(string $bot_token, string $channel, string $ts, string $name): array
+    {
+        return $this->postJson('reactions.add', $bot_token, ['channel' => $channel, 'timestamp' => $ts, 'name' => $name]);
+    }
+
+    /**
+     * The reactions on one message, under `message.reactions`.
+     *
+     * @return array<string, mixed>
+     */
+    public function getReactions(string $bot_token, string $channel, string $ts): array
+    {
+        return $this->getJson('reactions.get', $bot_token, ['channel' => $channel, 'timestamp' => $ts, 'full' => 'true']);
+    }
+
+    /**
+     * The messages of a channel between `$oldest` and `$latest`, both included, under `messages`.
+     *
+     * @return array<string, mixed>
+     */
+    public function conversationHistory(string $bot_token, string $channel, string $oldest, string $latest, int $limit = 1): array
+    {
+        return $this->getJson('conversations.history', $bot_token, [
+            'channel' => $channel,
+            'oldest' => $oldest,
+            'latest' => $latest,
+            'inclusive' => 'true',
+            'limit' => $limit,
+        ]);
+    }
+
+    /**
+     * One member's profile, under `user`. Needs `users:read`.
+     *
+     * @return array<string, mixed>
+     */
+    public function userInfo(string $bot_token, string $slack_user_id): array
+    {
+        return $this->getJson('users.info', $bot_token, ['user' => $slack_user_id]);
+    }
+
+    /**
+     * The member who uses `$email` in the workspace, under `user`. Needs `users:read.email`
+     * and answers `users_not_found` when nobody does.
+     *
+     * @return array<string, mixed>
+     */
+    public function lookupUserByEmail(string $bot_token, string $email): array
+    {
+        return $this->getJson('users.lookupByEmail', $bot_token, ['email' => $email]);
+    }
+
+    /**
+     * Uploads `$contents` as a file shared in `$channel`, with Slack's current three step flow:
+     * ask for an upload URL, send the bytes there, then complete the upload into the channel.
+     * `files.upload` was retired by Slack, so it is not used. Returns the completed file.
+     *
+     * @return array<string, mixed>
+     */
+    public function uploadFile(string $bot_token, string $channel, string $filename, string $contents, string $title, ?string $initial_comment = null): array
+    {
+        $upload = $this->send('files.getUploadURLExternal', fn (PendingRequest $request) => $request
+            ->withToken($bot_token)
+            ->asForm()
+            ->post(self::API_BASE_URL.'files.getUploadURLExternal', [
+                'filename' => $filename,
+                'length' => strlen($contents),
+            ]));
+
+        try {
+            $response = Http::timeout(15)->connectTimeout(5)
+                ->withBody($contents, 'application/octet-stream')
+                ->post((string) $upload['upload_url']);
+        } catch (ConnectionException) {
+            throw new SlackException('connection_failed', 'Could not reach Slack to upload the file.');
+        }
+
+        if (! $response->successful()) {
+            throw new SlackException('upload_failed', "Slack did not accept the file contents (HTTP {$response->status()}).");
+        }
+
+        $completed = $this->postJson('files.completeUploadExternal', $bot_token, array_filter([
+            'files' => [['id' => $upload['file_id'], 'title' => $title]],
+            'channel_id' => $channel,
+            'initial_comment' => $initial_comment,
+        ], fn ($value) => $value !== null));
+
+        return is_array($completed['files'][0] ?? null) ? $completed['files'][0] : ['id' => $upload['file_id']];
+    }
+
+    /**
+     * One file's details, under `file`. Needs `files:read`.
+     *
+     * @return array<string, mixed>
+     */
+    public function fileInfo(string $bot_token, string $file_id): array
+    {
+        return $this->getJson('files.info', $bot_token, ['file' => $file_id]);
     }
 
     /**
@@ -152,6 +314,29 @@ class SlackClient
         return $this->send('auth.revoke', fn (PendingRequest $request) => $request
             ->withToken($token)
             ->post(self::API_BASE_URL.'auth.revoke'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    private function postJson(string $method, string $token, array $body): array
+    {
+        return $this->send($method, fn (PendingRequest $request) => $request
+            ->withToken($token)
+            ->asJson()
+            ->post(self::API_BASE_URL.$method, $body));
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    private function getJson(string $method, string $token, array $query): array
+    {
+        return $this->send($method, fn (PendingRequest $request) => $request
+            ->withToken($token)
+            ->get(self::API_BASE_URL.$method, $query));
     }
 
     /**

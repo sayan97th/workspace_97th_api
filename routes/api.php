@@ -72,6 +72,7 @@ use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\SlackAppCredentialsController;
 use App\Http\Controllers\Integration\SlackEventController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
+use App\Http\Controllers\Integration\SlackNotificationTestController;
 use App\Http\Controllers\Integration\SlackOAuthCallbackController;
 use App\Http\Controllers\Integration\SlackWorkspaceController;
 use App\Http\Controllers\MyWork\MyWorkController;
@@ -283,6 +284,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('diagnostics/channel-test', [SlackIntegrationController::class, 'sendChannelTest'])->middleware('throttle:6,1');
             Route::get('diagnostics/recipients', [SlackIntegrationController::class, 'notificationRecipients']);
             Route::post('diagnostics/user-test', [SlackIntegrationController::class, 'sendUserTest'])->middleware('throttle:6,1');
+            Route::get('diagnostics/notification-tests', [SlackNotificationTestController::class, 'index']);
+            Route::post('diagnostics/notification-tests/{test}', [SlackNotificationTestController::class, 'run'])->middleware('throttle:40,1');
         });
 
         // The Slack app itself is a one time developer setting, kept to the account owner so

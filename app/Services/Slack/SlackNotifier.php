@@ -35,21 +35,59 @@ class SlackNotifier
             return;
         }
 
-        $actor_name = $notification->actor?->full_name ?: 'Someone';
-        $message = sprintf(
-            '*%s* %s %s',
-            $this->escape($actor_name),
-            $this->escape(lcfirst($notification->action_label)),
-            $this->escape($notification->action_target),
-        );
+        $content = $this->notificationContent($notification);
 
         $this->sendToUser(
             user: $recipient,
-            mrkdwn: $message,
-            fallback_text: "{$actor_name} ".lcfirst($notification->action_label)." {$notification->action_target}",
+            mrkdwn: $content['mrkdwn'],
+            fallback_text: $content['fallback_text'],
             link: $notification->link,
-            context: $notification->board?->label,
+            context: $content['context'],
         );
+    }
+
+    /**
+     * Sends `$notification` to `$recipient_link` right away with the exact text and blocks
+     * {@see self::deliverNotification()} queues, skipping the preference gate, so the
+     * notification test suite shows what a real notification looks like and Slack's real error.
+     * `$notification` does not need to be saved. Returns Slack's chat.postMessage answer.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws SlackException
+     */
+    public function sendNotificationNow(Notification $notification, SlackUserLink $recipient_link, SlackClient $client): array
+    {
+        $content = $this->notificationContent($notification);
+
+        return $client->postMessage(
+            $recipient_link->installation->bot_token,
+            $recipient_link->slack_user_id,
+            mb_substr($content['fallback_text'], 0, 3000),
+            $this->buildBlocks($content['mrkdwn'], $content['context'], $notification->link),
+        );
+    }
+
+    /**
+     * The direct message for one notification: who did what to what, which board it was on.
+     * A notification without an actor (a due date reminder) is attributed to "Someone", as it always was.
+     *
+     * @return array{mrkdwn: string, fallback_text: string, context: string|null}
+     */
+    private function notificationContent(Notification $notification): array
+    {
+        $actor_name = $notification->actor?->full_name ?: 'Someone';
+
+        return [
+            'mrkdwn' => sprintf(
+                '*%s* %s %s',
+                $this->escape($actor_name),
+                $this->escape(lcfirst($notification->action_label)),
+                $this->escape($notification->action_target),
+            ),
+            'fallback_text' => "{$actor_name} ".lcfirst($notification->action_label)." {$notification->action_target}",
+            'context' => $notification->board?->label,
+        ];
     }
 
     /**
@@ -152,9 +190,12 @@ class SlackNotifier
     }
 
     /**
+     * The block layout every notification uses: the message, an optional context line and an
+     * optional "Open in workspace" button pointing at `$link` (an in-app path).
+     *
      * @return array<int, array<string, mixed>>
      */
-    private function buildBlocks(string $mrkdwn, ?string $context, ?string $link): array
+    public function buildBlocks(string $mrkdwn, ?string $context, ?string $link): array
     {
         $blocks = [
             ['type' => 'section', 'text' => ['type' => 'mrkdwn', 'text' => mb_substr($mrkdwn, 0, 3000)]],

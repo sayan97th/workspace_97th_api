@@ -283,7 +283,7 @@ class SlackDiagnosticsService
             $only_optional = array_diff($missing_scopes, SlackService::OPTIONAL_BOT_SCOPES) === [];
 
             return $only_optional
-                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).', so members cannot be matched to Slack by email. Use "Reconnect" on the workspace in Administration > Integrations to grant them.')
+                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).'. Notifications still work, but matching members by email or some notification tests need them. Use "Reconnect" on the workspace in Administration > Integrations to grant them.')
                 : $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Reconnect" on the workspace in Administration > Integrations.');
         }
 

@@ -27,12 +27,22 @@ class SlackService
 {
     /**
      * Scopes requested for the app's bot when an administrator installs it. `users:read` and
-     * `users:read.email` let the app match members to their Slack account by email.
+     * `users:read.email` let the app match members to their Slack account by email, the history,
+     * reactions, files and app mention scopes are used by the notification test suite.
      */
-    public const BOT_SCOPES = ['chat:write', 'chat:write.public', 'channels:read', 'groups:read', 'users:read', 'users:read.email'];
+    public const BOT_SCOPES = [
+        'chat:write', 'chat:write.public', 'channels:read', 'groups:read', 'users:read', 'users:read.email',
+        'channels:history', 'groups:history', 'reactions:read', 'reactions:write', 'files:read', 'files:write', 'app_mentions:read',
+    ];
 
-    /** Bot scopes only "match members by email" needs, a workspace installed without them still works. */
-    public const OPTIONAL_BOT_SCOPES = ['users:read', 'users:read.email'];
+    /**
+     * Bot scopes only "match members by email" and the notification test suite need, a workspace
+     * installed without them still delivers every notification.
+     */
+    public const OPTIONAL_BOT_SCOPES = [
+        'users:read', 'users:read.email',
+        'channels:history', 'groups:history', 'reactions:read', 'reactions:write', 'files:read', 'files:write', 'app_mentions:read',
+    ];
 
     /** Scopes requested when a member proves which Slack account is theirs. */
     public const USER_SCOPES = ['openid', 'profile', 'email'];
