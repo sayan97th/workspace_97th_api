@@ -16,7 +16,6 @@ class SlackErrorMessage
             'client_secret_required' => 'Enter the client secret of this Slack app.',
             'not_installed' => 'Slack is not connected to this account yet. An administrator connects a workspace in Administration > Integrations > Slack.',
             'not_linked' => 'Connect your Slack account first.',
-            'link_requires_https' => 'Slack only allows "Connect my Slack" through an HTTPS redirect URL, and this site uses a plain http one. An administrator can link members with "Match members by email" in Administration > Integrations > Slack, or set an HTTPS redirect URL (for local testing, an HTTPS tunnel) in the Slack app settings.',
             'recipient_not_linked' => 'That member has not linked their Slack account yet. Ask them to use "Connect my Slack" first.',
             'ratelimited' => 'Slack is busy right now. Please try again in a moment.',
             'connection_failed' => 'Slack could not be reached. Please try again in a moment.',

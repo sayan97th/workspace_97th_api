@@ -17,7 +17,10 @@ class SlackStatus
     /** Frontend page where the Slack app and workspaces are set up, Administration > Integrations > Slack. */
     public const SETUP_PATH = '/administration/integrations/slack';
 
-    public function __construct(private readonly SlackAppCredentials $credentials) {}
+    public function __construct(
+        private readonly SlackAppCredentials $credentials,
+        private readonly SlackService $slack_service,
+    ) {}
 
     /**
      * @return array<string, mixed>
@@ -37,6 +40,8 @@ class SlackStatus
             'needs_setup' => ! $is_configured || $installation === null,
             'setup_path' => self::SETUP_PATH,
             'can_manage' => $can_manage,
+            // Which Slack page "Connect my Slack" opens, so the UI can tell the member what to expect.
+            'link_method' => $this->slack_service->linkMethod(),
             // The Slack app is a one time setup done by an administrator or the account owner.
             'can_configure_app' => $can_manage,
             'credentials_source' => $this->credentials->source(),

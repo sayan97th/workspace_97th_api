@@ -62,6 +62,16 @@ class SlackService
      */
     public const PURPOSE_CONNECT = 'connect';
 
+    /** "Connect my Slack" through Slack's OpenID "Sign in with Slack", only allowed with an HTTPS redirect URL. */
+    public const LINK_METHOD_SIGN_IN = 'sign_in';
+
+    /**
+     * "Connect my Slack" through the same "Add to Slack" authorization an install uses, pinned to
+     * the active workspace. Slack accepts a plain http redirect URL there, so it is the fallback
+     * when the site has no HTTPS redirect URL, for example a local API.
+     */
+    public const LINK_METHOD_AUTHORIZE = 'authorize';
+
     /** The authorization was opened in its own browser tab, which reports back and closes. */
     public const DISPLAY_TAB = 'tab';
 
@@ -154,11 +164,20 @@ class SlackService
     }
 
     /**
-     * The "Sign in with Slack" URL a member is sent to, pinned to the active workspace.
-     *
-     * Slack's OpenID flow only accepts an HTTPS redirect URL, unlike "Add to Slack", and answers
-     * a plain http one (a local API) with its own "invalid redirect_uri" error page. That case is
-     * refused here instead, so the member gets a message that says what to do.
+     * How "Connect my Slack" proves which Slack account belongs to a member. Slack's OpenID flow
+     * only accepts an HTTPS redirect URL and answers a plain http one with its own "invalid
+     * redirect_uri" page, so a site without one uses the "Add to Slack" authorization instead.
+     */
+    public function linkMethod(): string
+    {
+        return parse_url($this->credentials->redirectUri(), PHP_URL_SCHEME) === 'https'
+            ? self::LINK_METHOD_SIGN_IN
+            : self::LINK_METHOD_AUTHORIZE;
+    }
+
+    /**
+     * The "Connect my Slack" URL a member is sent to, pinned to the active workspace, see
+     * {@see linkMethod()} for which Slack page it opens.
      *
      * @throws SlackException
      */
@@ -166,9 +185,17 @@ class SlackService
     {
         $this->ensureConfigured();
         $installation = $this->requireInstallation();
+        $method = $this->linkMethod();
+        $state = $this->issueState(self::PURPOSE_LINK, $user, $return_path, $display, $method);
 
-        if (parse_url($this->credentials->redirectUri(), PHP_URL_SCHEME) !== 'https') {
-            throw new SlackException('link_requires_https', 'Sign in with Slack needs an HTTPS redirect URL.');
+        if ($method === self::LINK_METHOD_AUTHORIZE) {
+            return 'https://slack.com/oauth/v2/authorize?'.http_build_query([
+                'client_id' => $this->credentials->clientId(),
+                'scope' => implode(',', self::BOT_SCOPES),
+                'redirect_uri' => $this->credentials->redirectUri(),
+                'team' => $installation->team_id,
+                'state' => $state,
+            ]);
         }
 
         return 'https://slack.com/openid/connect/authorize?'.http_build_query([
@@ -177,7 +204,7 @@ class SlackService
             'scope' => implode(' ', self::USER_SCOPES),
             'redirect_uri' => $this->credentials->redirectUri(),
             'team' => $installation->team_id,
-            'state' => $this->issueState(self::PURPOSE_LINK, $user, $return_path, $display),
+            'state' => $state,
         ]);
     }
 
@@ -185,7 +212,7 @@ class SlackService
      * Redeems a `state` value once. Returns the purpose, the user it was issued for, the
      * in-app path to send the browser back to, if one was asked for, and how the flow was opened.
      *
-     * @return array{purpose: string, user: User, return_path: string|null, display: string}
+     * @return array{purpose: string, user: User, return_path: string|null, display: string, method: string}
      *
      * @throws SlackException
      */
@@ -203,6 +230,7 @@ class SlackService
             'user' => $user,
             'return_path' => $payload['return_path'] ?? null,
             'display' => $payload['display'] ?? self::DISPLAY_PAGE,
+            'method' => $payload['method'] ?? self::LINK_METHOD_SIGN_IN,
         ];
     }
 
@@ -377,13 +405,17 @@ class SlackService
     }
 
     /**
-     * Finishes the "Connect my Slack" flow for `$user`.
+     * Finishes the "Connect my Slack" flow for `$user`, opened with `$method` (see {@see linkMethod()}).
      *
      * @throws SlackException
      */
-    public function completeLink(string $code, User $user): SlackUserLink
+    public function completeLink(string $code, User $user, string $method = self::LINK_METHOD_SIGN_IN): SlackUserLink
     {
         $installation = $this->requireInstallation();
+
+        if ($method === self::LINK_METHOD_AUTHORIZE) {
+            return $this->completeAuthorizedLink($code, $user, $installation);
+        }
 
         $token_payload = $this->client->exchangeUserCode($code, $this->credentials->redirectUri());
         $access_token = $token_payload['access_token'] ?? null;
@@ -403,11 +435,39 @@ class SlackService
             throw new SlackException('wrong_workspace', "That Slack account is not part of {$installation->team_name}.");
         }
 
+        return $this->saveUserLink($installation, $user, $slack_user_id, $identity['name'] ?? null);
+    }
+
+    /**
+     * The "Add to Slack" half of "Connect my Slack". Slack answers with the workspace and the
+     * member who approved it (`authed_user`), so the workspace must be the active one. Its bot
+     * token is refreshed on the way, the same way a member's automation connection does.
+     *
+     * @throws SlackException
+     */
+    private function completeAuthorizedLink(string $code, User $user, SlackInstallation $installation): SlackUserLink
+    {
+        $payload = $this->client->exchangeInstallCode($code, $this->credentials->redirectUri());
+
+        if (($payload['team']['id'] ?? null) !== $installation->team_id) {
+            throw new SlackException('wrong_workspace', "That Slack account is not part of {$installation->team_name}.");
+        }
+
+        $slack_user_id = $this->nonEmptyString($payload['authed_user']['id'] ?? null)
+            ?? throw new SlackException('invalid_response', 'Slack did not return a member id.');
+
+        $installation = $this->storeInstallation($payload, $user, is_admin_install: false);
+
+        return $this->saveUserLink($installation, $user, $slack_user_id, $this->fetchMemberName($installation, $slack_user_id));
+    }
+
+    private function saveUserLink(SlackInstallation $installation, User $user, string $slack_user_id, ?string $slack_display_name): SlackUserLink
+    {
         return SlackUserLink::updateOrCreate(
             ['user_id' => $user->id, 'slack_installation_id' => $installation->id],
             [
                 'slack_user_id' => $slack_user_id,
-                'slack_display_name' => $identity['name'] ?? null,
+                'slack_display_name' => $slack_display_name,
                 'linked_at' => now(),
             ],
         );
@@ -727,13 +787,13 @@ class SlackService
         return $current;
     }
 
-    private function issueState(string $purpose, User $user, ?string $return_path, string $display): string
+    private function issueState(string $purpose, User $user, ?string $return_path, string $display, ?string $method = null): string
     {
         $state = Str::random(40);
 
         Cache::put(
             $this->stateCacheKey($state),
-            ['purpose' => $purpose, 'user_id' => $user->id, 'return_path' => $return_path, 'display' => $display],
+            ['purpose' => $purpose, 'user_id' => $user->id, 'return_path' => $return_path, 'display' => $display, 'method' => $method],
             now()->addMinutes(self::STATE_TTL_MINUTES),
         );
 

@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Log;
 /**
  * GET /api/integrations/slack/callback
  *
- * The one redirect URI both Slack OAuth flows return to. Public on purpose, the browser
+ * The one redirect URI every Slack OAuth flow returns to. Public on purpose, the browser
  * arrives from Slack with no JWT, so who the request is for comes only from the single use
  * `state` value issued when the flow started, see {@see SlackService::consumeState()}.
  *
@@ -94,7 +94,7 @@ class SlackOAuthCallbackController extends Controller
                     $query['connection_id'] = (string) $connection->id;
                 }
             } else {
-                $slack_service->completeLink($code, $user);
+                $slack_service->completeLink($code, $user, $context['method']);
             }
         } catch (SlackException $exception) {
             Log::warning('Slack OAuth callback failed', ['purpose' => $context['purpose'], 'error' => $exception->error_code]);

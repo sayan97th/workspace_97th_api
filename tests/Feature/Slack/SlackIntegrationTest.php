@@ -430,13 +430,65 @@ test('a return path that leaves the app is rejected', function (string $bad_path
     'no leading slash' => 'evil.example',
 ]);
 
-test('connect my slack is refused with an explanation when the redirect url is plain http', function () {
+test('connect my slack falls back to add to slack pinned to the active workspace when the redirect url is plain http', function () {
     SlackAppSetting::current()->update(['redirect_uri' => 'http://localhost:8000/api/integrations/slack/callback']);
-    makeSlackInstallation();
+    $installation = makeSlackInstallation();
+    Http::fake([
+        'slack.com/api/oauth.v2.access' => Http::response([
+            'ok' => true, 'access_token' => 'xoxb-refreshed', 'scope' => 'chat:write,users:read',
+            'team' => ['id' => 'T100', 'name' => 'Acme'], 'authed_user' => ['id' => 'U777'],
+        ]),
+        'slack.com/api/users.info*' => Http::response(['ok' => true, 'user' => ['id' => 'U777', 'real_name' => 'Amanda Diaz']]),
+        'slack.com/api/*' => Http::response(['ok' => true]),
+    ]);
     $user = User::factory()->create();
 
-    $this->actingAs($user, 'api')
-        ->postJson('/api/integrations/slack/link-url')
-        ->assertUnprocessable()
-        ->assertJsonPath('message', fn (string $message) => str_contains($message, 'Match members by email'));
+    $this->actingAs($user, 'api')->getJson('/api/integrations/slack')->assertJsonPath('link_method', SlackService::LINK_METHOD_AUTHORIZE);
+
+    $link_url = $this->actingAs($user, 'api')->postJson('/api/integrations/slack/link-url', ['display' => 'tab'])->assertOk()->json('url');
+    parse_str(parse_url($link_url, PHP_URL_QUERY), $query);
+
+    expect($link_url)->toStartWith('https://slack.com/oauth/v2/authorize?')
+        ->and($query['team'])->toBe('T100')
+        ->and($query['redirect_uri'])->toBe('http://localhost:8000/api/integrations/slack/callback');
+
+    $this->get('/api/integrations/slack/callback?code=abc&state='.$query['state'])
+        ->assertRedirect('http://frontend.test/integrations/slack/complete?purpose=link&slack=connected');
+
+    $this->assertDatabaseHas('slack_user_links', [
+        'user_id' => $user->id,
+        'slack_installation_id' => $installation->id,
+        'slack_user_id' => 'U777',
+        'slack_display_name' => 'Amanda Diaz',
+    ]);
+    expect($installation->refresh()->bot_token)->toBe('xoxb-refreshed')
+        ->and($installation->is_active)->toBeTrue()
+        ->and($installation->installed_by_id)->toBeNull();
+});
+
+test('the add to slack fallback refuses an account from another workspace', function () {
+    SlackAppSetting::current()->update(['redirect_uri' => 'http://localhost:8000/api/integrations/slack/callback']);
+    $installation = makeSlackInstallation();
+    Http::fake([
+        'slack.com/api/oauth.v2.access' => Http::response([
+            'ok' => true, 'access_token' => 'xoxb-other', 'team' => ['id' => 'TOTHER', 'name' => 'Other'], 'authed_user' => ['id' => 'U777'],
+        ]),
+    ]);
+
+    $user = User::factory()->create();
+    parse_str(parse_url(app(SlackService::class)->buildLinkUrl($user), PHP_URL_QUERY), $query);
+
+    $this->get('/api/integrations/slack/callback?code=abc&state='.$query['state'])
+        ->assertRedirectContains('reason=wrong_workspace');
+
+    expect(SlackUserLink::count())->toBe(0)
+        ->and(SlackInstallation::count())->toBe(1)
+        ->and($installation->refresh()->bot_token)->toBe('xoxb-secret-token');
+});
+
+test('the slack status reports sign in with slack when the redirect url is https', function () {
+    makeSlackInstallation();
+
+    $this->actingAs(User::factory()->create(), 'api')->getJson('/api/integrations/slack')
+        ->assertJsonPath('link_method', SlackService::LINK_METHOD_SIGN_IN);
 });
