@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\SlackInstallation;
 use App\Services\Slack\SlackException;
 use App\Services\Slack\SlackService;
+use App\Services\Slack\SlackStatus;
 use App\Support\AuditLogger;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -26,6 +27,9 @@ class SlackOAuthCallbackController extends Controller
 {
     private const TAB_COMPLETE_PATH = '/integrations/slack/complete';
 
+    /** The account wide Automations center, where a connection made without a return path lands. */
+    private const AUTOMATIONS_PATH = '/automations';
+
     public function __invoke(Request $request, SlackService $slack_service): RedirectResponse
     {
         try {
@@ -36,6 +40,7 @@ class SlackOAuthCallbackController extends Controller
         }
 
         $is_install = $context['purpose'] === SlackService::PURPOSE_INSTALL;
+        $is_connection = $context['purpose'] === SlackService::PURPOSE_CONNECT;
         $user = $context['user'];
 
         if ($context['display'] === SlackService::DISPLAY_TAB) {
@@ -43,8 +48,12 @@ class SlackOAuthCallbackController extends Controller
             $query = ['purpose' => $context['purpose']];
         } else {
             $return_path = $context['return_path'];
-            $destination = $return_path ?? ($is_install ? '/administration' : '/profile');
-            $query = $return_path ? [] : ($is_install ? ['section' => 'integrations'] : ['section' => 'notifications']);
+            $destination = $return_path ?? match (true) {
+                $is_install => SlackStatus::SETUP_PATH,
+                $is_connection => self::AUTOMATIONS_PATH,
+                default => '/profile',
+            };
+            $query = $return_path || $is_install || $is_connection ? [] : ['section' => 'notifications'];
         }
 
         $code = $request->query('code');
@@ -54,7 +63,7 @@ class SlackOAuthCallbackController extends Controller
 
         try {
             if ($is_install) {
-                if (! $user->hasRole(['super_admin', 'admin'])) {
+                if (! $user->hasRole(SlackStatus::MANAGER_ROLES)) {
                     return $this->redirectToFrontend($destination, $query, 'error', 'forbidden');
                 }
 
@@ -71,6 +80,18 @@ class SlackOAuthCallbackController extends Controller
                     if ($matched_count !== null) {
                         $query['matched'] = (string) $matched_count;
                     }
+                }
+            } elseif ($is_connection) {
+                $connection = $slack_service->completeConnection($code, $user);
+                AuditLogger::log('slack.account_connected', "Connected a Slack account in \"{$connection->installation->team_name}\" for automations.", $user, [
+                    'team_id' => $connection->installation->team_id,
+                    'connection_id' => $connection->id,
+                ]);
+
+                // The Automations center selects the account it just connected.
+                if ($context['display'] === SlackService::DISPLAY_TAB) {
+                    $query['workspace'] = $connection->installation->team_name;
+                    $query['connection_id'] = (string) $connection->id;
                 }
             } else {
                 $slack_service->completeLink($code, $user);

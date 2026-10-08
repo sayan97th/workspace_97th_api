@@ -11,6 +11,12 @@ use App\Models\User;
  */
 class SlackStatus
 {
+    /** Roles allowed to set up the Slack app and manage workspaces, the same `role:` gate as the routes. */
+    public const MANAGER_ROLES = ['super_admin', 'admin'];
+
+    /** Frontend page where the Slack app and workspaces are set up, Administration > Integrations > Slack. */
+    public const SETUP_PATH = '/administration/integrations/slack';
+
     public function __construct(private readonly SlackAppCredentials $credentials) {}
 
     /**
@@ -21,12 +27,18 @@ class SlackStatus
         $installation = SlackInstallation::current();
         $link = $installation ? $user->slackLinks()->where('slack_installation_id', $installation->id)->first() : null;
 
+        $is_configured = $this->credentials->isConfigured();
+        $can_manage = $user->hasRole(self::MANAGER_ROLES);
+
         return [
-            'is_configured' => $this->credentials->isConfigured(),
+            'is_configured' => $is_configured,
             'is_connected' => $installation !== null,
-            'can_manage' => $user->hasRole(['super_admin', 'admin']),
-            // The Slack app is a one time developer setting only the account owner sees.
-            'can_configure_app' => $user->hasRole('super_admin'),
+            // Slack is ready for "Connect my Slack" only once the app is set up and a workspace is connected.
+            'needs_setup' => ! $is_configured || $installation === null,
+            'setup_path' => self::SETUP_PATH,
+            'can_manage' => $can_manage,
+            // The Slack app is a one time setup done by an administrator or the account owner.
+            'can_configure_app' => $can_manage,
             'credentials_source' => $this->credentials->source(),
             'workspaces_count' => SlackInstallation::count(),
             'workspace' => $installation ? [

@@ -117,6 +117,15 @@ class SlackNotifier
     }
 
     /**
+     * Sends a plain text message to a channel of `$installation`'s workspace, whichever workspace is
+     * active. Used by channel automations created with a member's own Slack connection.
+     */
+    public function notifyChannelIn(SlackInstallation $installation, string $channel_id, string $message, ?string $link = null, ?string $context = null): void
+    {
+        $this->dispatch($installation, $channel_id, $this->escape($message), $message, $link, $context);
+    }
+
+    /**
      * Sends a message straight away instead of through the queue, so a "send me a test
      * message" button can show the real Slack error to the person who clicked it.
      *

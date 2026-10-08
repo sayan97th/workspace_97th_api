@@ -87,6 +87,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property-read Department|null $department
  * @property-read Collection<int, UserProfileFieldValue> $profileFieldValues
  * @property-read SlackUserLink|null $slackLink
+ * @property-read Collection<int, SlackConnection> $slackConnections
  */
 #[Fillable([
     'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'last_active_workspace_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
@@ -314,6 +315,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     public function slackLinks(): HasMany
     {
         return $this->hasMany(SlackUserLink::class);
+    }
+
+    /**
+     * The Slack accounts this user connected from the Automations center, one per workspace.
+     *
+     * @return HasMany<SlackConnection, $this>
+     */
+    public function slackConnections(): HasMany
+    {
+        return $this->hasMany(SlackConnection::class);
     }
 
     /**

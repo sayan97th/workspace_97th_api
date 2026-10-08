@@ -7,6 +7,7 @@ use App\Models\BoardAutomation;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardView;
+use App\Models\SlackConnection;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Rules\SlackActionHasConnectedWorkspace;
@@ -598,6 +599,8 @@ trait ValidatesAutomationDefinition
                 'slack_channel_name' => ['sometimes', 'nullable', 'string', 'max:120'],
                 // The workspace the channel belongs to, channel ids mean nothing in another one.
                 'slack_team_id' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[TE][A-Z0-9]+$/'],
+                // The member's own Slack account the post goes through, set by the Slack recipes of the Automations center.
+                'slack_connection_id' => ['sometimes', 'nullable', 'integer'],
                 'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
             ],
             BoardAutomation::ACTION_POST_UPDATE => ['message' => ['required', 'string', 'max:2000']],
@@ -800,6 +803,10 @@ trait ValidatesAutomationDefinition
             $validator->errors()->add("{$prefix}.from_item_group", 'There is no item yet, choose the group instead.');
         }
 
+        if ($type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL && ! empty($params['slack_connection_id'])) {
+            $this->validateSlackConnection($validator, $params, $prefix);
+        }
+
         $this->validateNewActionParams($validator, $view_id, $type, $params, $prefix);
 
         $is_cross_board = $type === BoardAutomation::ACTION_MOVE_TO_BOARD
@@ -812,6 +819,30 @@ trait ValidatesAutomationDefinition
 
         if ($is_cross_board) {
             $this->validateCrossBoardTarget($validator, $board, $prefix, $params);
+        }
+    }
+
+    /**
+     * A Slack channel post may only go through one of the caller's own Slack connections. Editing
+     * someone else's automation keeps the connection it already used, it is never swapped for
+     * another member's account. The channel must belong to that connection's workspace.
+     *
+     * @param  array<string, mixed>  $params
+     */
+    private function validateSlackConnection(Validator $validator, array $params, string $prefix): void
+    {
+        $connection = SlackConnection::query()->with('installation')->find((int) $params['slack_connection_id']);
+        $automation = $this->route('automation');
+        $kept_ids = $automation instanceof BoardAutomation ? $automation->slackConnectionIds() : [];
+
+        if (! $connection || ($connection->user_id !== $this->user()?->id && ! in_array($connection->id, $kept_ids, true))) {
+            $validator->errors()->add("{$prefix}.slack_connection_id", 'Choose one of your connected Slack accounts.');
+
+            return;
+        }
+
+        if (! empty($params['slack_team_id']) && $params['slack_team_id'] !== $connection->installation->team_id) {
+            $validator->errors()->add("{$prefix}.slack_channel_id", "This channel does not belong to {$connection->installation->team_name}, choose a channel again.");
         }
     }
 

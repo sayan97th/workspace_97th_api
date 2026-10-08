@@ -590,6 +590,21 @@ class BoardAutomation extends Model
     }
 
     /**
+     * The member Slack connections this automation's channel posts go through, from both branches.
+     *
+     * @return array<int, int>
+     */
+    public function slackConnectionIds(): array
+    {
+        $actions = [...($this->actions ?? []), ...($this->else_actions ?? []), ['params' => $this->action_params ?? []]];
+
+        return array_values(array_unique(array_filter(array_map(
+            fn (mixed $action) => is_array($action) && is_numeric($action['params']['slack_connection_id'] ?? null) ? (int) $action['params']['slack_connection_id'] : null,
+            $actions,
+        ))));
+    }
+
+    /**
      * The ordered actions to run. Automations saved before actions became a list only have
      * `action_type`/`action_params`, which read as a list of one.
      *

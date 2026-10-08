@@ -14,9 +14,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * Administration > Integrations > Developer settings (account owner only, `super_admin`). The Slack app credentials
- * are managed only here, never in the API environment, so an administrator can point the
- * integration at a different Slack app at any time. Secrets are write only, the API only
+ * Administration > Integrations > Slack (administrators and the account owner, `admin`, `super_admin`).
+ * The Slack app is set up here once, never in the API environment, so an administrator can point
+ * the integration at a different Slack app at any time. Secrets are write only, the API only
  * ever answers with their last four characters.
  */
 class SlackAppCredentialsController extends Controller

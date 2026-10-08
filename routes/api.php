@@ -70,6 +70,7 @@ use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\Home\RecentBoardController;
 use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\SlackAppCredentialsController;
+use App\Http\Controllers\Integration\SlackConnectionController;
 use App\Http\Controllers\Integration\SlackEventController;
 use App\Http\Controllers\Integration\SlackIntegrationController;
 use App\Http\Controllers\Integration\SlackNotificationTestController;
@@ -273,6 +274,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::delete('link', [SlackIntegrationController::class, 'unlink']);
         Route::post('link/test', [SlackIntegrationController::class, 'sendTest'])->middleware('throttle:6,1');
 
+        // A member's own Slack accounts for automations, the "Connect your Slack account" step of
+        // the Automations center. Every member with the integrations permission may connect one.
+        Route::get('connections', [SlackConnectionController::class, 'index']);
+        Route::post('connections/url', [SlackConnectionController::class, 'url'])->middleware(['account.permission:use_integrations', 'throttle:20,1']);
+        Route::get('connections/{connection}/channels', [SlackConnectionController::class, 'channels'])->middleware('throttle:60,1');
+        Route::delete('connections/{connection}', [SlackConnectionController::class, 'destroy']);
+
         Route::middleware('role:super_admin,admin')->group(function () {
             Route::post('install-url', [SlackIntegrationController::class, 'installUrl']);
             Route::delete('/', [SlackWorkspaceController::class, 'destroyActive']);
@@ -287,11 +295,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('diagnostics/notification-tests', [SlackNotificationTestController::class, 'index']);
             Route::get('diagnostics/slack-members', [SlackNotificationTestController::class, 'slackMembers'])->middleware('throttle:30,1');
             Route::post('diagnostics/notification-tests/{test}', [SlackNotificationTestController::class, 'run'])->middleware('throttle:40,1');
-        });
 
-        // The Slack app itself is a one time developer setting, kept to the account owner so
-        // administrators only ever see "Add workspace", like on monday.com.
-        Route::middleware('role:super_admin')->group(function () {
+            // The Slack app itself is a one time setup done from Administration > Integrations > Slack
+            // by an administrator or the account owner. Members only ever use "Connect my Slack".
             Route::get('app', [SlackAppCredentialsController::class, 'show']);
             Route::post('app/create', [SlackAppCredentialsController::class, 'create'])->middleware('throttle:10,1');
             Route::put('app', [SlackAppCredentialsController::class, 'update'])->middleware('throttle:20,1');

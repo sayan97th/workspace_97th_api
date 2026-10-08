@@ -83,7 +83,7 @@ class SlackNotificationTestRunner
 
         $missing_scopes = $this->missingScopes($test, $installation);
         if ($missing_scopes !== []) {
-            return $run->finish(SlackNotificationTestRun::STATUS_SKIPPED, 'The workspace was installed without '.implode(', ', $missing_scopes).'. Use "Reconnect" on the workspace in Administration > Integrations to grant it.')->toArray();
+            return $run->finish(SlackNotificationTestRun::STATUS_SKIPPED, 'The workspace was installed without '.implode(', ', $missing_scopes).'. Use "Reconnect" on the workspace in Administration > Integrations > Slack to grant it.')->toArray();
         }
 
         $recipient_link = null;

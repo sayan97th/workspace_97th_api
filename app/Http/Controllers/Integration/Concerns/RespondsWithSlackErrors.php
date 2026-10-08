@@ -15,6 +15,7 @@ trait RespondsWithSlackErrors
     {
         $status = in_array($exception->error_code, ['not_configured', 'connection_failed', 'ratelimited'], true) ? 503 : 422;
 
-        return response()->json(['message' => SlackErrorMessage::describe($exception)], $status);
+        // `code` lets the frontend react to a missing setup, for example by opening the Slack settings page.
+        return response()->json(['message' => SlackErrorMessage::describe($exception), 'code' => $exception->error_code], $status);
     }
 }

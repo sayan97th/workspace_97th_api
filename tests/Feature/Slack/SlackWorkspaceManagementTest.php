@@ -244,7 +244,7 @@ test('matching by email explains a missing permission', function () {
 
     $this->actingAs(makeWorkspaceOwner(), 'api')->postJson('/api/integrations/slack/match-members')
         ->assertUnprocessable()
-        ->assertJsonPath('message', 'The Slack app is missing a permission. Use "Reconnect" on the workspace in Administration > Integrations to grant it.');
+        ->assertJsonPath('message', 'The Slack app is missing a permission. Use "Reconnect" on the workspace in Administration > Integrations > Slack to grant it.');
 
     Http::assertNothingSent();
 });
@@ -361,19 +361,53 @@ test('the manifest carries the redirect url, events url and scopes', function ()
         ->and($manifest['settings']['event_subscriptions']['request_url'])->toBe('https://api.example.com/api/integrations/slack/events');
 });
 
-test('only the account owner sees and changes the slack app, administrators only connect workspaces', function () {
+test('administrators and the account owner set up the slack app, members and staff cannot', function () {
+    SlackAppSetting::query()->delete();
     $admin = User::factory()->create();
     $admin->assignRole('admin');
+    $staff = User::factory()->create();
+    $staff->assignRole('staff');
 
     $this->actingAs($admin, 'api')->getJson('/api/integrations/slack')
         ->assertJsonPath('can_manage', true)
-        ->assertJsonPath('can_configure_app', false);
-    $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/app')->assertForbidden();
-    $this->actingAs($admin, 'api')->postJson('/api/integrations/slack/app/create', ['configuration_token' => 'xoxe.xoxp-1-abc'])->assertForbidden();
-    $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/workspaces')->assertOk();
-    $this->actingAs($admin, 'api')->postJson('/api/integrations/slack/install-url')->assertOk();
+        ->assertJsonPath('can_configure_app', true)
+        ->assertJsonPath('needs_setup', true)
+        ->assertJsonPath('setup_path', '/administration/integrations/slack');
+    $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/app')->assertOk()->assertJsonPath('is_configured', false);
+    $this->actingAs($admin, 'api')->putJson('/api/integrations/slack/app', [
+        'client_id' => '111.222',
+        'client_secret' => 'adminclientsecret1234',
+        'signing_secret' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+    ])->assertOk()->assertJsonPath('is_configured', true);
+    $this->assertDatabaseHas('audit_logs', ['event' => 'slack.app_credentials_updated', 'user_id' => $admin->id]);
+
+    $this->actingAs($staff, 'api')->getJson('/api/integrations/slack')->assertJsonPath('can_configure_app', false);
+    $this->actingAs($staff, 'api')->getJson('/api/integrations/slack/app')->assertForbidden();
+    $this->actingAs($staff, 'api')->putJson('/api/integrations/slack/app', ['client_id' => '1.2'])->assertForbidden();
+    $this->actingAs($staff, 'api')->deleteJson('/api/integrations/slack/app')->assertForbidden();
 
     $this->actingAs(makeWorkspaceOwner(), 'api')->getJson('/api/integrations/slack')->assertJsonPath('can_configure_app', true);
+});
+
+test('connect my slack points to the setup until slack is configured and a workspace is connected', function () {
+    SlackAppSetting::query()->delete();
+    $member = User::factory()->create();
+    $member->assignRole('client');
+
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack')
+        ->assertJsonPath('needs_setup', true)
+        ->assertJsonPath('can_configure_app', false);
+    $this->actingAs($member, 'api')->postJson('/api/integrations/slack/link-url')
+        ->assertStatus(503)
+        ->assertJsonPath('code', 'not_configured');
+
+    saveSlackAppCredentials();
+    $this->actingAs($member, 'api')->postJson('/api/integrations/slack/link-url')
+        ->assertUnprocessable()
+        ->assertJsonPath('code', 'not_installed');
+
+    connectSlackWorkspace('T1', 'Make It Simple');
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack')->assertJsonPath('needs_setup', false);
 });
 
 test('the owner creates the slack app in one step with a configuration token', function () {

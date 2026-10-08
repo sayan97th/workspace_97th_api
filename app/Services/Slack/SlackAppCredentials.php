@@ -7,7 +7,7 @@ use App\Models\User;
 use Illuminate\Support\Str;
 
 /**
- * The Slack app credentials, saved by an administrator from Administration > Integrations.
+ * The Slack app credentials, saved by an administrator from Administration > Integrations > Slack.
  * Like monday.com, nothing about Slack is read from the API environment: the app, the
  * workspaces connected to it and the active workspace are all managed from the site.
  */

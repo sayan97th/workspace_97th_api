@@ -32,6 +32,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $updated_at
  * @property-read User|null $installedBy
  * @property-read Collection<int, SlackUserLink> $userLinks
+ * @property-read Collection<int, SlackConnection> $connections
  */
 #[Fillable(['team_id', 'team_name', 'team_url', 'is_active', 'bot_user_id', 'app_id', 'bot_token', 'scopes', 'installed_by_id'])]
 #[Hidden(['bot_token'])]
@@ -80,6 +81,16 @@ class SlackInstallation extends Model
     public function userLinks(): HasMany
     {
         return $this->hasMany(SlackUserLink::class);
+    }
+
+    /**
+     * The members' own account connections made in this workspace from the Automations center.
+     *
+     * @return HasMany<SlackConnection, $this>
+     */
+    public function connections(): HasMany
+    {
+        return $this->hasMany(SlackConnection::class);
     }
 
     /**

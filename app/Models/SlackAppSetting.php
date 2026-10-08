@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
- * The Slack app credentials an administrator saved from Administration > Integrations.
+ * The Slack app credentials an administrator saved from Administration > Integrations > Slack.
  * Both secrets are encrypted at rest and never serialized, see
  * {@see SlackAppCredentials} for how they are read.
  *

@@ -2,6 +2,7 @@
 
 namespace App\Services\Slack;
 
+use App\Models\SlackConnection;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
@@ -53,6 +54,13 @@ class SlackService
     public const PURPOSE_INSTALL = 'install';
 
     public const PURPOSE_LINK = 'link';
+
+    /**
+     * A member connects their own Slack account from the Automations center, like monday.com's
+     * "Connect your Slack account". Uses the same "Add to Slack" authorization as an install, so it
+     * also works with a plain http redirect URL, but never changes the account's active workspace.
+     */
+    public const PURPOSE_CONNECT = 'connect';
 
     /** The authorization was opened in its own browser tab, which reports back and closes. */
     public const DISPLAY_TAB = 'tab';
@@ -127,6 +135,25 @@ class SlackService
     }
 
     /**
+     * The URL a member is sent to from the Automations center to connect their own Slack account.
+     * Slack shows its own "Where do you want to use the app?" workspace picker on that page, so a
+     * member can connect any workspace they belong to.
+     *
+     * @throws SlackException
+     */
+    public function buildConnectUrl(User $user, ?string $return_path = null, string $display = self::DISPLAY_TAB): string
+    {
+        $this->ensureConfigured();
+
+        return 'https://slack.com/oauth/v2/authorize?'.http_build_query([
+            'client_id' => $this->credentials->clientId(),
+            'scope' => implode(',', self::BOT_SCOPES),
+            'redirect_uri' => $this->credentials->redirectUri(),
+            'state' => $this->issueState(self::PURPOSE_CONNECT, $user, $return_path, $display),
+        ]);
+    }
+
+    /**
      * The "Sign in with Slack" URL a member is sent to, pinned to the active workspace.
      *
      * Slack's OpenID flow only accepts an HTTPS redirect URL, unlike "Add to Slack", and answers
@@ -190,6 +217,66 @@ class SlackService
     {
         $payload = $this->client->exchangeInstallCode($code, $this->credentials->redirectUri());
 
+        return $this->activate($this->storeInstallation($payload, $actor, is_admin_install: true));
+    }
+
+    /**
+     * Finishes a member's "Connect your Slack account" from the Automations center. The workspace's
+     * bot token is stored or refreshed the same way an install does, but the account's active
+     * workspace is left alone, unless no workspace was connected yet. The member who approved it in
+     * Slack is also linked there, so their own Slack notifications reach them without "Connect my Slack".
+     *
+     * @throws SlackException
+     */
+    public function completeConnection(string $code, User $user): SlackConnection
+    {
+        $payload = $this->client->exchangeInstallCode($code, $this->credentials->redirectUri());
+        $installation = $this->storeInstallation($payload, $user, is_admin_install: false);
+
+        $slack_user_id = $this->nonEmptyString($payload['authed_user']['id'] ?? null);
+        $slack_user_name = $slack_user_id ? $this->fetchMemberName($installation, $slack_user_id) : null;
+
+        $connection = SlackConnection::updateOrCreate(
+            ['user_id' => $user->id, 'slack_installation_id' => $installation->id],
+            ['slack_user_id' => $slack_user_id, 'slack_user_name' => $slack_user_name, 'connected_at' => now()],
+        );
+
+        if ($slack_user_id) {
+            $this->linkConnectedMember($installation, $user, $slack_user_id, $slack_user_name);
+        }
+
+        return $connection->load('installation');
+    }
+
+    /**
+     * The Slack accounts `$user` connected, the newest first.
+     *
+     * @return EloquentCollection<int, SlackConnection>
+     */
+    public function connectionsFor(User $user): EloquentCollection
+    {
+        return $user->slackConnections()->with('installation')->latest('connected_at')->latest('id')->get();
+    }
+
+    /**
+     * Removes one of a member's connections. The workspace stays connected for everyone else, its
+     * bot token is shared, and automations made with this connection stop posting until edited.
+     */
+    public function disconnectConnection(SlackConnection $connection): void
+    {
+        $connection->delete();
+    }
+
+    /**
+     * Stores or refreshes the workspace an "Add to Slack" authorization answered with. A member's
+     * connection never takes over a workspace an administrator installed, it only refreshes its token.
+     *
+     * @param  array<string, mixed>  $payload
+     *
+     * @throws SlackException
+     */
+    private function storeInstallation(array $payload, User $actor, bool $is_admin_install): SlackInstallation
+    {
         $team_id = $payload['team']['id'] ?? null;
         $bot_token = $payload['access_token'] ?? null;
 
@@ -204,21 +291,74 @@ class SlackService
             $this->revokeQuietly($installation);
         }
 
-        $installation = SlackInstallation::updateOrCreate(
-            ['team_id' => $team_id],
-            [
-                'team_name' => (string) ($payload['team']['name'] ?? $team_id),
-                'team_url' => $this->fetchTeamUrl($bot_token),
-                'bot_user_id' => $payload['bot_user_id'] ?? null,
-                'app_id' => $payload['app_id'] ?? null,
-                'bot_token' => $bot_token,
-                'scopes' => $payload['scope'] ?? null,
-                'installed_by_id' => $actor->id,
-                'is_active' => false,
-            ],
-        );
+        $attributes = [
+            'team_name' => (string) ($payload['team']['name'] ?? $team_id),
+            'team_url' => $this->fetchTeamUrl($bot_token),
+            'bot_user_id' => $payload['bot_user_id'] ?? null,
+            'app_id' => $payload['app_id'] ?? null,
+            'bot_token' => $bot_token,
+            'scopes' => $payload['scope'] ?? null,
+        ];
 
-        return $this->activate($installation);
+        if ($is_admin_install || ! $installation) {
+            $attributes['installed_by_id'] = $actor->id;
+        }
+
+        // An administrator's install is activated by the caller. A member's connection keeps the
+        // current active flag, and a brand new workspace is only active when it is the first one.
+        if ($is_admin_install) {
+            $attributes['is_active'] = false;
+        }
+
+        $installation = SlackInstallation::updateOrCreate(['team_id' => $team_id], $attributes);
+        $this->forgetChannels($installation);
+
+        return $installation;
+    }
+
+    /**
+     * Links `$user` to the Slack member who approved their connection, unless they are already
+     * linked in that workspace or that Slack account is already linked to someone else.
+     */
+    private function linkConnectedMember(SlackInstallation $installation, User $user, string $slack_user_id, ?string $slack_user_name): void
+    {
+        $is_taken = SlackUserLink::query()
+            ->where('slack_installation_id', $installation->id)
+            ->where(fn ($query) => $query->where('user_id', $user->id)->orWhere('slack_user_id', $slack_user_id))
+            ->exists();
+
+        if ($is_taken) {
+            return;
+        }
+
+        SlackUserLink::create([
+            'user_id' => $user->id,
+            'slack_installation_id' => $installation->id,
+            'slack_user_id' => $slack_user_id,
+            'slack_display_name' => $slack_user_name,
+            'linked_at' => now(),
+        ]);
+    }
+
+    /**
+     * The Slack member's display name, null when the app was installed without `users:read`
+     * or Slack does not answer. Only used for display, so a failure never fails the connection.
+     */
+    private function fetchMemberName(SlackInstallation $installation, string $slack_user_id): ?string
+    {
+        if (! $installation->hasScope('users:read')) {
+            return null;
+        }
+
+        try {
+            $member = $this->client->userInfo($installation->bot_token, $slack_user_id)['user'] ?? [];
+        } catch (SlackException) {
+            return null;
+        }
+
+        return $this->nonEmptyString($member['profile']['display_name'] ?? null)
+            ?? $this->nonEmptyString($member['real_name'] ?? null)
+            ?? $this->nonEmptyString($member['name'] ?? null);
     }
 
     /**

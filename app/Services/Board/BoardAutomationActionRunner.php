@@ -13,6 +13,7 @@ use App\Models\BoardItem;
 use App\Models\BoardItemComment;
 use App\Models\BoardItemValue;
 use App\Models\Notification;
+use App\Models\SlackConnection;
 use App\Models\SlackInstallation;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -660,15 +661,28 @@ class BoardAutomationActionRunner
             $channel_id = (string) ($params['slack_channel_id'] ?? '');
             $channel_name = (string) ($params['slack_channel_name'] ?? $channel_id);
 
-            $team_id = isset($params['slack_team_id']) ? (string) $params['slack_team_id'] : null;
-            $active_installation = SlackInstallation::current();
+            if (! empty($params['slack_connection_id'])) {
+                // Created from a Slack recipe with the owner's own Slack account, posts through its workspace.
+                $connection = SlackConnection::query()->with('installation')->find((int) $params['slack_connection_id']);
+                $was_sent = $connection !== null && $channel_id !== '';
+                if ($was_sent) {
+                    $this->slack_notifier->notifyChannelIn($connection->installation, $channel_id, $message, $link, $board->label);
+                    $connection->forceFill(['last_used_at' => now()])->save();
+                }
+                $outcomes[] = $was_sent
+                    ? "posted to Slack channel #{$channel_name}"
+                    : "could not post to Slack channel #{$channel_name} because the Slack account it used was disconnected";
+            } else {
+                $team_id = isset($params['slack_team_id']) ? (string) $params['slack_team_id'] : null;
+                $active_installation = SlackInstallation::current();
 
-            $was_sent = $channel_id !== '' && $this->slack_notifier->notifyChannel($channel_id, $message, $link, $board->label, $team_id);
-            $outcomes[] = match (true) {
-                $was_sent => "posted to Slack channel #{$channel_name}",
-                $active_installation === null => 'could not post to Slack because Slack is not connected',
-                default => "could not post to Slack channel #{$channel_name} because it belongs to a different Slack workspace than the active one ({$active_installation->team_name})",
-            };
+                $was_sent = $channel_id !== '' && $this->slack_notifier->notifyChannel($channel_id, $message, $link, $board->label, $team_id);
+                $outcomes[] = match (true) {
+                    $was_sent => "posted to Slack channel #{$channel_name}",
+                    $active_installation === null => 'could not post to Slack because Slack is not connected',
+                    default => "could not post to Slack channel #{$channel_name} because it belongs to a different Slack workspace than the active one ({$active_installation->team_name})",
+                };
+            }
             $was_sent ? $delivered_count++ : $failed_count++;
         } else {
             $recipients = $this->resolveRecipients($automation, $params, $item, $actor, $context);

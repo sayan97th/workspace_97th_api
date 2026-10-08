@@ -103,7 +103,7 @@ test('an administrator can complete the install through the callback', function 
     parse_str($state, $query);
 
     $this->get('/api/integrations/slack/callback?code=abc&state='.$query['state'])
-        ->assertRedirect('http://frontend.test/administration?section=integrations&slack=connected');
+        ->assertRedirect('http://frontend.test/administration/integrations/slack?slack=connected');
 
     $installation = SlackInstallation::current();
     expect($installation->team_name)->toBe('Acme')
@@ -316,7 +316,7 @@ test('a revoked bot token explains how to reconnect instead of listing no channe
 
     $this->actingAs(User::factory()->create(), 'api')->getJson('/api/integrations/slack/channels')
         ->assertStatus(422)
-        ->assertJsonPath('message', 'The Slack connection is no longer valid. Reconnect the workspace from Administration > Integrations.');
+        ->assertJsonPath('message', 'The Slack connection is no longer valid. Reconnect the workspace from Administration > Integrations > Slack.');
 });
 
 test('the test message goes straight to the linked member and surfaces slack errors', function () {

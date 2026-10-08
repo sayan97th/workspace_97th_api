@@ -172,7 +172,7 @@ class SlackDiagnosticsService
         $label = 'Client ID and secret are set';
 
         if (! $is_configured) {
-            return $this->result('credentials', $label, self::STATUS_FAILED, 'Add the Slack app credentials in Administration > Integrations > Slack app.');
+            return $this->result('credentials', $label, self::STATUS_FAILED, 'Add the Slack app credentials in Administration > Integrations > Slack.');
         }
 
         if (! preg_match('/^\d+\.\d+$/', (string) $this->credentials->clientId())) {
@@ -193,11 +193,11 @@ class SlackDiagnosticsService
         $redirect_uri = $this->credentials->redirectUri();
 
         if (! filter_var($redirect_uri, FILTER_VALIDATE_URL)) {
-            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Set it in Administration > Integrations > Slack app.');
+            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Set it in Administration > Integrations > Slack.');
         }
 
         if (parse_url($redirect_uri, PHP_URL_SCHEME) !== 'https') {
-            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set it as the redirect URL in Administration > Integrations > Slack app and add that URL in the Slack app.');
+            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set it as the redirect URL in Administration > Integrations > Slack and add that URL in the Slack app.');
         }
 
         return $this->result('redirect_uri', $label, self::STATUS_PASSED, 'Make sure this exact URL is listed under OAuth & Permissions in the Slack app.');
@@ -212,7 +212,7 @@ class SlackDiagnosticsService
         $signing_secret = (string) $this->credentials->signingSecret();
 
         if ($signing_secret === '') {
-            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Add the signing secret in Administration > Integrations > Slack app.');
+            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Add the signing secret in Administration > Integrations > Slack.');
         }
 
         if (! preg_match('/^[a-f0-9]{32}$/', $signing_secret)) {
@@ -283,8 +283,8 @@ class SlackDiagnosticsService
             $only_optional = array_diff($missing_scopes, SlackService::OPTIONAL_BOT_SCOPES) === [];
 
             return $only_optional
-                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).'. Notifications still work, but matching members by email or some notification tests need them. Use "Reconnect" on the workspace in Administration > Integrations to grant them.')
-                : $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Reconnect" on the workspace in Administration > Integrations.');
+                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).'. Notifications still work, but matching members by email or some notification tests need them. Use "Reconnect" on the workspace in Administration > Integrations > Slack to grant them.')
+                : $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Reconnect" on the workspace in Administration > Integrations > Slack.');
         }
 
         return $this->result('bot_scopes', $label, self::STATUS_PASSED, 'Granted '.implode(', ', SlackService::BOT_SCOPES).'.');
