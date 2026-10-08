@@ -4,9 +4,14 @@ namespace App\Http\Controllers\Integration;
 
 use App\Enums\SlackNotificationTest;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Integration\Concerns\RespondsWithSlackErrors;
+use App\Http\Requests\Integration\SlackChannelIndexRequest;
 use App\Http\Requests\Integration\SlackNotificationTestRequest;
+use App\Models\SlackInstallation;
 use App\Models\User;
+use App\Services\Slack\SlackException;
 use App\Services\Slack\SlackNotificationTestRunner;
+use App\Services\Slack\SlackService;
 use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 
@@ -16,6 +21,8 @@ use Illuminate\Http\JsonResponse;
  */
 class SlackNotificationTestController extends Controller
 {
+    use RespondsWithSlackErrors;
+
     public function __construct(private readonly SlackNotificationTestRunner $runner) {}
 
     /**
@@ -27,6 +34,27 @@ class SlackNotificationTestController extends Controller
     public function index(): JsonResponse
     {
         return response()->json($this->runner->catalog());
+    }
+
+    /**
+     * GET /api/integrations/slack/diagnostics/slack-members
+     *
+     * Every person in the active Slack workspace, linked to the app or not, for the "message any
+     * Slack member" picker. `?refresh=1` reads them from Slack again instead of the short cache.
+     */
+    public function slackMembers(SlackChannelIndexRequest $request, SlackService $slack_service): JsonResponse
+    {
+        $installation = SlackInstallation::current();
+
+        if (! $installation) {
+            return response()->json(['data' => []]);
+        }
+
+        try {
+            return response()->json(['data' => $slack_service->listMembers($installation, $request->wantsFreshChannels())]);
+        } catch (SlackException $exception) {
+            return $this->errorResponse($exception);
+        }
     }
 
     /**
@@ -42,7 +70,9 @@ class SlackNotificationTestController extends Controller
         $recipient = $recipient_id ? User::find($recipient_id) : null;
         $channel_id = $request->validated('channel_id');
 
-        $result = $this->runner->run($test, $actor, $recipient, $channel_id);
+        $slack_user_id = $request->validated('slack_user_id');
+
+        $result = $this->runner->run($test, $actor, $recipient, $channel_id, $slack_user_id, $request->validated('message'));
 
         if ($test->sendsMessage()) {
             AuditLogger::log('slack.notification_test_run', "Ran the Slack test \"{$test->label()}\", it {$result['status']}.", $actor, array_filter([
@@ -50,6 +80,7 @@ class SlackNotificationTestController extends Controller
                 'status' => $result['status'],
                 'recipient_id' => $recipient?->id,
                 'channel_id' => $channel_id,
+                'slack_user_id' => $slack_user_id,
             ], fn ($value) => $value !== null));
         }
 

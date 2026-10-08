@@ -83,6 +83,17 @@ class SlackClient
     }
 
     /**
+     * Opens (or finds) the app's direct message conversation with one Slack member and returns
+     * it under `channel.id`. Needs `im:write`.
+     *
+     * @return array<string, mixed>
+     */
+    public function openConversation(string $bot_token, string $slack_user_id): array
+    {
+        return $this->postJson('conversations.open', $bot_token, ['users' => $slack_user_id, 'return_im' => true]);
+    }
+
+    /**
      * Posts a message in `$channel` that only `$slack_user_id` can see. Slack answers
      * `user_not_in_channel` when that member is not in the channel.
      *

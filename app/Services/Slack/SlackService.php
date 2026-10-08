@@ -27,12 +27,14 @@ class SlackService
 {
     /**
      * Scopes requested for the app's bot when an administrator installs it. `users:read` and
-     * `users:read.email` let the app match members to their Slack account by email, the history,
-     * reactions, files and app mention scopes are used by the notification test suite.
+     * `users:read.email` let the app match members to their Slack account by email, `im:write` opens
+     * a direct message with any Slack member, the history, reactions, files and app mention scopes are
+     * used by the notification test suite.
      */
     public const BOT_SCOPES = [
         'chat:write', 'chat:write.public', 'channels:read', 'groups:read', 'users:read', 'users:read.email',
         'channels:history', 'groups:history', 'reactions:read', 'reactions:write', 'files:read', 'files:write', 'app_mentions:read',
+        'im:write',
     ];
 
     /**
@@ -42,6 +44,7 @@ class SlackService
     public const OPTIONAL_BOT_SCOPES = [
         'users:read', 'users:read.email',
         'channels:history', 'groups:history', 'reactions:read', 'reactions:write', 'files:read', 'files:write', 'app_mentions:read',
+        'im:write',
     ];
 
     /** Scopes requested when a member proves which Slack account is theirs. */
@@ -447,8 +450,7 @@ class SlackService
     }
 
     /**
-     * Every Slack member with an email address, keyed by the lowercased email. Bots, Slackbot
-     * and deactivated members are left out, a message to them would never be read.
+     * Every Slack member with an email address, keyed by the lowercased email.
      *
      * @return array<string, array{id: string, name: string|null}>
      *
@@ -457,6 +459,52 @@ class SlackService
     private function fetchMembersByEmail(SlackInstallation $installation): array
     {
         $members_by_email = [];
+
+        foreach ($this->fetchAllMembers($installation) as $member) {
+            if ($member['email'] !== null) {
+                $members_by_email[mb_strtolower($member['email'])] = ['id' => $member['id'], 'name' => $member['real_name'] ?? $member['name']];
+            }
+        }
+
+        return $members_by_email;
+    }
+
+    /**
+     * Every person in the active workspace who can receive a direct message from the app, for
+     * the "message any Slack member" picker. Cached briefly like the channels, `$fresh` skips it.
+     *
+     * @return array<int, array{id: string, name: string, real_name: string|null, display_name: string|null, email: string|null, image_url: string|null, is_admin: bool}>
+     *
+     * @throws SlackException
+     */
+    public function listMembers(SlackInstallation $installation, bool $fresh = false): array
+    {
+        $cache_key = "slack_members:{$installation->id}";
+
+        if ($fresh) {
+            Cache::forget($cache_key);
+        }
+
+        return Cache::remember($cache_key, self::CHANNEL_CACHE_SECONDS, function () use ($installation) {
+            $members = $this->fetchAllMembers($installation);
+            usort($members, fn (array $first, array $second) => strnatcasecmp($first['real_name'] ?? $first['name'], $second['real_name'] ?? $second['name']));
+
+            return $members;
+        });
+    }
+
+    /**
+     * Walks every page of `users.list`. Bots, Slackbot and deactivated members are left out,
+     * a message to them would never be read. A rate limited page is retried after the wait
+     * Slack asks for, like the channel list.
+     *
+     * @return array<int, array{id: string, name: string, real_name: string|null, display_name: string|null, email: string|null, image_url: string|null, is_admin: bool}>
+     *
+     * @throws SlackException
+     */
+    private function fetchAllMembers(SlackInstallation $installation): array
+    {
+        $members = [];
         $cursor = null;
         $retries_left = self::RATE_LIMIT_MAX_RETRIES;
 
@@ -478,17 +526,19 @@ class SlackService
             }
 
             foreach ($payload['members'] ?? [] as $member) {
-                $email = $member['profile']['email'] ?? null;
-
-                if (! is_string($email) || $email === '' || ($member['deleted'] ?? false) || ($member['is_bot'] ?? false) || ($member['id'] ?? '') === 'USLACKBOT') {
+                if (! is_array($member) || ($member['deleted'] ?? false) || ($member['is_bot'] ?? false) || ($member['id'] ?? 'USLACKBOT') === 'USLACKBOT') {
                     continue;
                 }
 
-                $display_name = $member['profile']['real_name'] ?? $member['real_name'] ?? $member['name'] ?? null;
-
-                $members_by_email[mb_strtolower($email)] = [
+                $profile = is_array($member['profile'] ?? null) ? $member['profile'] : [];
+                $members[] = [
                     'id' => (string) $member['id'],
-                    'name' => is_string($display_name) && $display_name !== '' ? $display_name : null,
+                    'name' => (string) ($member['name'] ?? $member['id']),
+                    'real_name' => $this->nonEmptyString($profile['real_name'] ?? $member['real_name'] ?? null),
+                    'display_name' => $this->nonEmptyString($profile['display_name'] ?? null),
+                    'email' => $this->nonEmptyString($profile['email'] ?? null),
+                    'image_url' => $this->nonEmptyString($profile['image_48'] ?? null),
+                    'is_admin' => (bool) ($member['is_admin'] ?? false),
                 ];
             }
 
@@ -498,7 +548,12 @@ class SlackService
             }
         }
 
-        return $members_by_email;
+        return $members;
+    }
+
+    private function nonEmptyString(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? $value : null;
     }
 
     /**

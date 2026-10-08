@@ -351,3 +351,74 @@ test('running a test that sends a message is recorded in the audit log', functio
 
     expect(AuditLog::query()->where('event', 'slack.notification_test_run')->where('user_id', $admin->id)->exists())->toBeTrue();
 });
+
+test('the slack members endpoint lists every person in the workspace, without bots or deactivated members', function () {
+    makeSuiteInstallation();
+    Http::fake(['slack.com/api/users.list*' => Http::response(['ok' => true, 'members' => [
+        ['id' => 'U2', 'name' => 'zoe', 'profile' => ['real_name' => 'Zoe Zed', 'email' => 'zoe@acme.test', 'image_48' => 'https://avatars.slack/zoe.png']],
+        ['id' => 'U1', 'name' => 'amy', 'profile' => ['real_name' => 'Amy Able']],
+        ['id' => 'U3', 'name' => 'gone', 'deleted' => true, 'profile' => ['real_name' => 'Gone']],
+        ['id' => 'B1', 'name' => 'robot', 'is_bot' => true, 'profile' => ['real_name' => 'Robot']],
+        ['id' => 'USLACKBOT', 'name' => 'slackbot', 'profile' => ['real_name' => 'Slackbot']],
+    ]])]);
+
+    $members = $this->actingAs(makeSuiteAdmin(), 'api')->getJson('/api/integrations/slack/diagnostics/slack-members')->assertOk()->json('data');
+
+    expect(array_column($members, 'id'))->toBe(['U1', 'U2'])
+        ->and($members[1]['email'])->toBe('zoe@acme.test')
+        ->and($members[1]['image_url'])->toBe('https://avatars.slack/zoe.png')
+        ->and($members[0]['email'])->toBeNull();
+});
+
+test('any slack member can receive a custom message, even without a linked account', function () {
+    makeSuiteInstallation();
+    Http::fake([
+        'slack.com/api/users.info*' => Http::response(['ok' => true, 'user' => ['id' => 'U900', 'real_name' => 'Nina Nolink', 'deleted' => false]]),
+        'slack.com/api/conversations.open' => Http::response(['ok' => true, 'channel' => ['id' => 'D900']]),
+        'slack.com/api/chat.postMessage' => Http::response(slackMessageResponse('D900')),
+        'slack.com/api/chat.getPermalink*' => Http::response(['ok' => true, 'permalink' => 'https://acme.slack.com/archives/D900/p1']),
+    ]);
+
+    runSuiteTest($this, makeSuiteAdmin(), 'slack_member_message', ['slack_user_id' => 'U900', 'message' => 'Hello <!channel> & team'])
+        ->assertOk()
+        ->assertJsonPath('status', 'passed')
+        ->assertJsonPath('detail', 'Delivered to Nina Nolink in Acme.')
+        ->assertJsonPath('links.0.url', 'https://acme.slack.com/archives/D900/p1');
+
+    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), 'conversations.open') && $request['users'] === 'U900');
+    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), 'chat.postMessage')
+        && $request['channel'] === 'D900'
+        && str_contains($request['blocks'][0]['text']['text'], '*Ada Admin* sent you a message:')
+        && str_contains($request['blocks'][0]['text']['text'], '&lt;!channel&gt; &amp; team'));
+});
+
+test('without im:write the message goes to the member id, and a deactivated member fails', function () {
+    makeSuiteInstallation(['scopes' => 'chat:write,users:read']);
+    $admin = makeSuiteAdmin();
+    Http::fake([
+        'slack.com/api/users.info*' => Http::sequence()
+            ->push(['ok' => true, 'user' => ['id' => 'U900', 'real_name' => 'Nina Nolink']])
+            ->push(['ok' => true, 'user' => ['id' => 'U901', 'real_name' => 'Old Timer', 'deleted' => true]]),
+        'slack.com/api/chat.postMessage' => Http::response(slackMessageResponse('D900')),
+        'slack.com/api/chat.getPermalink*' => Http::response(['ok' => true, 'permalink' => 'https://acme.slack.com/x']),
+    ]);
+
+    runSuiteTest($this, $admin, 'slack_member_message', ['slack_user_id' => 'U900', 'message' => 'Hi'])
+        ->assertOk()
+        ->assertJsonPath('status', 'passed')
+        ->assertJsonPath('steps.1.status', 'warning');
+    runSuiteTest($this, $admin, 'slack_member_message', ['slack_user_id' => 'U901', 'message' => 'Hi'])
+        ->assertOk()
+        ->assertJsonPath('status', 'failed');
+
+    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), 'chat.postMessage') && $request['channel'] === 'U900');
+    Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), 'conversations.open'));
+});
+
+test('the slack member message requires a member and a message', function () {
+    makeSuiteInstallation();
+
+    runSuiteTest($this, makeSuiteAdmin(), 'slack_member_message', ['slack_user_id' => 'not-an-id'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['slack_user_id', 'message']);
+});

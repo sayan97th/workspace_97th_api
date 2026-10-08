@@ -67,12 +67,12 @@ class SlackNotificationTestRunner
     }
 
     /**
-     * Runs one test. `$recipient` and `$channel_id` are only read by the tests that need them,
-     * the request already made sure they are present.
+     * Runs one test. `$recipient`, `$channel_id`, `$slack_user_id` (any Slack member) and `$message`
+     * are only read by the tests that need them, the request already made sure they are present.
      *
      * @return array<string, mixed>
      */
-    public function run(SlackNotificationTest $test, User $actor, ?User $recipient = null, ?string $channel_id = null): array
+    public function run(SlackNotificationTest $test, User $actor, ?User $recipient = null, ?string $channel_id = null, ?string $slack_user_id = null, ?string $message = null): array
     {
         $run = new SlackNotificationTestRun($test);
         $installation = SlackInstallation::current();
@@ -96,7 +96,7 @@ class SlackNotificationTestRunner
         }
 
         try {
-            $this->execute($run, $test, $installation, $actor, $recipient, $recipient_link, (string) $channel_id);
+            $this->execute($run, $test, $installation, $actor, $recipient, $recipient_link, (string) $channel_id, (string) $slack_user_id, (string) $message);
         } catch (SlackException $exception) {
             $run->finish(SlackNotificationTestRun::STATUS_FAILED, SlackErrorMessage::describe($exception));
         }
@@ -120,7 +120,7 @@ class SlackNotificationTestRunner
         ]);
     }
 
-    private function execute(SlackNotificationTestRun $run, SlackNotificationTest $test, SlackInstallation $installation, User $actor, ?User $recipient, ?SlackUserLink $recipient_link, string $channel_id): void
+    private function execute(SlackNotificationTestRun $run, SlackNotificationTest $test, SlackInstallation $installation, User $actor, ?User $recipient, ?SlackUserLink $recipient_link, string $channel_id, string $slack_user_id, string $message): void
     {
         $token = $installation->bot_token;
 
@@ -137,6 +137,7 @@ class SlackNotificationTestRunner
             SlackNotificationTest::QueuedNotification => $this->runQueuedNotification($run, $actor, $recipient),
             SlackNotificationTest::DirectMessage => $this->runDirectMessage($run, $token, $actor, $recipient, $recipient_link),
             SlackNotificationTest::RichMessage => $this->runRichMessage($run, $token, $installation, $actor, $recipient_link),
+            SlackNotificationTest::SlackMemberMessage => $this->runSlackMemberMessage($run, $installation, $actor, $slack_user_id, $message),
             SlackNotificationTest::ChannelMessage => $this->runChannelMessage($run, $token, $actor, $channel_id),
             SlackNotificationTest::ChannelMention => $this->runChannelMention($run, $token, $actor, $recipient, $recipient_link, $channel_id),
             SlackNotificationTest::EphemeralMessage => $this->runEphemeralMessage($run, $token, $actor, $recipient, $recipient_link, $channel_id),
@@ -312,6 +313,52 @@ class SlackNotificationTestRunner
         $this->addPermalink($run, $token, $response);
 
         $run->finish(SlackNotificationTestRun::STATUS_PASSED, 'Delivered a Block Kit message. Open it to confirm every block renders.');
+    }
+
+    /**
+     * Sends `$message` to any person in the Slack workspace, linked to the app or not. Their
+     * profile is read first so a deactivated member or a bot fails with a clear reason, then the
+     * direct message conversation is opened when `im:write` was granted. Without it the member id
+     * is used as the channel, which Slack also turns into the app's direct message.
+     */
+    private function runSlackMemberMessage(SlackNotificationTestRun $run, SlackInstallation $installation, User $actor, string $slack_user_id, string $message): void
+    {
+        $token = $installation->bot_token;
+        $profile = $this->call($run, 'users.info', fn () => $this->client->userInfo($token, $slack_user_id))['user'] ?? [];
+        $slack_name = $profile['real_name'] ?? $profile['name'] ?? $slack_user_id;
+
+        if (($profile['deleted'] ?? false) === true) {
+            $run->finish(SlackNotificationTestRun::STATUS_FAILED, "{$slack_name} was deactivated in Slack, a direct message cannot reach them.");
+
+            return;
+        }
+
+        if (($profile['is_bot'] ?? false) === true) {
+            $run->finish(SlackNotificationTestRun::STATUS_FAILED, "{$slack_name} is a bot, choose a person.");
+
+            return;
+        }
+
+        $channel = $slack_user_id;
+        if ($installation->hasScope('im:write')) {
+            $conversation = $this->call($run, 'conversations.open', fn () => $this->client->openConversation($token, $slack_user_id));
+            $channel = (string) ($conversation['channel']['id'] ?? $slack_user_id);
+        } else {
+            $run->addStep('conversations.open', SlackNotificationTestRun::STATUS_WARNING, 'im:write not granted, sent to the member id instead.');
+        }
+
+        $sender_name = $actor->full_name ?: 'An administrator';
+        $mrkdwn = sprintf("*%s* sent you a message:\n>%s", $this->slack_notifier->escape($sender_name), str_replace("\n", "\n>", $this->slack_notifier->escape($message)));
+
+        $response = $this->call($run, 'chat.postMessage', fn () => $this->client->postMessage(
+            $token,
+            $channel,
+            mb_substr("{$sender_name} sent you a message: {$message}", 0, 3000),
+            $this->slack_notifier->buildBlocks($mrkdwn, 'Sent from the Slack notification test suite', null),
+        ));
+        $this->addPermalink($run, $token, $response);
+
+        $run->finish(SlackNotificationTestRun::STATUS_PASSED, "Delivered to {$slack_name} in {$installation->team_name}.");
     }
 
     private function runChannelMessage(SlackNotificationTestRun $run, string $token, User $actor, string $channel_id): void

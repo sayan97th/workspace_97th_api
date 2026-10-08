@@ -285,6 +285,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('diagnostics/recipients', [SlackIntegrationController::class, 'notificationRecipients']);
             Route::post('diagnostics/user-test', [SlackIntegrationController::class, 'sendUserTest'])->middleware('throttle:6,1');
             Route::get('diagnostics/notification-tests', [SlackNotificationTestController::class, 'index']);
+            Route::get('diagnostics/slack-members', [SlackNotificationTestController::class, 'slackMembers'])->middleware('throttle:30,1');
             Route::post('diagnostics/notification-tests/{test}', [SlackNotificationTestController::class, 'run'])->middleware('throttle:40,1');
         });
 

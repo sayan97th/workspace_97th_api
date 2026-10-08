@@ -34,6 +34,9 @@ enum SlackNotificationTest: string
     /** Needs both, the message goes to the channel and is about the member. */
     public const TARGET_USER_AND_CHANNEL = 'user_and_channel';
 
+    /** Needs any member of the Slack workspace, linked to the app or not, and a custom message. */
+    public const TARGET_SLACK_MEMBER = 'slack_member';
+
     case BotIdentity = 'bot_identity';
     case RecipientLookup = 'recipient_lookup';
     case RecipientSettings = 'recipient_settings';
@@ -46,6 +49,7 @@ enum SlackNotificationTest: string
     case QueuedNotification = 'queued_notification';
     case DirectMessage = 'direct_message';
     case RichMessage = 'rich_message';
+    case SlackMemberMessage = 'slack_member_message';
     case ChannelMessage = 'channel_message';
     case ChannelMention = 'channel_mention';
     case EphemeralMessage = 'ephemeral_message';
@@ -71,6 +75,7 @@ enum SlackNotificationTest: string
             self::QueuedNotification => 'Queued delivery',
             self::DirectMessage => 'Plain direct message',
             self::RichMessage => 'Rich message layout',
+            self::SlackMemberMessage => 'Message any Slack member',
             self::ChannelMessage => 'Channel message with read back',
             self::ChannelMention => 'Mention a member in a channel',
             self::EphemeralMessage => 'Ephemeral message',
@@ -98,6 +103,7 @@ enum SlackNotificationTest: string
             self::QueuedNotification => 'Queues a notification through the background job real notifications use, which proves the queue worker delivers it.',
             self::DirectMessage => 'Sends a plain text direct message from the app to the recipient.',
             self::RichMessage => 'Sends a Block Kit message with a header, fields, a divider, a context line and a button.',
+            self::SlackMemberMessage => 'Sends your message as a direct message to any person in the Slack workspace, even someone who never linked an account here. Opens the conversation with im:write when it is granted.',
             self::ChannelMessage => 'Posts to the channel, then reads the channel history (channels:history or groups:history) to confirm Slack stored the message.',
             self::ChannelMention => 'Posts to the channel tagging the recipient, Slack then notifies them as a mention.',
             self::EphemeralMessage => 'Posts a message in the channel that only the recipient can see. The recipient must be a member of the channel.',
@@ -117,7 +123,7 @@ enum SlackNotificationTest: string
             self::MentionNotification, self::AssignmentNotification, self::ReplyNotification,
             self::ReactionNotification, self::DueDateReminder, self::AutomationNotification,
             self::QueuedNotification => self::CATEGORY_NOTIFICATIONS,
-            self::DirectMessage, self::RichMessage => self::CATEGORY_DIRECT_MESSAGES,
+            self::DirectMessage, self::RichMessage, self::SlackMemberMessage => self::CATEGORY_DIRECT_MESSAGES,
             self::ChannelMessage, self::ChannelMention, self::EphemeralMessage, self::ThreadReply,
             self::MessageUpdate, self::Reaction, self::FileUpload, self::ScheduledMessage => self::CATEGORY_CHANNELS,
             self::AppMentionEvent => self::CATEGORY_EVENTS,
@@ -131,6 +137,7 @@ enum SlackNotificationTest: string
             self::ChannelMessage, self::ThreadReply, self::MessageUpdate, self::Reaction,
             self::FileUpload, self::ScheduledMessage => self::TARGET_CHANNEL,
             self::ChannelMention, self::EphemeralMessage => self::TARGET_USER_AND_CHANNEL,
+            self::SlackMemberMessage => self::TARGET_SLACK_MEMBER,
             default => self::TARGET_USER,
         };
     }
@@ -138,6 +145,11 @@ enum SlackNotificationTest: string
     public function needsRecipient(): bool
     {
         return in_array($this->target(), [self::TARGET_USER, self::TARGET_USER_AND_CHANNEL], true);
+    }
+
+    public function needsSlackMember(): bool
+    {
+        return $this->target() === self::TARGET_SLACK_MEMBER;
     }
 
     public function needsChannel(): bool
@@ -160,6 +172,8 @@ enum SlackNotificationTest: string
             // (public) or groups:history (private), without them it still posts and reports a warning.
             self::Reaction => ['chat:write', 'reactions:write', 'reactions:read'],
             self::FileUpload => ['files:write', 'files:read'],
+            // im:write is used when granted, without it the message goes to the member id directly.
+            self::SlackMemberMessage => ['chat:write', 'users:read'],
             self::AppMentionEvent => ['app_mentions:read'],
             default => ['chat:write'],
         };
