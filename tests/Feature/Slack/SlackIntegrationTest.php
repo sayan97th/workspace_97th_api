@@ -20,7 +20,7 @@ use Illuminate\Support\Sleep;
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
 
-    saveSlackAppCredentials(['client_id' => 'client-id', 'redirect_uri' => 'http://localhost/api/integrations/slack/callback']);
+    saveSlackAppCredentials(['client_id' => 'client-id', 'redirect_uri' => 'https://localhost/api/integrations/slack/callback']);
     config(['app.frontend_url' => 'http://frontend.test']);
 });
 
@@ -429,3 +429,14 @@ test('a return path that leaves the app is rejected', function (string $bad_path
     'backslash trick' => '/\\evil.example',
     'no leading slash' => 'evil.example',
 ]);
+
+test('connect my slack is refused with an explanation when the redirect url is plain http', function () {
+    SlackAppSetting::current()->update(['redirect_uri' => 'http://localhost:8000/api/integrations/slack/callback']);
+    makeSlackInstallation();
+    $user = User::factory()->create();
+
+    $this->actingAs($user, 'api')
+        ->postJson('/api/integrations/slack/link-url')
+        ->assertUnprocessable()
+        ->assertJsonPath('message', fn (string $message) => str_contains($message, 'Match members by email'));
+});

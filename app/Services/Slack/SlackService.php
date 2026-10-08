@@ -126,12 +126,20 @@ class SlackService
     /**
      * The "Sign in with Slack" URL a member is sent to, pinned to the active workspace.
      *
+     * Slack's OpenID flow only accepts an HTTPS redirect URL, unlike "Add to Slack", and answers
+     * a plain http one (a local API) with its own "invalid redirect_uri" error page. That case is
+     * refused here instead, so the member gets a message that says what to do.
+     *
      * @throws SlackException
      */
     public function buildLinkUrl(User $user, ?string $return_path = null, string $display = self::DISPLAY_PAGE): string
     {
         $this->ensureConfigured();
         $installation = $this->requireInstallation();
+
+        if (parse_url($this->credentials->redirectUri(), PHP_URL_SCHEME) !== 'https') {
+            throw new SlackException('link_requires_https', 'Sign in with Slack needs an HTTPS redirect URL.');
+        }
 
         return 'https://slack.com/openid/connect/authorize?'.http_build_query([
             'response_type' => 'code',
