@@ -8,6 +8,8 @@ use RuntimeException;
  * Raised for every Slack failure, both errors reported by the Slack Web API (`ok: false`,
  * HTTP 429, transport errors) and integration level problems such as an expired OAuth state.
  * `error_code` is Slack's own error string when there is one, e.g. `channel_not_found`.
+ * `details` carries the extra messages some methods return, such as every problem
+ * `apps.manifest.create` found in a manifest.
  */
 class SlackException extends RuntimeException
 {
@@ -32,6 +34,8 @@ class SlackException extends RuntimeException
         public readonly string $error_code,
         string $message = '',
         public readonly ?int $retry_after = null,
+        /** @var array<int, string> */
+        public readonly array $details = [],
     ) {
         parent::__construct($message !== '' ? $message : "Slack error: {$error_code}");
     }

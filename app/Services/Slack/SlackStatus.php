@@ -25,6 +25,8 @@ class SlackStatus
             'is_configured' => $this->credentials->isConfigured(),
             'is_connected' => $installation !== null,
             'can_manage' => $user->hasRole(['super_admin', 'admin']),
+            // The Slack app is a one time developer setting only the account owner sees.
+            'can_configure_app' => $user->hasRole('super_admin'),
             'credentials_source' => $this->credentials->source(),
             'workspaces_count' => SlackInstallation::count(),
             'workspace' => $installation ? [

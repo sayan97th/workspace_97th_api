@@ -279,13 +279,19 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('workspaces/{installation}/activate', [SlackWorkspaceController::class, 'activate']);
             Route::delete('workspaces/{installation}', [SlackWorkspaceController::class, 'destroy']);
             Route::post('match-members', [SlackWorkspaceController::class, 'matchMembers'])->middleware('throttle:6,1');
-            Route::get('app', [SlackAppCredentialsController::class, 'show']);
-            Route::put('app', [SlackAppCredentialsController::class, 'update'])->middleware('throttle:20,1');
-            Route::delete('app', [SlackAppCredentialsController::class, 'destroy']);
             Route::get('diagnostics', [SlackIntegrationController::class, 'diagnostics'])->middleware('throttle:10,1');
             Route::post('diagnostics/channel-test', [SlackIntegrationController::class, 'sendChannelTest'])->middleware('throttle:6,1');
             Route::get('diagnostics/recipients', [SlackIntegrationController::class, 'notificationRecipients']);
             Route::post('diagnostics/user-test', [SlackIntegrationController::class, 'sendUserTest'])->middleware('throttle:6,1');
+        });
+
+        // The Slack app itself is a one time developer setting, kept to the account owner so
+        // administrators only ever see "Add workspace", like on monday.com.
+        Route::middleware('role:super_admin')->group(function () {
+            Route::get('app', [SlackAppCredentialsController::class, 'show']);
+            Route::post('app/create', [SlackAppCredentialsController::class, 'create'])->middleware('throttle:10,1');
+            Route::put('app', [SlackAppCredentialsController::class, 'update'])->middleware('throttle:20,1');
+            Route::delete('app', [SlackAppCredentialsController::class, 'destroy']);
         });
     });
 

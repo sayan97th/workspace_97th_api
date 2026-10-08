@@ -360,3 +360,104 @@ test('the manifest carries the redirect url, events url and scopes', function ()
         ->and($manifest['oauth_config']['scopes']['bot'])->toBe(SlackService::BOT_SCOPES)
         ->and($manifest['settings']['event_subscriptions']['request_url'])->toBe('https://api.example.com/api/integrations/slack/events');
 });
+
+test('only the account owner sees and changes the slack app, administrators only connect workspaces', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')->getJson('/api/integrations/slack')
+        ->assertJsonPath('can_manage', true)
+        ->assertJsonPath('can_configure_app', false);
+    $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/app')->assertForbidden();
+    $this->actingAs($admin, 'api')->postJson('/api/integrations/slack/app/create', ['configuration_token' => 'xoxe.xoxp-1-abc'])->assertForbidden();
+    $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/workspaces')->assertOk();
+    $this->actingAs($admin, 'api')->postJson('/api/integrations/slack/install-url')->assertOk();
+
+    $this->actingAs(makeWorkspaceOwner(), 'api')->getJson('/api/integrations/slack')->assertJsonPath('can_configure_app', true);
+});
+
+test('the owner creates the slack app in one step with a configuration token', function () {
+    SlackAppSetting::query()->delete();
+    config(['app.url' => 'http://localhost', 'app.name' => 'Workspace 97th']);
+    $owner = makeWorkspaceOwner();
+
+    Http::fake(['slack.com/api/apps.manifest.create' => Http::response([
+        'ok' => true,
+        'app_id' => 'A0NEWAPP',
+        'credentials' => [
+            'client_id' => '555.666',
+            'client_secret' => 'createdclientsecret01',
+            'verification_token' => 'unused',
+            'signing_secret' => 'c0ffee00c0ffee00c0ffee00c0ffee00',
+        ],
+        'oauth_authorize_url' => 'https://slack.com/oauth/v2/authorize?client_id=555.666',
+    ])]);
+
+    $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/app/create', ['configuration_token' => 'xoxe.xoxp-1-configtoken'])
+        ->assertCreated()
+        ->assertJsonPath('is_configured', true)
+        ->assertJsonPath('app_id', 'A0NEWAPP')
+        ->assertJsonPath('client_id', '555.666')
+        ->assertJsonPath('distribution_url', 'https://api.slack.com/apps/A0NEWAPP/distribute')
+        ->assertJsonMissing(['client_secret' => 'createdclientsecret01']);
+
+    Http::assertSent(function ($request) {
+        $manifest = json_decode($request['manifest'], true);
+
+        return $request->url() === 'https://slack.com/api/apps.manifest.create'
+            && $request->hasHeader('Authorization', 'Bearer xoxe.xoxp-1-configtoken')
+            && $manifest['oauth_config']['redirect_urls'] === ['http://localhost/api/integrations/slack/callback']
+            && $manifest['oauth_config']['scopes']['bot'] === SlackService::BOT_SCOPES
+            && $manifest['features']['bot_user']['display_name'] === 'workspace_97th'
+            // A local API cannot answer Slack's URL check, so events are left out instead of failing the manifest.
+            && ! isset($manifest['settings']['event_subscriptions']);
+    });
+
+    $setting = SlackAppSetting::current();
+    expect($setting->client_secret)->toBe('createdclientsecret01')
+        ->and($setting->signing_secret)->toBe('c0ffee00c0ffee00c0ffee00c0ffee00')
+        ->and(DB::table('slack_app_settings')->get()->toJson())->not->toContain('configtoken');
+
+    $this->assertDatabaseHas('audit_logs', ['event' => 'slack.app_created', 'user_id' => $owner->id]);
+});
+
+test('a reachable api adds the events subscription to the created app', function () {
+    saveSlackAppCredentials();
+    Http::fake(['slack.com/api/apps.manifest.create' => Http::response([
+        'ok' => true, 'app_id' => 'A1', 'credentials' => ['client_id' => '1.2', 'client_secret' => 'abc', 'signing_secret' => 'def'],
+    ])]);
+
+    $this->actingAs(makeWorkspaceOwner(), 'api')->postJson('/api/integrations/slack/app/create', ['configuration_token' => 'xoxe.xoxp-1-x'])->assertCreated();
+
+    Http::assertSent(fn ($request) => json_decode($request['manifest'], true)['settings']['event_subscriptions']['request_url']
+        === 'https://api.example.com/api/integrations/slack/events');
+    expect(SlackAppSetting::current()->redirect_uri)->toBe('https://api.example.com/api/integrations/slack/callback');
+});
+
+test('creating the slack app explains what slack rejected', function (array $response, string $message) {
+    Http::fake(['slack.com/api/apps.manifest.create' => Http::response($response)]);
+
+    $this->actingAs(makeWorkspaceOwner(), 'api')->postJson('/api/integrations/slack/app/create', ['configuration_token' => 'xoxe.xoxp-1-x'])
+        ->assertUnprocessable()
+        ->assertJsonPath('message', $message);
+
+    expect(SlackAppSetting::current()->client_id)->toBe('111.222');
+})->with([
+    'expired token' => [
+        ['ok' => false, 'error' => 'token_expired'],
+        'Slack did not accept that configuration token. Tokens expire after 12 hours, generate a new one at api.slack.com/apps and paste the access token.',
+    ],
+    'invalid manifest' => [
+        ['ok' => false, 'error' => 'invalid_manifest', 'errors' => [['message' => 'Redirect URL is invalid', 'pointer' => '/oauth_config/redirect_urls/0']]],
+        'Slack rejected the app settings: Redirect URL is invalid (/oauth_config/redirect_urls/0).',
+    ],
+]);
+
+test('the refresh token is rejected before contacting slack', function () {
+    Http::fake();
+
+    $this->actingAs(makeWorkspaceOwner(), 'api')->postJson('/api/integrations/slack/app/create', ['configuration_token' => 'xoxe-1-refresh'])
+        ->assertJsonValidationErrors('configuration_token');
+
+    Http::assertNothingSent();
+});

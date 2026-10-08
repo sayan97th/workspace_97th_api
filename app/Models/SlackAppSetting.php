@@ -15,6 +15,7 @@ use Illuminate\Support\Carbon;
  * {@see SlackAppCredentials} for how they are read.
  *
  * @property int $id
+ * @property string|null $app_id
  * @property string $client_id
  * @property string $client_secret
  * @property string|null $signing_secret
@@ -24,7 +25,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $updated_at
  * @property-read User|null $updatedBy
  */
-#[Fillable(['client_id', 'client_secret', 'signing_secret', 'redirect_uri', 'updated_by_id'])]
+#[Fillable(['app_id', 'client_id', 'client_secret', 'signing_secret', 'redirect_uri', 'updated_by_id'])]
 #[Hidden(['client_secret', 'signing_secret'])]
 class SlackAppSetting extends Model
 {

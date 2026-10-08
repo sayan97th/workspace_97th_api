@@ -13,7 +13,7 @@ trait RespondsWithSlackErrors
     protected function errorResponse(SlackException $exception): JsonResponse
     {
         $message = match ($exception->error_code) {
-            'not_configured' => 'Slack is not configured yet. Ask an administrator to add the Slack app credentials in Administration > Integrations.',
+            'not_configured' => 'Slack is not set up yet. The account owner sets up the Slack app once in Administration > Integrations.',
             'client_secret_required' => 'Enter the client secret of this Slack app.',
             'not_installed' => 'Slack is not connected to this account yet.',
             'not_linked' => 'Connect your Slack account first.',

@@ -4,6 +4,7 @@ namespace App\Services\Slack;
 
 use App\Models\SlackAppSetting;
 use App\Models\User;
+use Illuminate\Support\Str;
 
 /**
  * The Slack app credentials, saved by an administrator from Administration > Integrations.
@@ -94,6 +95,8 @@ class SlackAppCredentials
         }
 
         $attributes = [
+            // The app id is only known for an app the site created, a different client id is a different app.
+            'app_id' => $is_same_app ? $setting->app_id : null,
             'client_id' => $values['client_id'],
             'client_secret' => $client_secret,
             'signing_secret' => $signing_secret,
@@ -108,6 +111,26 @@ class SlackAppCredentials
         }
 
         return SlackAppSetting::create($attributes);
+    }
+
+    /**
+     * Saves the credentials of an app the site just created in Slack, replacing any previous
+     * app. A redirect URL override is kept, it describes how Slack reaches this API, not the app.
+     */
+    public function storeCreatedApp(string $app_id, string $client_id, string $client_secret, ?string $signing_secret, User $actor): SlackAppSetting
+    {
+        $redirect_uri = $this->setting()?->redirect_uri;
+
+        SlackAppSetting::query()->delete();
+
+        return SlackAppSetting::create([
+            'app_id' => $app_id,
+            'client_id' => $client_id,
+            'client_secret' => $client_secret,
+            'signing_secret' => $signing_secret,
+            'redirect_uri' => $redirect_uri,
+            'updated_by_id' => $actor->id,
+        ]);
     }
 
     /**
@@ -132,6 +155,11 @@ class SlackAppCredentials
         return [
             'source' => $this->source(),
             'is_configured' => $this->isConfigured(),
+            'app_id' => $setting?->app_id,
+            // Where to finish the setup in Slack, only known for an app the site created.
+            'app_settings_url' => $setting?->app_id ? "https://api.slack.com/apps/{$setting->app_id}" : null,
+            'distribution_url' => $setting?->app_id ? "https://api.slack.com/apps/{$setting->app_id}/distribute" : null,
+            'can_receive_events' => $this->canReceiveEvents(),
             'client_id' => $this->clientId(),
             'client_secret_hint' => $this->hint($this->clientSecret()),
             'signing_secret_hint' => $this->hint($this->signingSecret()),
@@ -165,7 +193,8 @@ class SlackAppCredentials
                 'background_color' => '#1f1f2e',
             ],
             'features' => [
-                'bot_user' => ['display_name' => mb_substr($app_name, 0, 80), 'always_online' => true],
+                // Slack shows the bot as @display_name, so it is kept to a mention friendly slug.
+                'bot_user' => ['display_name' => mb_substr(Str::slug($app_name, '_') ?: 'workspace_bot', 0, 80), 'always_online' => true],
                 'app_home' => ['messages_tab_enabled' => true, 'messages_tab_read_only_enabled' => true],
             ],
             'oauth_config' => [
@@ -175,16 +204,33 @@ class SlackAppCredentials
                     'user' => SlackService::USER_SCOPES,
                 ],
             ],
-            'settings' => [
-                'event_subscriptions' => [
+            'settings' => array_filter([
+                // Slack checks the request URL when the app is created, so it is only included
+                // when Slack can reach it, a local API would make the whole manifest fail.
+                'event_subscriptions' => $this->canReceiveEvents() ? [
                     'request_url' => $this->eventsUrl(),
                     'bot_events' => ['app_uninstalled', 'tokens_revoked'],
-                ],
+                ] : null,
                 'org_deploy_enabled' => false,
                 'socket_mode_enabled' => false,
                 'token_rotation_enabled' => false,
-            ],
+            ], fn ($value) => $value !== null),
         ];
+    }
+
+    /**
+     * Whether Slack can call the events URL: HTTPS on a public host, not a local API.
+     */
+    public function canReceiveEvents(): bool
+    {
+        $url = $this->eventsUrl();
+        $host = (string) parse_url($url, PHP_URL_HOST);
+
+        return parse_url($url, PHP_URL_SCHEME) === 'https'
+            && $host !== ''
+            && ! in_array($host, ['localhost', '127.0.0.1', '::1'], true)
+            && ! str_ends_with($host, '.test')
+            && ! str_ends_with($host, '.local');
     }
 
     private function setting(): ?SlackAppSetting
