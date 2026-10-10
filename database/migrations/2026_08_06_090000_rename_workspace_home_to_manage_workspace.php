@@ -15,7 +15,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        WorkspaceNavigationItem::withTrashed()
+        // Runs before the `is_template` column exists, so the model's template scope is skipped.
+        WorkspaceNavigationItem::withoutGlobalScope(WorkspaceNavigationItem::SCOPE_WITHOUT_TEMPLATES)
+            ->withTrashed()
             ->where('view_key', 'workspace_home')
             ->get()
             ->each(function (WorkspaceNavigationItem $item) {
@@ -28,7 +30,7 @@ return new class extends Migration
             });
 
         Workspace::all()->each(function (Workspace $workspace) {
-            $has_manage_item = $workspace->navigationItems()
+            $has_manage_item = $workspace->navigationItems()->withoutGlobalScope(WorkspaceNavigationItem::SCOPE_WITHOUT_TEMPLATES)
                 ->where('view_key', 'workspace_manage')
                 ->exists();
 
@@ -39,7 +41,7 @@ return new class extends Migration
             // Make room at the front (position is an unsigned column, so
             // shifting existing roots forward is the only way to insert
             // ahead of everything without going negative).
-            $workspace->rootNavigationItems()->increment('position');
+            $workspace->rootNavigationItems()->withoutGlobalScope(WorkspaceNavigationItem::SCOPE_WITHOUT_TEMPLATES)->increment('position');
 
             $workspace->navigationItems()->create([
                 'parent_id' => null,

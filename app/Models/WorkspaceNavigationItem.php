@@ -81,6 +81,7 @@ use Illuminate\Support\Carbon;
     'is_favorite',
     'is_priority',
     'is_archived',
+    'is_template',
     'archived_at',
     'position',
     'created_by_id',
@@ -92,6 +93,23 @@ class WorkspaceNavigationItem extends Model
 
     /** The id is a randomly-generated 10-digit number, not an auto-increment. */
     public $incrementing = false;
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(self::SCOPE_WITHOUT_TEMPLATES, function (Builder $query) {
+            $query->where($query->qualifyColumn('is_template'), false);
+        });
+    }
+
+    /**
+     * The workspace templates only ("Save as a template" / "Move to template").
+     *
+     * @return Builder<WorkspaceNavigationItem>
+     */
+    public static function templates(): Builder
+    {
+        return static::withoutGlobalScope(self::SCOPE_WITHOUT_TEMPLATES)->where('is_template', true);
+    }
 
     protected $keyType = 'int';
 
@@ -107,6 +125,13 @@ class WorkspaceNavigationItem extends Model
 
     /** Visible to workspace members and can also be shared with people outside it. */
     public const BOARD_TYPE_SHAREABLE = 'shareable';
+
+    /**
+     * Global scope that keeps templates (`is_template`) out of every query, so a board saved as a
+     * template never shows up in the tree, search, My Work, favorites or admin listings. Template
+     * endpoints opt back in through {@see templates()}.
+     */
+    public const SCOPE_WITHOUT_TEMPLATES = 'without_templates';
 
     public const ASSET_TYPE_BOARD = 'board';
 
@@ -382,6 +407,7 @@ class WorkspaceNavigationItem extends Model
             'is_favorite' => 'boolean',
             'is_priority' => 'boolean',
             'is_archived' => 'boolean',
+            'is_template' => 'boolean',
             'archived_at' => 'datetime',
             'position' => 'integer',
             'item_column_width' => 'integer',

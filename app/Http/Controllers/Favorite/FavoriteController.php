@@ -8,6 +8,7 @@ use App\Models\UserFavoriteWorkspace;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Favorite\UserFavoriteService;
+use App\Support\VisibleBoards;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -28,7 +29,7 @@ class FavoriteController extends Controller
     {
         $favorites = UserFavoriteItem::query()
             ->where('user_id', $request->user()->id)
-            ->whereHas('navigationItem', fn ($query) => $query->where('is_archived', false))
+            ->whereHas('navigationItem', fn ($query) => VisibleBoards::withoutHiddenPrivate($query->where('is_archived', false), $request->user()))
             ->with('navigationItem.workspace:id,name,slug,color,mono')
             ->orderBy('position')
             ->orderBy('id')

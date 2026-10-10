@@ -38,6 +38,7 @@ class WorkspaceNavigationItemResource extends JsonResource
             'is_favorite' => app(UserFavoriteService::class)->isFavorite((int) $this->id, $request->user()),
             'is_priority' => $this->is_priority,
             'is_archived' => $this->is_archived,
+            'is_template' => (bool) $this->is_template,
             // Total updates (top-level + replies) on the board's discussion feed, powering the "Board updates"
             // badge; 0 unless the caller ran loadCount('comments') first (only BoardController::show() does).
             'comments_count' => $this->whenCounted('comments', default: 0),

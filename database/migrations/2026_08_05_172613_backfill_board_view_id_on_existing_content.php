@@ -19,7 +19,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        WorkspaceNavigationItem::where('type', WorkspaceNavigationItem::TYPE_LEAF)
+        // Runs before the `is_template` column exists, so the model's template scope is skipped.
+        WorkspaceNavigationItem::withoutGlobalScope(WorkspaceNavigationItem::SCOPE_WITHOUT_TEMPLATES)
+            ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
             ->where(fn ($query) => $query->whereHas('columns')->orWhereHas('groups'))
             ->chunkById(100, function ($boards) {
                 foreach ($boards as $board) {

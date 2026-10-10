@@ -409,10 +409,16 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // Sidebar multi-select bulk bar (move, archive, delete) and "Sort A to Z".
             Route::post('bulk', [WorkspaceNavigationItemController::class, 'bulk']);
             Route::patch('sort', [WorkspaceNavigationItemController::class, 'sort']);
+            // Board templates ("Save as a template", "Move to template", "Start with template").
+            Route::get('templates', [WorkspaceNavigationItemController::class, 'templates']);
+            Route::post('templates/{template}/use', [WorkspaceNavigationItemController::class, 'useTemplate'])->whereNumber('template');
+            Route::delete('templates/{template}', [WorkspaceNavigationItemController::class, 'destroyTemplate'])->whereNumber('template');
 
             Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
             Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
             Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate']);
+            Route::patch('{item}/move-workspace', [WorkspaceNavigationItemController::class, 'moveToWorkspace']);
+            Route::post('{item}/template', [WorkspaceNavigationItemController::class, 'saveAsTemplate']);
             Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy'])->middleware('account.permission:delete_boards');
         });
     });

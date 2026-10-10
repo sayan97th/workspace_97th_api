@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Home;
 use App\Http\Controllers\Controller;
 use App\Models\BoardVisit;
 use App\Services\Favorite\UserFavoriteService;
+use App\Support\VisibleBoards;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -25,7 +26,7 @@ class RecentBoardController extends Controller
 
         $visits = BoardVisit::query()
             ->where('user_id', $user->id)
-            ->whereHas('board', fn ($query) => $query->where('is_archived', false))
+            ->whereHas('board', fn ($query) => VisibleBoards::withoutHiddenPrivate($query->where('is_archived', false), $user))
             ->with('board.workspace:id,name,slug,color,mono')
             ->orderByDesc('visited_at')
             ->limit(self::LIMIT)

@@ -7,13 +7,18 @@ use App\Http\Controllers\Board\BoardItemController;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Workspace\BulkWorkspaceNavigationItemsRequest;
 use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemRequest;
+use App\Http\Requests\Workspace\MoveWorkspaceNavigationItemToWorkspaceRequest;
 use App\Http\Requests\Workspace\ReorderWorkspaceNavigationItemsRequest;
+use App\Http\Requests\Workspace\SaveWorkspaceNavigationTemplateRequest;
 use App\Http\Requests\Workspace\SortWorkspaceNavigationItemsRequest;
 use App\Http\Requests\Workspace\StoreWorkspaceNavigationItemRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavCollapseStateRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceNavigationItemRequest;
+use App\Http\Requests\Workspace\UseWorkspaceNavigationTemplateRequest;
 use App\Http\Resources\WorkspaceNavigationItemResource;
 use App\Models\BoardActivityLog;
+use App\Models\BoardAutomation;
+use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavCollapseState;
 use App\Models\WorkspaceNavigationItem;
@@ -22,6 +27,7 @@ use App\Services\Board\BoardDuplicationService;
 use App\Services\Favorite\UserFavoriteService;
 use App\Support\AccountPermissions;
 use App\Support\BoardManagementGate;
+use App\Support\VisibleBoards;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -54,8 +60,12 @@ class WorkspaceNavigationItemController extends Controller
             ->where('workspace_id', $workspace->id)
             ->value('collapsed_group_ids');
 
+        // Like monday.com, a private board (lock icon) only shows up for the people who were
+        // added to it, everyone else does not see it in the tree at all.
+        $hidden_private_ids = VisibleBoards::hiddenPrivateIds($request->user(), $workspace->id);
+
         return response()->json([
-            'data' => WorkspaceNavigationItemResource::collection($this->pruneArchived($tree)),
+            'data' => WorkspaceNavigationItemResource::collection($this->pruneArchived($tree, $hidden_private_ids)),
             'collapsed_group_ids' => $collapsed_group_ids ?? [],
         ]);
     }
@@ -69,16 +79,19 @@ class WorkspaceNavigationItemController extends Controller
      * structurally elsewhere (move/duplicate/delete) also silently skipping
      * archived descendants.
      *
+     * Private boards the viewer may not see (`$hidden_ids`) are dropped the same way.
+     *
      * @param  Collection<int, WorkspaceNavigationItem>  $items
+     * @param  array<int, true>  $hidden_ids
      * @return Collection<int, WorkspaceNavigationItem>
      */
-    private function pruneArchived(Collection $items): Collection
+    private function pruneArchived(Collection $items, array $hidden_ids = []): Collection
     {
-        return $items->reject(fn (WorkspaceNavigationItem $item) => $item->is_archived)
+        return $items->reject(fn (WorkspaceNavigationItem $item) => $item->is_archived || isset($hidden_ids[$item->id]))
             ->values()
-            ->each(function (WorkspaceNavigationItem $item) {
+            ->each(function (WorkspaceNavigationItem $item) use ($hidden_ids) {
                 if ($item->relationLoaded('childrenRecursive')) {
-                    $item->setRelation('childrenRecursive', $this->pruneArchived($item->childrenRecursive));
+                    $item->setRelation('childrenRecursive', $this->pruneArchived($item->childrenRecursive, $hidden_ids));
                 }
             });
     }
@@ -502,11 +515,237 @@ class WorkspaceNavigationItemController extends Controller
     }
 
     /**
+     * PATCH /api/workspaces/{workspace}/navigation/{item}/move-workspace
+     *
+     * The row menu's "Move to > Move to workspace": moves a board or folder (with everything inside
+     * it, trashed descendants included so a later restore lands in the same place) to the root of
+     * another workspace the caller belongs to. Board content keys off the board id, so only the
+     * navigation rows change.
+     */
+    public function moveToWorkspace(
+        MoveWorkspaceNavigationItemToWorkspaceRequest $request,
+        Workspace $workspace,
+        WorkspaceNavigationItem $item
+    ): JsonResponse {
+        $this->ensureItemBelongsToWorkspace($workspace, $item);
+
+        $user = $request->user();
+        BoardManagementGate::authorize($item, $user, 'move this board to another workspace');
+
+        $target = Workspace::query()->findOrFail($request->validated('workspace_id'));
+
+        if ($target->id === $workspace->id) {
+            return response()->json(['message' => 'This item is already in that workspace.'], 422);
+        }
+
+        if ($item->view_key === 'workspace_manage') {
+            return response()->json(['message' => 'The workspace overview cannot be moved.'], 422);
+        }
+
+        if (! $this->canAddContentTo($target, $user)) {
+            return response()->json(['message' => 'You can only move items to workspaces where you can add content.'], 403);
+        }
+
+        DB::transaction(function () use ($item, $target) {
+            $descendant_ids = $this->descendantIdsIncludingTrashed($item);
+
+            if ($descendant_ids !== []) {
+                WorkspaceNavigationItem::withoutGlobalScopes()
+                    ->whereIn('id', $descendant_ids)
+                    ->update(['workspace_id' => $target->id]);
+            }
+
+            $item->update([
+                'workspace_id' => $target->id,
+                'parent_id' => null,
+                'slug' => $this->uniqueSlug($target, null, $item->label),
+                'position' => $this->nextPosition($target, null),
+            ]);
+        });
+
+        return response()->json([
+            'message' => "Moved to \"{$target->name}\".",
+            'item' => new WorkspaceNavigationItemResource($item->fresh()->load(['creator', 'workspace.owners'])),
+            'workspace' => ['id' => $target->id, 'slug' => $target->slug, 'name' => $target->name],
+        ]);
+    }
+
+    /**
+     * GET /api/workspaces/{workspace}/navigation/templates
+     *
+     * The workspace's saved board templates, newest first, for the "Start with template" picker.
+     */
+    public function templates(Workspace $workspace): JsonResponse
+    {
+        $templates = WorkspaceNavigationItem::templates()
+            ->where('workspace_id', $workspace->id)
+            ->with(['creator', 'workspace.owners'])
+            ->latest('updated_at')
+            ->get();
+
+        return response()->json([
+            'data' => WorkspaceNavigationItemResource::collection($templates),
+        ]);
+    }
+
+    /**
+     * POST /api/workspaces/{workspace}/navigation/{item}/template
+     *
+     * "Save as a template" (`mode: copy`) stores a full copy of the board (columns, groups, items)
+     * as a template and leaves the board alone. "Move to template" (`mode: move`) turns the board
+     * itself into a template, which takes it out of the tree, so its automations are paused.
+     */
+    public function saveAsTemplate(
+        SaveWorkspaceNavigationTemplateRequest $request,
+        Workspace $workspace,
+        WorkspaceNavigationItem $item
+    ): JsonResponse {
+        $this->ensureItemBelongsToWorkspace($workspace, $item);
+
+        if ($item->type !== WorkspaceNavigationItem::TYPE_LEAF) {
+            return response()->json(['message' => 'Only boards can be saved as templates.'], 422);
+        }
+
+        $user = $request->user();
+        $is_move = $request->validated('mode') === SaveWorkspaceNavigationTemplateRequest::MODE_MOVE;
+
+        if ($is_move) {
+            BoardManagementGate::authorize($item, $user, 'move this board to templates');
+        } else {
+            AccountPermissions::authorize($user, AccountPermissions::CREATE_BOARDS);
+        }
+
+        $template = DB::transaction(function () use ($item, $user, $is_move) {
+            if ($is_move) {
+                BoardAutomation::query()->where('board_id', $item->id)->update(['is_enabled' => false]);
+                $item->update(['is_template' => true, 'parent_id' => null]);
+
+                return $item;
+            }
+
+            $copy = $this->copySubtree($item, null, 0, $user?->id, $item->label);
+            $copy->update(['is_template' => true]);
+
+            return $copy;
+        });
+
+        $this->activity_logger->log(
+            $template,
+            $user,
+            BoardActivityLog::ACTION_DUPLICATED,
+            $is_move ? 'Moved the board to templates' : "Saved as a template from \"{$item->label}\""
+        );
+
+        return response()->json([
+            'message' => $is_move ? 'Board moved to templates.' : 'Board saved as a template.',
+            'item' => new WorkspaceNavigationItemResource(
+                WorkspaceNavigationItem::templates()->with(['creator', 'workspace.owners'])->findOrFail($template->id)
+            ),
+        ], $is_move ? 200 : 201);
+    }
+
+    /**
+     * POST /api/workspaces/{workspace}/navigation/templates/{template}/use
+     *
+     * Creates a new board from a template: a full copy placed at the end of the chosen folder (or
+     * the root). The template itself stays untouched for the next use.
+     */
+    public function useTemplate(UseWorkspaceNavigationTemplateRequest $request, Workspace $workspace, int $template): JsonResponse
+    {
+        $user = $request->user();
+        AccountPermissions::authorize($user, AccountPermissions::CREATE_BOARDS);
+
+        $source = $this->findTemplate($workspace, $template);
+        $validated = $request->validated();
+        $parent_id = $validated['parent_id'] ?? null;
+        $label = trim((string) ($validated['label'] ?? '')) ?: $source->label;
+
+        $board = DB::transaction(
+            fn () => $this->copySubtree($source, $parent_id, $this->nextPosition($workspace, $parent_id), $user?->id, $label)
+        );
+
+        $this->activity_logger->log(
+            $board,
+            $user,
+            BoardActivityLog::ACTION_CREATED,
+            "Created from the \"{$source->label}\" template"
+        );
+
+        return response()->json([
+            'message' => 'Board created from template.',
+            'item' => new WorkspaceNavigationItemResource($board->load(['creator', 'workspace.owners'])),
+        ], 201);
+    }
+
+    /**
+     * DELETE /api/workspaces/{workspace}/navigation/templates/{template}
+     */
+    public function destroyTemplate(Request $request, Workspace $workspace, int $template): JsonResponse
+    {
+        $source = $this->findTemplate($workspace, $template);
+        BoardManagementGate::authorize($source, $request->user(), 'delete this template');
+
+        $source->delete();
+
+        return response()->json(['message' => 'Template deleted.']);
+    }
+
+    /**
      * Guard: abort with 404 when the item is not part of the workspace.
      */
     private function ensureItemBelongsToWorkspace(Workspace $workspace, WorkspaceNavigationItem $item): void
     {
         abort_if($item->workspace_id !== $workspace->id, 404);
+    }
+
+    /**
+     * A template of this workspace by id, 404 otherwise.
+     */
+    private function findTemplate(Workspace $workspace, int $template_id): WorkspaceNavigationItem
+    {
+        return WorkspaceNavigationItem::templates()
+            ->where('workspace_id', $workspace->id)
+            ->findOrFail($template_id);
+    }
+
+    /**
+     * Whether `$user` may add content to `$workspace`: administrators always, everyone else as a
+     * member or owner (workspace viewers are read only).
+     */
+    private function canAddContentTo(Workspace $workspace, User $user): bool
+    {
+        if ($user->hasRole(['super_admin', 'admin'])) {
+            return true;
+        }
+
+        $role = DB::table('workspace_user')
+            ->where('workspace_id', $workspace->id)
+            ->where('user_id', $user->id)
+            ->value('role');
+
+        return in_array($role, ['owner', 'member'], true);
+    }
+
+    /**
+     * Ids of every descendant of `$item`, trashed rows and templates included.
+     *
+     * @return array<int, int>
+     */
+    private function descendantIdsIncludingTrashed(WorkspaceNavigationItem $item): array
+    {
+        $descendant_ids = [];
+        $frontier = [$item->id];
+
+        while ($frontier !== []) {
+            $frontier = WorkspaceNavigationItem::withoutGlobalScopes()
+                ->whereIn('parent_id', $frontier)
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+            $descendant_ids = array_merge($descendant_ids, $frontier);
+        }
+
+        return $descendant_ids;
     }
 
     /**
@@ -561,16 +800,19 @@ class WorkspaceNavigationItemController extends Controller
     }
 
     /**
-     * Recursively deep-copy an item and its subtree under a new parent.
+     * Recursively deep-copy an item and its subtree under a new parent. `$label` names the top
+     * copy (templates keep their name), otherwise a copy next to its original gets " (copy)".
      */
-    private function copySubtree(WorkspaceNavigationItem $item, ?int $parent_id, int $position, ?int $created_by_id): WorkspaceNavigationItem
+    private function copySubtree(WorkspaceNavigationItem $item, ?int $parent_id, int $position, ?int $created_by_id, ?string $label = null): WorkspaceNavigationItem
     {
+        $label ??= $parent_id === $item->parent_id ? $item->label.' (copy)' : $item->label;
+
         $copy = $item->workspace->navigationItems()->create([
             'parent_id' => $parent_id,
             'type' => $item->type,
-            'label' => $parent_id === $item->parent_id ? $item->label.' (copy)' : $item->label,
+            'label' => $label,
             'description' => $item->description,
-            'slug' => $this->uniqueSlug($item->workspace, $parent_id, $item->label),
+            'slug' => $this->uniqueSlug($item->workspace, $parent_id, $label),
             'icon' => $item->icon,
             'color' => $item->color,
             'view_key' => $item->view_key,
