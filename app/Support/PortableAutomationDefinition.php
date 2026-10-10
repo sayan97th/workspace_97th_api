@@ -16,7 +16,7 @@ use App\Services\Board\AutomationDynamicValueResolver;
 final class PortableAutomationDefinition
 {
     /** Params of an action that hold a column id of the automation's own tab. */
-    private const COLUMN_PARAMS = ['target_column_id', 'source_column_id', 'sort_column_id', 'number_column_id', 'notify_from_people_column_id', 'match_column_id', 'dependency_column_id', 'email_column_id', 'connect_column_id', 'link_column_id'];
+    private const COLUMN_PARAMS = ['target_column_id', 'source_column_id', 'sort_column_id', 'number_column_id', 'notify_from_people_column_id', 'match_column_id', 'dependency_column_id', 'email_column_id', 'connect_column_id', 'link_column_id', 'date_column_id'];
 
     /** Column types whose values are option ids of that one column. */
     private const OPTION_TYPES = [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_TAGS];
@@ -45,7 +45,8 @@ final class PortableAutomationDefinition
         $remember('trigger_column_id', $automation->trigger_column_id);
 
         $config = (array) ($automation->trigger_config ?? []);
-        unset($config['from_value'], $config['group_id'], $config['form_view_id'], $config['status_column_id'], $config['done_values']);
+        // A member's own Gmail or Outlook account means nothing to whoever uses the template.
+        unset($config['from_value'], $config['group_id'], $config['form_view_id'], $config['status_column_id'], $config['done_values'], $config['external_account_id'], $config['external_account_email']);
         if (isset($config['match']) && $is_option_column($automation->trigger_column_id)) {
             $config['match']['values'] = [];
         }
@@ -98,7 +99,7 @@ final class PortableAutomationDefinition
                         $params['field_mappings'][$mapping_index]['column_id'] = null;
                     }
                 }
-                unset($params['linked_match_column_id'], $params['linked_column_id'], $params['destination_group_id']);
+                unset($params['linked_match_column_id'], $params['linked_column_id'], $params['destination_group_id'], $params['external_account_id'], $params['external_account_email'], $params['calendar_id'], $params['calendar_name']);
                 if ($action['type'] === BoardAutomation::ACTION_CHANGE_VALUES && $is_option_column($action['params']['target_column_id'] ?? null)) {
                     $params['values'] = [];
                 }

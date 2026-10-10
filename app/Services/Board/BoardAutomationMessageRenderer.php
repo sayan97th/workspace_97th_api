@@ -193,6 +193,8 @@ class BoardAutomationMessageRenderer
             BoardAutomation::TRIGGER_NAME_CHANGED => '"{old_value}" was renamed to "{new_value}" on {board_name}.',
             BoardAutomation::TRIGGER_DATE_CHANGED => '{column_name} changed to {new_value} on "{item_name}".',
             BoardAutomation::TRIGGER_WEBHOOK_RECEIVED => '{automation_name} received a webhook on {board_name}.',
+            BoardAutomation::TRIGGER_EMAIL_RECEIVED => 'A new email from {payload.from_name}: {payload.subject}',
+            BoardAutomation::TRIGGER_ITEM_CREATED_OR_UPDATED => '"{item_name}" was created or updated on {board_name}.',
             BoardAutomation::TRIGGER_BUTTON_CLICKED => '{actor_name} pressed {column_name} on "{item_name}".',
             BoardAutomation::TRIGGER_NUMBER_THRESHOLD => '{column_name} reached {new_value} on "{item_name}".',
             BoardAutomation::TRIGGER_ITEM_MOVED_TO_BOARD => '"{item_name}" was moved to {board_name}.',

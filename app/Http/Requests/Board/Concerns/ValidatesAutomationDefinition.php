@@ -2,11 +2,13 @@
 
 namespace App\Http\Requests\Board\Concerns;
 
+use App\Enums\ExternalService;
 use App\Models\AccountTeam;
 use App\Models\BoardAutomation;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardView;
+use App\Models\ExternalAccount;
 use App\Models\SlackConnection;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -150,6 +152,11 @@ trait ValidatesAutomationDefinition
             'trigger_config.keywords' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_KEYWORDS],
             'trigger_config.keywords.*' => ['string', 'max:60'],
             'trigger_config.include_replies' => ['sometimes', 'boolean'],
+            'trigger_config.external_account_id' => ['sometimes', 'nullable', 'integer'],
+            // Kept only so the sentence can name the inbox without asking the provider.
+            'trigger_config.external_account_email' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'trigger_config.from_filter' => ['sometimes', 'nullable', 'string', 'max:200'],
+            'trigger_config.subject_filter' => ['sometimes', 'nullable', 'string', 'max:200'],
             'conditions' => ['sometimes', 'nullable', 'array', 'max:'.BoardAutomation::MAX_CONDITIONS],
             'conditions.*' => ['array'],
             'conditions.*.column_id' => ['required', 'string', 'max:64'],
@@ -410,6 +417,10 @@ trait ValidatesAutomationDefinition
             $validator->errors()->add('conditions', 'Add at least one condition, it decides which items the scheduled check acts on.');
         }
 
+        if ($trigger_type === BoardAutomation::TRIGGER_EMAIL_RECEIVED) {
+            $this->validateExternalAccount($validator, $config['external_account_id'] ?? null, ExternalService::mailServices(), 'trigger_config.external_account_id', 'Choose the Gmail or Outlook account whose inbox this automation reads.');
+        }
+
         if (in_array($trigger_type, BoardAutomation::itemlessTriggers(), true)) {
             $first_action_type = $this->input('actions.0.type');
             if ($first_action_type !== null && ! in_array($first_action_type, BoardAutomation::itemlessActions(), true)) {
@@ -593,6 +604,17 @@ trait ValidatesAutomationDefinition
                 'email_addresses.*' => ['required', 'email', 'max:255'],
                 'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
                 'subject' => ['sometimes', 'nullable', 'string', 'max:150'],
+                // Sends from the member's own Gmail or Outlook account instead of the app's mailer.
+                'external_account_id' => ['sometimes', 'nullable', 'integer'],
+                'external_account_email' => ['sometimes', 'nullable', 'string', 'max:255'],
+            ],
+            BoardAutomation::ACTION_GOOGLE_CALENDAR_SYNC => [
+                'external_account_id' => ['required', 'integer'],
+                'external_account_email' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'calendar_id' => ['required', 'string', 'max:255'],
+                'calendar_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'date_column_id' => ['required', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', BoardColumn::SCOPE_ITEM)->whereIn('type', [BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE]))],
+                'title_template' => ['sometimes', 'nullable', 'string', 'max:255'],
             ],
             BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL => [
                 'slack_channel_id' => ['required', 'string', 'regex:/^[CG][A-Z0-9]{2,}$/'],
@@ -806,6 +828,12 @@ trait ValidatesAutomationDefinition
         if ($type === BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL && ! empty($params['slack_connection_id'])) {
             $this->validateSlackConnection($validator, $params, $prefix);
         }
+        if ($type === BoardAutomation::ACTION_SEND_EMAIL && ! empty($params['external_account_id'])) {
+            $this->validateExternalAccount($validator, $params['external_account_id'], ExternalService::mailServices(), "{$prefix}.external_account_id", 'Choose one of your connected Gmail or Outlook accounts to send from.');
+        }
+        if ($type === BoardAutomation::ACTION_GOOGLE_CALENDAR_SYNC) {
+            $this->validateExternalAccount($validator, $params['external_account_id'] ?? null, [ExternalService::GoogleCalendar], "{$prefix}.external_account_id", 'Choose one of your connected Google Calendar accounts.');
+        }
 
         $this->validateNewActionParams($validator, $view_id, $type, $params, $prefix);
 
@@ -843,6 +871,27 @@ trait ValidatesAutomationDefinition
 
         if (! empty($params['slack_team_id']) && $params['slack_team_id'] !== $connection->installation->team_id) {
             $validator->errors()->add("{$prefix}.slack_channel_id", "This channel does not belong to {$connection->installation->team_name}, choose a channel again.");
+        }
+    }
+
+    /**
+     * A Gmail, Outlook or Google Calendar account may only be one of the caller's own, connected
+     * with the permissions one of `$services` needs. Editing someone else's automation keeps the
+     * account it already used, it is never swapped for another member's account.
+     *
+     * @param  array<int, ExternalService>  $services
+     */
+    private function validateExternalAccount(Validator $validator, mixed $account_id, array $services, string $key, string $message): void
+    {
+        $account = is_numeric($account_id) ? ExternalAccount::query()->find((int) $account_id) : null;
+        $automation = $this->route('automation');
+        $kept_ids = $automation instanceof BoardAutomation ? $automation->externalAccountIds() : [];
+        $is_allowed = $account !== null
+            && ($account->user_id === $this->user()?->id || in_array($account->id, $kept_ids, true))
+            && collect($services)->contains(fn (ExternalService $service) => $account->supports($service));
+
+        if (! $is_allowed) {
+            $validator->errors()->add($key, $message);
         }
     }
 

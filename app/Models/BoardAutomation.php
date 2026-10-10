@@ -6,6 +6,7 @@ use App\Console\Commands\Board\RunDueDateAutomationsCommand;
 use App\Console\Commands\Board\RunScheduledAutomationsCommand;
 use App\Services\Board\AutomationDynamicValueResolver;
 use App\Services\Board\BoardAutomationService;
+use App\Services\ExternalAccounts\EmailTriggerPoller;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -198,6 +199,18 @@ class BoardAutomation extends Model
      */
     public const TRIGGER_ITEM_STALE = 'item_stale';
 
+    /**
+     * Fires once for every new email in the inbox of the connected Gmail or Outlook account
+     * `trigger_config.external_account_id`, with no item of its own. Only emails whose sender holds
+     * `trigger_config.from_filter` and whose subject holds `trigger_config.subject_filter` count when
+     * those are set. The inbox is polled every minute, see {@see EmailTriggerPoller}, and the actions
+     * read the email through `{payload.subject}`, `{payload.body}`, `{payload.from_name}` and `{payload.from_email}`.
+     */
+    public const TRIGGER_EMAIL_RECEIVED = 'email_received';
+
+    /** Fires once a root item of this tab is created, renamed or has any column value changed. */
+    public const TRIGGER_ITEM_CREATED_OR_UPDATED = 'item_created_or_updated';
+
     /** Moves the item to `target_group_id`. */
     public const ACTION_MOVE_TO_GROUP = 'move_to_group';
 
@@ -365,6 +378,14 @@ class BoardAutomation extends Model
      */
     public const ACTION_SORT_GROUP = 'sort_group';
 
+    /**
+     * Creates, or updates when it already exists, an event for the item in the Google Calendar `calendar_id` of the
+     * connected account `external_account_id`, on the date (or timeline) `date_column_id`, titled `title_template`
+     * (tokens such as `{item_name}` filled in, the item name when empty). An item that loses its date, is archived or
+     * is deleted loses its event, see {@see BoardItemCalendarEvent}.
+     */
+    public const ACTION_GOOGLE_CALENDAR_SYNC = 'google_calendar_sync';
+
     /** Where a dynamic value comes from, see {@see AutomationDynamicValueResolver}. */
     public const DYNAMIC_SOURCES = ['actor', 'creator', 'owner', 'mentioned', 'today', 'column'];
 
@@ -412,6 +433,7 @@ class BoardAutomation extends Model
             self::TRIGGER_PERSON_UNASSIGNED, self::TRIGGER_FILE_UPLOADED, self::TRIGGER_ITEM_OVERDUE,
             self::TRIGGER_SUBITEM_COLUMN_CHANGED, self::TRIGGER_USER_MENTIONED, self::TRIGGER_UPDATE_REPLIED,
             self::TRIGGER_UPDATE_KEYWORD, self::TRIGGER_STATUS_STUCK, self::TRIGGER_ITEM_STALE,
+            self::TRIGGER_EMAIL_RECEIVED, self::TRIGGER_ITEM_CREATED_OR_UPDATED,
         ];
     }
 
@@ -451,7 +473,7 @@ class BoardAutomation extends Model
      */
     public static function itemlessTriggers(): array
     {
-        return [self::TRIGGER_RECURRING, self::TRIGGER_WEBHOOK_RECEIVED];
+        return [self::TRIGGER_RECURRING, self::TRIGGER_WEBHOOK_RECEIVED, self::TRIGGER_EMAIL_RECEIVED];
     }
 
     /**
@@ -522,7 +544,7 @@ class BoardAutomation extends Model
             self::ACTION_RENAME_ITEM, self::ACTION_CHANGE_VALUES, self::ACTION_UPDATE_CONNECTED_ITEMS, self::ACTION_GROUP_ITEMS,
             self::ACTION_SUBSCRIBE_PEOPLE, self::ACTION_UNSUBSCRIBE_PEOPLE, self::ACTION_NOTIFY_SUBSCRIBERS,
             self::ACTION_CLEAR_SUBITEMS, self::ACTION_CONVERT_SUBITEM, self::ACTION_SEND_DIGEST,
-            self::ACTION_MOVE_ITEM_POSITION, self::ACTION_SORT_GROUP,
+            self::ACTION_MOVE_ITEM_POSITION, self::ACTION_SORT_GROUP, self::ACTION_GOOGLE_CALENDAR_SYNC,
         ];
     }
 
@@ -602,6 +624,24 @@ class BoardAutomation extends Model
             fn (mixed $action) => is_array($action) && is_numeric($action['params']['slack_connection_id'] ?? null) ? (int) $action['params']['slack_connection_id'] : null,
             $actions,
         ))));
+    }
+
+    /**
+     * The member Google and Microsoft accounts this automation reads or sends through: the inbox of
+     * an email trigger and the account of every email or calendar action, from both branches.
+     *
+     * @return array<int, int>
+     */
+    public function externalAccountIds(): array
+    {
+        $actions = [...($this->actions ?? []), ...($this->else_actions ?? []), ['params' => $this->action_params ?? []]];
+        $ids = array_map(
+            fn (mixed $action) => is_array($action) && is_numeric($action['params']['external_account_id'] ?? null) ? (int) $action['params']['external_account_id'] : null,
+            $actions,
+        );
+        $ids[] = is_numeric($this->trigger_config['external_account_id'] ?? null) ? (int) $this->trigger_config['external_account_id'] : null;
+
+        return array_values(array_unique(array_filter($ids)));
     }
 
     /**

@@ -17,6 +17,7 @@ use App\Models\BoardItemComment;
 use App\Models\BoardItemValue;
 use App\Models\Notification;
 use App\Models\User;
+use App\Services\ExternalAccounts\CalendarEventSyncer;
 use App\Services\Notification\NotificationService;
 use App\Support\AutomationSchedule;
 use App\Support\MarkdownPlainText;
@@ -136,6 +137,25 @@ class BoardAutomationService
         // which also loads the column without its scope), so its parent is all that needs checking.
         if ($item->parent_id !== null) {
             $this->handleSubitemColumnChanged($item, $column, $old_value, $new_value, $actor);
+        } elseif (! $this->valuesAreEqual($old_value, $new_value)) {
+            $this->handleItemCreatedOrUpdated($item, $actor, $this->changeContext($column, $old_value, $new_value));
+        }
+    }
+
+    /**
+     * Fires every `item_created_or_updated` automation of the item's tab, for a root item that was
+     * just created, renamed or had a column value changed.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function handleItemCreatedOrUpdated(BoardItem $item, ?User $actor, array $context = []): void
+    {
+        if ($item->parent_id !== null) {
+            return;
+        }
+
+        foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_ITEM_CREATED_OR_UPDATED) as $automation) {
+            $this->executeAutomation($automation, $item, $actor, $context);
         }
     }
 
@@ -534,6 +554,8 @@ class BoardAutomationService
         foreach ($this->enabledAutomations($item, $trigger_type) as $automation) {
             $this->executeAutomation($automation, $item, $actor);
         }
+
+        $this->handleItemCreatedOrUpdated($item, $actor);
     }
 
     /**
@@ -648,6 +670,8 @@ class BoardAutomationService
         foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_NAME_CHANGED) as $automation) {
             $this->executeAutomation($automation, $item, $actor, ['old_text' => $old_name, 'new_text' => (string) $item->name]);
         }
+
+        $this->handleItemCreatedOrUpdated($item, $actor, ['old_text' => $old_name, 'new_text' => (string) $item->name]);
     }
 
     /**
@@ -673,6 +697,18 @@ class BoardAutomationService
      * @param  array<string, mixed>  $payload
      */
     public function handleWebhook(BoardAutomation $automation, array $payload): void
+    {
+        $automation->loadMissing(['board', 'creator', 'owner']);
+        $this->executeAutomation($automation, null, null, ['payload' => $payload]);
+    }
+
+    /**
+     * Runs an "email is received" automation for one new email of its connected inbox, the email
+     * read through `{payload.*}` tokens like a webhook body.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public function handleEmailReceived(BoardAutomation $automation, array $payload): void
     {
         $automation->loadMissing(['board', 'creator', 'owner']);
         $this->executeAutomation($automation, null, null, ['payload' => $payload]);
@@ -713,6 +749,19 @@ class BoardAutomationService
         foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_ITEM_ARCHIVED) as $automation) {
             $this->executeAutomation($automation, $item, $actor);
         }
+
+        $this->forgetCalendarEvents($item);
+    }
+
+    /**
+     * An archived or deleted item takes its synced Google Calendar events with it. A test run
+     * archives inside a transaction that is rolled back, so nothing leaves the app then.
+     */
+    private function forgetCalendarEvents(BoardItem $item): void
+    {
+        if (! $this->run_context->isDryRun()) {
+            app(CalendarEventSyncer::class)->forgetItem($item);
+        }
     }
 
     public function handleItemDeleted(BoardItem $item, ?User $actor): void
@@ -720,6 +769,8 @@ class BoardAutomationService
         foreach ($this->enabledAutomations($item, BoardAutomation::TRIGGER_ITEM_DELETED) as $automation) {
             $this->executeAutomation($automation, $item, $actor);
         }
+
+        $this->forgetCalendarEvents($item);
     }
 
     // ── Scheduled triggers ────────────────────────────────────────────────────
@@ -1600,7 +1651,7 @@ class BoardAutomationService
 
         try {
             if ($branch !== null) {
-                $context = $automation->trigger_type === BoardAutomation::TRIGGER_WEBHOOK_RECEIVED ? ['payload' => $payload] : $this->testContext($automation, $item);
+                $context = in_array($automation->trigger_type, [BoardAutomation::TRIGGER_WEBHOOK_RECEIVED, BoardAutomation::TRIGGER_EMAIL_RECEIVED], true) ? ['payload' => $payload] : $this->testContext($automation, $item);
                 $this->executeAutomation($automation, $item, $actor, $context);
             }
         } finally {

@@ -69,6 +69,9 @@ use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\Home\RecentBoardController;
 use App\Http\Controllers\InlineUploadController;
+use App\Http\Controllers\Integration\ExternalAccountController;
+use App\Http\Controllers\Integration\ExternalOAuthCallbackController;
+use App\Http\Controllers\Integration\IntegrationAppCredentialsController;
 use App\Http\Controllers\Integration\SlackAppCredentialsController;
 use App\Http\Controllers\Integration\SlackConnectionController;
 use App\Http\Controllers\Integration\SlackEventController;
@@ -163,6 +166,11 @@ Route::get('integrations/slack/callback', SlackOAuthCallbackController::class);
 // Event Subscriptions request URL of the Slack app. Public as well, but only requests signed
 // with the signing secret saved in Administration get through, see `VerifySlackSignature`.
 Route::post('integrations/slack/events', SlackEventController::class)->middleware(['slack.signature', 'throttle:120,1']);
+
+// Google and Microsoft OAuth callback of the Gmail, Outlook and Google Calendar integrations.
+// Public like the Slack one, who it acts for comes from the single use `state` value, see
+// `ExternalAccountService::consumeState()`.
+Route::get('integrations/accounts/callback', ExternalOAuthCallbackController::class)->middleware('throttle:30,1');
 
 // ─── Authenticated routes ───────────────────────────────────────────────────
 // Public, no account needed: a board form's respondents and the people a
@@ -267,6 +275,20 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Slack integration, an administrator connects one or more Slack workspaces and picks the
     // active one, members are matched by email or link their own Slack account to receive
     // notifications as direct messages.
+    // A member's own Gmail, Outlook and Google Calendar accounts for automations, and the Google
+    // and Microsoft OAuth apps an administrator sets up once in Administration > Integrations.
+    Route::prefix('integrations/accounts')->group(function () {
+        Route::get('/', [ExternalAccountController::class, 'index']);
+        Route::post('url', [ExternalAccountController::class, 'url'])->middleware(['account.permission:use_integrations', 'throttle:20,1']);
+        Route::get('{account}/calendars', [ExternalAccountController::class, 'calendars'])->middleware('throttle:60,1');
+        Route::delete('{account}', [ExternalAccountController::class, 'destroy']);
+    });
+    Route::middleware('role:super_admin,admin')->prefix('integrations/apps')->group(function () {
+        Route::get('/', [IntegrationAppCredentialsController::class, 'index']);
+        Route::put('{provider}', [IntegrationAppCredentialsController::class, 'update'])->middleware('throttle:20,1');
+        Route::delete('{provider}', [IntegrationAppCredentialsController::class, 'destroy']);
+    });
+
     Route::prefix('integrations/slack')->group(function () {
         Route::get('/', [SlackIntegrationController::class, 'show']);
         Route::get('channels', [SlackIntegrationController::class, 'channels'])->middleware('throttle:60,1');

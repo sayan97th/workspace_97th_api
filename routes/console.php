@@ -19,6 +19,9 @@ Schedule::command('automations:run-date-triggers')->everyFiveMinutes()->withoutO
 
 Schedule::command('automations:run-scheduled')->everyMinute()->withoutOverlapping();
 
+// "When an email is received" automations read their connected Gmail or Outlook inbox.
+Schedule::command('automations:poll-email')->everyMinute()->withoutOverlapping();
+
 // Automations waiting behind a "wait" step continue once their time comes.
 Schedule::command('automations:run-delayed')->everyMinute()->withoutOverlapping();
 

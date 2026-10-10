@@ -2,6 +2,7 @@
 
 namespace App\Services\Board;
 
+use App\Jobs\SendConnectedAccountEmailJob;
 use App\Jobs\SendEmailJob;
 use App\Mail\Automations\AutomationEmail;
 use App\Models\BoardActivityLog;
@@ -12,6 +13,7 @@ use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
 use App\Models\BoardItemValue;
+use App\Models\ExternalAccount;
 use App\Models\Notification;
 use App\Models\SlackConnection;
 use App\Models\SlackInstallation;
@@ -23,6 +25,7 @@ use App\Services\Board\AutomationActions\RunsDateActions;
 use App\Services\Board\AutomationActions\RunsDigestActions;
 use App\Services\Board\AutomationActions\RunsFlowActions;
 use App\Services\Board\AutomationActions\RunsGroupActions;
+use App\Services\Board\AutomationActions\RunsIntegrationActions;
 use App\Services\Board\AutomationActions\RunsOutboundActions;
 use App\Services\Board\AutomationActions\RunsPositionActions;
 use App\Services\Board\AutomationActions\RunsSubitemActions;
@@ -62,7 +65,7 @@ use Illuminate\Support\Facades\DB;
  */
 class BoardAutomationActionRunner
 {
-    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsDigestActions, RunsFlowActions, RunsGroupActions, RunsOutboundActions, RunsPositionActions, RunsSubitemActions, RunsSubscriberActions;
+    use RunsBulkActions, RunsColumnActions, RunsDateActions, RunsDigestActions, RunsFlowActions, RunsGroupActions, RunsIntegrationActions, RunsOutboundActions, RunsPositionActions, RunsSubitemActions, RunsSubscriberActions;
 
     public function __construct(
         private readonly NotificationService $notification_service,
@@ -141,6 +144,7 @@ class BoardAutomationActionRunner
             BoardAutomation::ACTION_SEND_DIGEST => $this->sendDigest($automation, $params, $item, $actor, $context),
             BoardAutomation::ACTION_MOVE_ITEM_POSITION => $this->moveItemPosition($automation, $params, $item, $actor),
             BoardAutomation::ACTION_SORT_GROUP => $this->sortGroup($automation, $params, $item, $actor),
+            BoardAutomation::ACTION_GOOGLE_CALENDAR_SYNC => $this->syncCalendarEvent($automation, $params, $item, $actor),
             BoardAutomation::ACTION_WAIT => BoardAutomationActionOutcome::skipped('A wait is handled by the automation itself.'),
             default => BoardAutomationActionOutcome::skipped('This action type is not supported.'),
         };
@@ -691,6 +695,10 @@ class BoardAutomationActionRunner
                 $outcomes[] = 'found nobody to notify';
             }
 
+            if ($type === BoardAutomation::ACTION_SEND_EMAIL && ! empty($params['external_account_id'])) {
+                return $this->sendFromConnectedAccount($automation, $params, $item, $actor, $context, $message, $board->label, $link, $recipients, $addresses, $outcomes);
+            }
+
             foreach ($addresses as $address) {
                 SendEmailJob::dispatch(
                     new AutomationEmail($this->renderer->renderSubject($params['subject'] ?? null, $automation, $item, $actor, $context), $message, $board->label, $link),
@@ -731,6 +739,41 @@ class BoardAutomationActionRunner
     }
 
     /**
+     * Sends a "send an email" action from the owner's own Gmail or Outlook account instead of the
+     * app's mailer, one email to every recipient so nobody sees the others' addresses.
+     *
+     * @param  array<string, mixed>  $params
+     * @param  array<string, mixed>  $context
+     * @param  Collection<int, User>  $recipients
+     * @param  array<int, string>  $addresses
+     * @param  array<int, string>  $outcomes
+     */
+    private function sendFromConnectedAccount(BoardAutomation $automation, array $params, ?BoardItem $item, ?User $actor, array $context, string $message, string $board_label, string $link, Collection $recipients, array $addresses, array $outcomes): BoardAutomationActionOutcome
+    {
+        $account = ExternalAccount::query()->find((int) $params['external_account_id']);
+        if (! $account) {
+            return BoardAutomationActionOutcome::failed('Could not send the email because the account it was sent from was disconnected.');
+        }
+
+        $all_addresses = [...$addresses, ...$recipients->map(fn (User $user) => (string) $user->email)->all()];
+        if ($all_addresses === []) {
+            return BoardAutomationActionOutcome::skipped(ucfirst(implode(', ', $outcomes)).'.');
+        }
+
+        $subject = $this->renderer->renderSubject($params['subject'] ?? null, $automation, $item, $actor, $context);
+        $html_body = (new AutomationEmail($subject, $message, $board_label, $link))->render();
+        foreach ($all_addresses as $address) {
+            SendConnectedAccountEmailJob::dispatch($account->id, [$address], $subject, $html_body);
+        }
+
+        $names = [...$addresses, ...$recipients->map(fn (User $user) => $user->full_name)->all()];
+        $sentence = 'Emailed '.implode(', ', $names)." from {$account->email}";
+        $this->log($automation, $item, $actor, lcfirst($sentence));
+
+        return BoardAutomationActionOutcome::success("{$sentence}.");
+    }
+
+    /**
      * What a communication action would have done, for a test run.
      *
      * @param  array<string, mixed>  $params
@@ -750,7 +793,11 @@ class BoardAutomationActionRunner
             return BoardAutomationActionOutcome::skipped('Found nobody to reach.');
         }
 
-        return BoardAutomationActionOutcome::success($type === BoardAutomation::ACTION_SEND_EMAIL ? "Would email {$names}." : "Would send a Slack message to {$names}.");
+        $sender = $type === BoardAutomation::ACTION_SEND_EMAIL && ! empty($params['external_account_id'])
+            ? ExternalAccount::query()->whereKey((int) $params['external_account_id'])->value('email')
+            : null;
+
+        return BoardAutomationActionOutcome::success($type === BoardAutomation::ACTION_SEND_EMAIL ? "Would email {$names}".($sender ? " from {$sender}" : '').'.' : "Would send a Slack message to {$names}.");
     }
 
     /**
