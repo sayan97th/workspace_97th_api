@@ -195,6 +195,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::put('favorites/{item}', [FavoriteController::class, 'store']);
     Route::delete('favorites/{item}', [FavoriteController::class, 'destroy']);
     Route::get('my-work', [MyWorkController::class, 'index']);
+    Route::get('my-work/boards', [MyWorkController::class, 'boards']);
+    Route::get('my-work/boards/{board_id}/form', [MyWorkController::class, 'form'])->whereNumber('board_id');
+    Route::post('my-work/items', [MyWorkController::class, 'store'])->middleware('throttle:60,1');
     // The account wide Automations center: every automation on the boards the user may open.
     Route::get('automations', [AccountAutomationController::class, 'index']);
     Route::post('automations/bulk', [AccountAutomationController::class, 'bulk'])->middleware('throttle:60,1');

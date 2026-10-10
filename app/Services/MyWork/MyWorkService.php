@@ -8,13 +8,15 @@ use App\Models\BoardItemValue;
 use App\Models\User;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 
 /**
  * monday.com's "My Work": every item, across every board, that has the user
- * in one of its People columns. Each row carries the item's first Status
- * and first Date (or Timeline end) so the page can bucket it by date and
- * edit both inline through the regular item values endpoint.
+ * in one of its People columns. Each row carries the item's first Status,
+ * its Priority, its assignees, its update count and its first Date (or
+ * Timeline end) so the page can bucket it by date and edit Status, Priority
+ * and the date inline through the regular item values endpoint.
  */
 class MyWorkService
 {
@@ -23,6 +25,9 @@ class MyWorkService
 
     /** monday.com's "Done" green. */
     private const DONE_COLOR = '#00c875';
+
+    /** A Status column whose label contains this word is shown as the Priority column. */
+    private const PRIORITY_LABEL = 'priority';
 
     /** Upper bound so a very busy account still gets a fast response. */
     private const MAX_ITEMS = 500;
@@ -45,38 +50,33 @@ class MyWorkService
             ->where('is_archived', false)
             ->whereHas('group', fn ($query) => $query->where('is_archived', false))
             ->whereHas('board', fn ($query) => $query->where('is_archived', false))
+            ->withCount('comments')
             ->with(['values', 'group:id,name,accent_color,board_view_id', 'board:id,label,workspace_id,edit_permission,created_by_id,owner_id', 'board.workspace:id,name,slug,color,mono', 'parent:id,name'])
             ->orderByDesc('updated_at')
             ->limit(self::MAX_ITEMS)
             ->get();
 
         $columns_by_view = $this->columnsByViewAndScope($items);
+        $people_by_id = $this->peopleById($items, $columns_by_view);
         $status_columns = [];
         $level_by_board = [];
 
-        $rows = $items->map(function (BoardItem $item) use ($user, $columns_by_view, &$status_columns, &$level_by_board) {
+        $rows = $items->map(function (BoardItem $item) use ($user, $columns_by_view, $people_by_id, &$status_columns, &$level_by_board) {
             $scope = $item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
             $columns = $columns_by_view[$item->group->board_view_id.':'.$scope] ?? collect();
             $hidden_ids = $this->column_permissions->hiddenColumnIds($item->board_id, $user);
             $columns = $columns->reject(fn (BoardColumn $column) => in_array($column->id, $hidden_ids, true));
             $values = $item->values->keyBy('column_id');
 
-            $status_column = $columns->firstWhere('type', BoardColumn::TYPE_STATUS);
+            $status_like = $columns->where('type', BoardColumn::TYPE_STATUS);
+            $priority_column = $status_like->first(fn (BoardColumn $column) => $this->isPriorityColumn($column));
+            $status_column = $status_like->first(fn (BoardColumn $column) => ! $this->isPriorityColumn($column));
             $date_column = $columns->firstWhere('type', BoardColumn::TYPE_DATE) ?? $columns->firstWhere('type', BoardColumn::TYPE_TIMELINE);
             $checkbox_column = $columns->firstWhere('type', BoardColumn::TYPE_CHECKBOX);
 
-            $status = null;
-            if ($status_column) {
-                $status_columns[(string) $status_column->id] ??= [
-                    'id' => $status_column->id,
-                    'label' => $status_column->label,
-                    'options' => collect($status_column->config['options'] ?? [])
-                        ->filter(fn ($option) => ($option['is_active'] ?? true) !== false)
-                        ->map(fn ($option) => ['id' => (string) $option['id'], 'label' => $option['label'], 'color' => $option['color']])
-                        ->values(),
-                ];
-                $status = $this->resolveStatus($status_column, $values->get($status_column->id)?->value);
-            }
+            $status = $this->registerStatusColumn($status_column, $values, $status_columns);
+            $priority = $this->registerStatusColumn($priority_column, $values, $status_columns);
+            $people = $this->assigneesOf($columns, $values, $user, $people_by_id);
 
             $date = $date_column ? $this->resolveDate($date_column, $values->get($date_column->id)?->value) : null;
             $is_checked = $checkbox_column ? $values->get($checkbox_column->id)?->value === true : false;
@@ -98,7 +98,11 @@ class MyWorkService
                 'group' => ['id' => $item->group->id, 'name' => $item->group->name, 'color' => $item->group->accent_color],
                 'status_column_id' => $status_column?->id,
                 'status' => $status,
-                'date_column' => $date_column ? ['id' => $date_column->id, 'type' => $date_column->type] : null,
+                'priority_column_id' => $priority_column?->id,
+                'priority' => $priority,
+                'people' => $people,
+                'updates_count' => (int) $item->comments_count,
+                'date_column' => $date_column ? ['id' => $date_column->id, 'type' => $date_column->type, 'label' => $date_column->label] : null,
                 'date' => $date,
                 'is_done' => $is_checked || ($status !== null && $this->isDoneStatus($status)),
                 // Every row here is assigned to the user, so even the
@@ -151,11 +155,121 @@ class MyWorkService
 
         return BoardColumn::query()
             ->whereIn('board_view_id', $view_ids)
-            ->whereIn('type', [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE, BoardColumn::TYPE_CHECKBOX])
+            ->whereIn('type', [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_DATE, BoardColumn::TYPE_TIMELINE, BoardColumn::TYPE_CHECKBOX, BoardColumn::TYPE_PEOPLE])
             ->orderBy('position')
             ->get()
             ->groupBy(fn (BoardColumn $column) => $column->board_view_id.':'.$column->scope)
             ->all();
+    }
+
+    /**
+     * Adds a Status like column's options to the response once and returns
+     * the item's current label in it.
+     *
+     * @param  Collection<int|string, BoardItemValue>  $values
+     * @param  array<string, array<string, mixed>>  $status_columns
+     * @return array{id: string, label: string, color: string}|null
+     */
+    private function registerStatusColumn(?BoardColumn $column, Collection $values, array &$status_columns): ?array
+    {
+        if ($column === null) {
+            return null;
+        }
+
+        $status_columns[(string) $column->id] ??= [
+            'id' => $column->id,
+            'label' => $column->label,
+            'options' => collect($column->config['options'] ?? [])
+                ->filter(fn ($option) => ($option['is_active'] ?? true) !== false)
+                ->map(fn ($option) => ['id' => (string) $option['id'], 'label' => $option['label'], 'color' => $option['color']])
+                ->values(),
+        ];
+
+        return $this->resolveStatus($column, $values->get($column->id)?->value);
+    }
+
+    /** A Status column whose label mentions "priority", shown in My Work's Priority column. */
+    public static function isPriorityColumn(BoardColumn $column): bool
+    {
+        return str_contains(strtolower((string) $column->label), self::PRIORITY_LABEL);
+    }
+
+    /**
+     * The people of the People column that assigns the item to `$user`, the
+     * same column that put the item on their My Work, in the order they were
+     * added.
+     *
+     * @param  Collection<int, BoardColumn>  $columns
+     * @param  Collection<int|string, BoardItemValue>  $values
+     * @param  array<int, array<string, mixed>>  $people_by_id
+     * @return array<int, array<string, mixed>>
+     */
+    private function assigneesOf(Collection $columns, Collection $values, User $user, array $people_by_id): array
+    {
+        $assigned_ids = $columns
+            ->where('type', BoardColumn::TYPE_PEOPLE)
+            ->map(fn (BoardColumn $column) => $this->userIdsOf($values->get($column->id)?->value))
+            ->first(fn (array $ids) => in_array($user->id, $ids, true)) ?? [];
+
+        return collect($assigned_ids)
+            ->map(fn (int $id) => $people_by_id[$id] ?? null)
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Every user any of these items assigns, loaded in one query, keyed by id.
+     * Deactivated and deleted accounts are kept so their avatar shows faded.
+     *
+     * @param  EloquentCollection<int, BoardItem>  $items
+     * @param  array<string, Collection<int, BoardColumn>>  $columns_by_view
+     * @return array<int, array<string, mixed>>
+     */
+    private function peopleById(EloquentCollection $items, array $columns_by_view): array
+    {
+        $people_column_ids = collect($columns_by_view)
+            ->flatten(1)
+            ->where('type', BoardColumn::TYPE_PEOPLE)
+            ->pluck('id')
+            ->all();
+
+        $user_ids = $items
+            ->flatMap(fn (BoardItem $item) => $item->values
+                ->whereIn('column_id', $people_column_ids)
+                ->flatMap(fn (BoardItemValue $value) => $this->userIdsOf($value->value)))
+            ->unique()
+            ->values();
+
+        if ($user_ids->isEmpty()) {
+            return [];
+        }
+
+        return User::withTrashed()
+            ->whereIn('id', $user_ids)
+            ->get(['id', 'first_name', 'last_name', 'profile_photo_path', 'is_active', 'deleted_at'])
+            ->mapWithKeys(fn (User $person) => [$person->id => [
+                'id' => $person->id,
+                'full_name' => $person->full_name,
+                'profile_photo_url' => $person->profile_photo_url,
+                'is_deactivated' => $person->is_deactivated,
+            ]])
+            ->all();
+    }
+
+    /**
+     * User ids stored in a People value (a JSON array of ids). Any other
+     * value shape yields nothing.
+     *
+     * @return array<int, int>
+     */
+    private function userIdsOf(mixed $value): array
+    {
+        if (! is_array($value) || ! array_is_list($value)) {
+            return [];
+        }
+
+        return array_values(array_map('intval', array_filter($value, fn ($id) => is_int($id) || (is_string($id) && ctype_digit($id)))));
     }
 
     /**

@@ -3,6 +3,7 @@
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
+use App\Models\BoardItemComment;
 use App\Models\BoardVisit;
 use App\Models\User;
 use App\Models\Workspace;
@@ -162,6 +163,145 @@ test('my work reads the end of a timeline as the due date', function () {
     $this->actingAs($user, 'api')->getJson('/api/my-work')
         ->assertJsonPath('items.0.date.value', '2026-10-09')
         ->assertJsonPath('items.0.date_column.type', 'timeline');
+});
+
+test('my work returns the priority, the assignees and the update count of each item', function () {
+    $user = User::factory()->create(['first_name' => 'Ada', 'last_name' => 'Lovelace']);
+    $teammate = User::factory()->create(['first_name' => 'Alan', 'last_name' => 'Turing']);
+    $board = createPersonalBoard();
+    $group = BoardGroup::factory()->create(['board_id' => $board->id]);
+    $view_id = $group->board_view_id;
+    $people = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view_id, 'type' => BoardColumn::TYPE_PEOPLE, 'position' => 0]);
+    $priority = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view_id,
+        'type' => BoardColumn::TYPE_STATUS,
+        'label' => 'Priority',
+        'position' => 1,
+        'config' => ['options' => [['id' => 'low', 'label' => 'Low', 'color' => '#579bfc']]],
+    ]);
+    $status = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view_id,
+        'type' => BoardColumn::TYPE_STATUS,
+        'label' => 'Status',
+        'position' => 2,
+        'config' => ['options' => [['id' => 'done', 'label' => 'Done', 'color' => '#00c875']]],
+    ]);
+    $item = BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $group->id]);
+    $item->values()->createMany([
+        ['column_id' => $people->id, 'value' => [$user->id, $teammate->id]],
+        ['column_id' => $priority->id, 'value' => 'low'],
+        ['column_id' => $status->id, 'value' => 'done'],
+    ]);
+    BoardItemComment::create(['item_id' => $item->id, 'user_id' => $user->id, 'body' => 'First']);
+
+    $this->actingAs($user, 'api')->getJson('/api/my-work')
+        ->assertOk()
+        ->assertJsonPath('items.0.status_column_id', $status->id)
+        ->assertJsonPath('items.0.status.label', 'Done')
+        ->assertJsonPath('items.0.priority_column_id', $priority->id)
+        ->assertJsonPath('items.0.priority.label', 'Low')
+        ->assertJsonPath('items.0.people.0.full_name', 'Ada Lovelace')
+        ->assertJsonPath('items.0.people.1.full_name', 'Alan Turing')
+        ->assertJsonPath('items.0.updates_count', 1)
+        ->assertJsonCount(1, "status_columns.{$priority->id}.options");
+});
+
+test('my work creates an item on the chosen board, assigned to the user and due on the section date', function () {
+    $user = User::factory()->create();
+    $board = createPersonalBoard(['label' => 'Launch', 'created_by_id' => $user->id]);
+    $group = BoardGroup::factory()->create(['board_id' => $board->id]);
+    $people = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_PEOPLE]);
+    $date = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_DATE]);
+
+    $this->actingAs($user, 'api')->getJson('/api/my-work/boards')
+        ->assertOk()
+        ->assertJsonPath('boards.0.label', 'Launch');
+
+    $this->actingAs($user, 'api')
+        ->postJson('/api/my-work/items', ['board_id' => $board->id, 'name' => 'Draft brief', 'date' => '2026-10-09'])
+        ->assertCreated()
+        ->assertJsonPath('item.name', 'Draft brief')
+        ->assertJsonPath('is_assigned', true);
+
+    $item = BoardItem::where('name', 'Draft brief')->firstOrFail();
+    expect($item->group_id)->toBe($group->id);
+    expect($item->values()->where('column_id', $people->id)->value('value'))->toBe([$user->id]);
+
+    $this->actingAs($user, 'api')->getJson('/api/my-work')
+        ->assertJsonPath('items.0.name', 'Draft brief')
+        ->assertJsonPath('items.0.date.value', '2026-10-09');
+});
+
+test('my work describes a board for the new item dialog and creates the item with the picked group, status and priority', function () {
+    $user = User::factory()->create();
+    $board = createPersonalBoard(['created_by_id' => $user->id]);
+    $first_group = BoardGroup::factory()->create(['board_id' => $board->id, 'name' => 'Issues', 'position' => 0]);
+    $view_id = $first_group->board_view_id;
+    $second_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $view_id, 'name' => 'Backlog', 'position' => 1]);
+    BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view_id, 'type' => BoardColumn::TYPE_PEOPLE, 'label' => 'Assignee', 'position' => 0]);
+    BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view_id, 'type' => BoardColumn::TYPE_TIMELINE, 'label' => 'Timeline', 'position' => 1]);
+    $priority = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view_id,
+        'type' => BoardColumn::TYPE_STATUS,
+        'label' => 'Priority',
+        'position' => 2,
+        'config' => ['options' => [['id' => 'high', 'label' => 'High', 'color' => '#401694']]],
+    ]);
+    $status = BoardColumn::factory()->create([
+        'board_id' => $board->id,
+        'board_view_id' => $view_id,
+        'type' => BoardColumn::TYPE_STATUS,
+        'label' => 'Status',
+        'position' => 3,
+        'config' => ['options' => [['id' => 'working', 'label' => 'Working on it', 'color' => '#fdab3d']]],
+    ]);
+
+    $this->actingAs($user, 'api')->getJson("/api/my-work/boards/{$board->id}/form")
+        ->assertOk()
+        ->assertJsonPath('groups.0.name', 'Issues')
+        ->assertJsonPath('groups.1.name', 'Backlog')
+        ->assertJsonPath('people_column.label', 'Assignee')
+        ->assertJsonPath('date_column.type', BoardColumn::TYPE_TIMELINE)
+        ->assertJsonPath('status_column.options.0.label', 'Working on it')
+        ->assertJsonPath('priority_column.options.0.label', 'High');
+
+    $this->actingAs($user, 'api')
+        ->postJson('/api/my-work/items', [
+            'board_id' => $board->id,
+            'name' => 'Fix login',
+            'date' => '2026-10-09',
+            'group_id' => $second_group->id,
+            'status' => 'working',
+            'priority' => 'high',
+        ])
+        ->assertCreated();
+
+    $item = BoardItem::where('name', 'Fix login')->firstOrFail();
+    expect($item->group_id)->toBe($second_group->id);
+    expect($item->values()->where('column_id', $status->id)->value('value'))->toBe('working');
+    expect($item->values()->where('column_id', $priority->id)->value('value'))->toBe('high');
+
+    $this->actingAs($user, 'api')->getJson('/api/my-work')
+        ->assertJsonPath('items.0.date_column.label', 'Timeline')
+        ->assertJsonPath('items.0.date.value', '2026-10-09');
+
+    $this->actingAs($user, 'api')
+        ->postJson('/api/my-work/items', ['board_id' => $board->id, 'name' => 'Bad pick', 'status' => 'missing'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('status');
+});
+
+test('my work refuses to create an item on a board the user cannot open', function () {
+    $user = User::factory()->create();
+    $board = createPersonalBoard(['board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE]);
+    BoardGroup::factory()->create(['board_id' => $board->id]);
+
+    $this->actingAs($user, 'api')
+        ->postJson('/api/my-work/items', ['board_id' => $board->id, 'name' => 'Sneaky'])
+        ->assertNotFound();
 });
 
 test('my work skips archived items and archived boards', function () {
