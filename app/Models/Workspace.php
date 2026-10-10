@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Concerns\HasRandomBigId;
 use App\Http\Controllers\Workspace\WorkspaceController;
 use App\Services\Workspace\WorkspaceAvatarService;
+use App\Services\Workspace\WorkspaceCoverService;
 use Illuminate\Database\Eloquent\Attributes\Appends;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -33,6 +34,8 @@ use Illuminate\Support\Str;
  * @property string $color
  * @property string|null $avatar_path
  * @property string|null $avatar_thumbnail_path
+ * @property string|null $cover_path
+ * @property int $cover_position_y
  * @property string $product
  * @property string $privacy
  * @property bool $is_home
@@ -44,6 +47,7 @@ use Illuminate\Support\Str;
  * @property Carbon|null $deleted_at
  * @property-read string|null $avatar_url
  * @property-read string|null $avatar_thumbnail_url
+ * @property-read string|null $cover_url
  * @property-read Collection<int, WorkspaceNavigationItem> $navigationItems
  * @property-read Collection<int, WorkspaceNavigationItem> $rootNavigationItems
  * @property-read WorkspaceNavigationItem|null $manageNavigationItem
@@ -51,8 +55,8 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, User> $owners
  * @property-read User|null $creator
  */
-#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'created_by', 'mono', 'color', 'avatar_path', 'avatar_thumbnail_path', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
-#[Appends(['avatar_url', 'avatar_thumbnail_url'])]
+#[Fillable(['name', 'slug', 'invite_code', 'invite_role', 'invite_enabled', 'invite_generated_by', 'created_by', 'mono', 'color', 'avatar_path', 'avatar_thumbnail_path', 'cover_path', 'cover_position_y', 'product', 'privacy', 'is_home', 'is_priority', 'description', 'position'])]
+#[Appends(['avatar_url', 'avatar_thumbnail_url', 'cover_url'])]
 class Workspace extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
@@ -246,6 +250,20 @@ class Workspace extends Model
     }
 
     /**
+     * Banner image shown at the top of Manage Workspace (see
+     * {@see WorkspaceCoverService}), or null when the workspace still uses
+     * the default cover.
+     *
+     * @return Attribute<string|null, never>
+     */
+    protected function coverUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->cover_path ? Storage::disk(config('filesystems.app_disk'))->url($this->cover_path) : null,
+        );
+    }
+
+    /**
      * Get the attributes that should be cast.
      *
      * @return array<string, string>
@@ -257,6 +275,7 @@ class Workspace extends Model
             'is_priority' => 'boolean',
             'invite_enabled' => 'boolean',
             'position' => 'integer',
+            'cover_position_y' => 'integer',
         ];
     }
 

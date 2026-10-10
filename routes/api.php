@@ -99,6 +99,7 @@ use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceAvatarController;
 use App\Http\Controllers\Workspace\WorkspaceController;
+use App\Http\Controllers\Workspace\WorkspaceCoverController;
 use App\Http\Controllers\Workspace\WorkspaceInvitationController;
 use App\Http\Controllers\Workspace\WorkspaceInviteLinkController;
 use App\Http\Controllers\Workspace\WorkspaceMemberController;
@@ -374,6 +375,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::patch('{workspace}', [WorkspaceController::class, 'update']);
         Route::post('{workspace}/avatar', [WorkspaceAvatarController::class, 'store']);
         Route::delete('{workspace}/avatar', [WorkspaceAvatarController::class, 'destroy']);
+        Route::post('{workspace}/cover', [WorkspaceCoverController::class, 'store']);
+        Route::patch('{workspace}/cover', [WorkspaceCoverController::class, 'update']);
+        Route::delete('{workspace}/cover', [WorkspaceCoverController::class, 'destroy']);
         Route::patch('{workspace}/priority', [WorkspaceController::class, 'togglePriority']);
         Route::patch('{workspace}/activate', [WorkspaceController::class, 'activate']);
         Route::delete('{workspace}', [WorkspaceController::class, 'destroy']);
