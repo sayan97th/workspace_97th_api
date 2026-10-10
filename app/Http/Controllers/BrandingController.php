@@ -3,12 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\AccountSetting;
+use App\Support\OrganizationBranding;
 use Illuminate\Http\JsonResponse;
 
 /**
- * The account's public-facing branding (logo, email header) — unlike
- * `Admin\AccountSetting\BrandingController` (which manages it), reading these two URLs is
- * not staff-gated: every signed-in user's top bar needs the account logo, not just admins.
+ * The organization's branding as the rest of the app sees it. Managed at
+ * `/api/admin/organization` (and the older `/admin/account-settings/{logo,email-header}`), but
+ * reading it is not staff gated: every signed in user's app shell needs the corner logo, brand
+ * color and announcement, and the sign in page needs a safe subset before anyone signs in.
  */
 class BrandingController extends Controller
 {
@@ -17,11 +19,14 @@ class BrandingController extends Controller
      */
     public function show(): JsonResponse
     {
-        $settings = AccountSetting::current();
+        return response()->json(OrganizationBranding::forMembers(AccountSetting::current()));
+    }
 
-        return response()->json([
-            'logo_url' => $settings->logo_url,
-            'email_header_url' => $settings->email_header_url,
-        ]);
+    /**
+     * GET /api/public/branding, no authentication.
+     */
+    public function showPublic(): JsonResponse
+    {
+        return response()->json(OrganizationBranding::forSignIn(AccountSetting::current()));
     }
 }

@@ -13,6 +13,8 @@ use App\Http\Controllers\Admin\Content\ContentDirectoryController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\Impersonation\ImpersonationController;
 use App\Http\Controllers\Admin\Invitation\StaffInvitationController as AdminStaffInvitationController;
+use App\Http\Controllers\Admin\Organization\OrganizationAssetController;
+use App\Http\Controllers\Admin\Organization\OrganizationController;
 use App\Http\Controllers\Admin\ProfileField\UserProfileFieldController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\SessionController as AdminSessionController;
@@ -105,6 +107,7 @@ use App\Http\Controllers\Workspace\WorkspaceInviteLinkController;
 use App\Http\Controllers\Workspace\WorkspaceMemberController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Http\Controllers\Workspace\WorkspacePermissionController;
+use App\Models\AccountSetting;
 use Illuminate\Support\Facades\Route;
 
 // ─── Auth routes ────────────────────────────────────────────────────────────
@@ -183,6 +186,8 @@ Route::prefix('public')->group(function () {
     Route::post('automation-webhooks/{token}', [AutomationWebhookController::class, 'receive'])->middleware('throttle:60,1');
     Route::post('forms/{token}/submissions', [PublicFormController::class, 'submit'])->middleware('throttle:10,1');
     Route::post('views/{token}', [PublicSharedViewController::class, 'show'])->middleware('throttle:60,1');
+    // The sign in page's logo, brand color and welcome copy, see `OrganizationBranding::forSignIn()`.
+    Route::get('branding', [PublicBrandingController::class, 'showPublic'])->middleware('throttle:60,1');
 });
 
 Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
@@ -210,8 +215,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // subscribe to private channels, see routes/channels.php.
     Route::post('broadcasting/auth', [BroadcastAuthController::class, 'authenticate']);
 
-    // Account branding (logo, email header) — readable by any authenticated user, not just
-    // staff, since the top bar shows it for everyone. Managed at `/admin/account-settings/*`.
+    // Organization branding (corner logo, favicon, brand color, Help links, announcement), readable
+    // by any authenticated user, not just staff, since the app shell shows it for everyone.
+    // Managed at `/admin/organization`.
     Route::get('branding', [PublicBrandingController::class, 'show']);
 
     // The caller's own account permissions (Administration > Permissions), so the app can hide
@@ -818,6 +824,22 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::patch('advanced', [AdvancedSettingsController::class, 'update']);
                 Route::post('panic-mode', [AdvancedSettingsController::class, 'activatePanicMode']);
                 Route::delete('panic-mode', [AdvancedSettingsController::class, 'deactivatePanicMode']);
+            });
+        });
+
+        // Organization settings (`/admin/organization`): company profile, contact details, brand
+        // color, logos and favicon, sign in page copy and the announcement banner. Same singleton
+        // row as the account settings above, staff may read it, only admins may change it.
+        Route::prefix('organization')->group(function () {
+            Route::get('/', [OrganizationController::class, 'show']);
+
+            Route::middleware('role:super_admin,admin')->group(function () {
+                Route::patch('/', [OrganizationController::class, 'update'])->middleware('throttle:60,1');
+                Route::post('assets/{asset}', [OrganizationAssetController::class, 'store'])
+                    ->whereIn('asset', array_keys(AccountSetting::BRANDING_ASSET_COLUMNS))
+                    ->middleware('throttle:30,1');
+                Route::delete('assets/{asset}', [OrganizationAssetController::class, 'destroy'])
+                    ->whereIn('asset', array_keys(AccountSetting::BRANDING_ASSET_COLUMNS));
             });
         });
 

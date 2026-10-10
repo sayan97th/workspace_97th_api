@@ -51,7 +51,39 @@ use Illuminate\Support\Facades\Storage;
  * @property string $default_first_day_of_week
  * @property array<string, array<string, bool>>|null $account_permissions
  * @property int|null $automation_monthly_action_limit how many automation actions may run per calendar month, null for no limit, see {@see AutomationUsageMeter}
+ * @property string|null $company_legal_name
+ * @property string|null $company_tagline
+ * @property string|null $company_description
+ * @property string|null $company_industry
+ * @property string|null $company_size
+ * @property int|null $company_founded_year
+ * @property string|null $company_website
+ * @property string|null $support_email
+ * @property string|null $support_url
+ * @property string|null $contact_phone
+ * @property string|null $address_line_1
+ * @property string|null $address_line_2
+ * @property string|null $address_city
+ * @property string|null $address_state
+ * @property string|null $address_postal_code
+ * @property string|null $address_country
+ * @property array<string, string>|null $social_links
+ * @property string|null $logo_dark_path
+ * @property string|null $favicon_path
+ * @property string|null $brand_color
+ * @property bool $show_name_in_top_bar
+ * @property string|null $login_headline
+ * @property string|null $login_message
+ * @property bool $announcement_enabled
+ * @property string|null $announcement_message
+ * @property string $announcement_tone
+ * @property string|null $announcement_link_label
+ * @property string|null $announcement_link_url
+ * @property bool $announcement_dismissible
+ * @property Carbon|null $announcement_published_at
  * @property-read string|null $logo_url
+ * @property-read string|null $logo_dark_url
+ * @property-read string|null $favicon_url
  * @property-read string|null $email_header_url
  * @property-read User|null $panicModeActivator
  */
@@ -60,6 +92,14 @@ use Illuminate\Support\Facades\Storage;
     'default_timezone', 'default_language', 'default_date_format', 'default_time_format', 'default_first_day_of_week',
     'account_permissions', 'automation_monthly_action_limit',
     'logo_path', 'email_header_path',
+    'company_legal_name', 'company_tagline', 'company_description', 'company_industry',
+    'company_size', 'company_founded_year', 'company_website',
+    'support_email', 'support_url', 'contact_phone',
+    'address_line_1', 'address_line_2', 'address_city', 'address_state', 'address_postal_code', 'address_country',
+    'social_links', 'logo_dark_path', 'favicon_path', 'brand_color', 'show_name_in_top_bar',
+    'login_headline', 'login_message',
+    'announcement_enabled', 'announcement_message', 'announcement_tone',
+    'announcement_link_label', 'announcement_link_url', 'announcement_dismissible', 'announcement_published_at',
     'two_factor_enforced', 'google_sso_enabled', 'saml_sso_enabled', 'saml_metadata',
     'scim_enabled', 'scim_token', 'guest_approval_enabled', 'approved_domains',
     'ip_restriction_enabled', 'ip_ranges', 'default_product',
@@ -69,6 +109,22 @@ use Illuminate\Support\Facades\Storage;
 #[Appends(['logo_url', 'email_header_url'])]
 class AccountSetting extends Model
 {
+    /**
+     * Organization branding images keyed by the `{asset}` route segment of
+     * `/api/admin/organization/assets/{asset}`, each mapped to the column holding its storage path.
+     */
+    public const BRANDING_ASSET_COLUMNS = [
+        'logo' => 'logo_path',
+        'logo_dark' => 'logo_dark_path',
+        'favicon' => 'favicon_path',
+    ];
+
+    public const SOCIAL_NETWORKS = ['linkedin', 'x', 'facebook', 'instagram', 'youtube'];
+
+    public const ANNOUNCEMENT_TONES = ['info', 'success', 'warning', 'critical'];
+
+    public const COMPANY_SIZES = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001+'];
+
     /**
      * @return array<string, string>
      */
@@ -89,6 +145,12 @@ class AccountSetting extends Model
             'panic_mode_activated_at' => 'datetime',
             'account_permissions' => 'array',
             'automation_monthly_action_limit' => 'integer',
+            'company_founded_year' => 'integer',
+            'social_links' => 'array',
+            'show_name_in_top_bar' => 'boolean',
+            'announcement_enabled' => 'boolean',
+            'announcement_dismissible' => 'boolean',
+            'announcement_published_at' => 'datetime',
         ];
     }
 
@@ -146,5 +208,48 @@ class AccountSetting extends Model
         return Attribute::make(
             get: fn () => $this->email_header_path ? Storage::disk(config('filesystems.app_disk'))->url($this->email_header_path) : null,
         );
+    }
+
+    /**
+     * The logo variant shown while the app runs in dark mode, falls back to the light logo on the client.
+     *
+     * @return Attribute<string|null, never>
+     */
+    protected function logoDarkUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->logo_dark_path ? Storage::disk(config('filesystems.app_disk'))->url($this->logo_dark_path) : null,
+        );
+    }
+
+    /**
+     * @return Attribute<string|null, never>
+     */
+    protected function faviconUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->favicon_path ? Storage::disk(config('filesystems.app_disk'))->url($this->favicon_path) : null,
+        );
+    }
+
+    /**
+     * The announcement banner every signed in user sees, or null while it is turned off or empty.
+     *
+     * @return array{message: string, tone: string, link_label: string|null, link_url: string|null, is_dismissible: bool, published_at: string|null}|null
+     */
+    public function activeAnnouncement(): ?array
+    {
+        if (! $this->announcement_enabled || blank($this->announcement_message)) {
+            return null;
+        }
+
+        return [
+            'message' => $this->announcement_message,
+            'tone' => $this->announcement_tone,
+            'link_label' => $this->announcement_link_label,
+            'link_url' => $this->announcement_link_url,
+            'is_dismissible' => $this->announcement_dismissible,
+            'published_at' => $this->announcement_published_at?->toIso8601String(),
+        ];
     }
 }
