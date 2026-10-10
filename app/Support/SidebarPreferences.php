@@ -6,8 +6,9 @@ namespace App\Support;
  * Shape and defaults of `users.sidebar_preferences`, the personal layout of
  * the workspace sidebar:
  *
- * - `sections`: every personal section (Home, My work, Automations, Favorites, Recent)
- *   in the order the user dragged them to, each one shown or hidden.
+ * - `sections`: every personal section of the app rail (Home, My work, Favorites,
+ *   Automations, Recent) in the order the user dragged them to, each one shown in the
+ *   rail or hidden in its "More" menu.
  * - `collapsed_sections`: the collapsible sections the user folded, plus the
  *   Favorites workspace groups, stored as `favorites_workspace:{id}`.
  *
@@ -16,7 +17,10 @@ namespace App\Support;
  */
 final class SidebarPreferences
 {
-    public const SECTION_KEYS = ['home', 'my_work', 'automations', 'favorites', 'recent'];
+    public const SECTION_KEYS = ['home', 'my_work', 'favorites', 'automations', 'recent'];
+
+    /** Sections that start out in the rail's "More" menu until the user turns them on. */
+    public const DEFAULT_HIDDEN_SECTION_KEYS = ['recent'];
 
     public const COLLAPSED_SECTION_PATTERN = '/^(favorites|recent|favorites_workspace:\d+)$/';
 
@@ -42,7 +46,7 @@ final class SidebarPreferences
 
         foreach (self::SECTION_KEYS as $key) {
             if (! isset($seen[$key])) {
-                $sections[] = ['key' => $key, 'is_visible' => true];
+                $sections[] = ['key' => $key, 'is_visible' => ! in_array($key, self::DEFAULT_HIDDEN_SECTION_KEYS, true)];
             }
         }
 

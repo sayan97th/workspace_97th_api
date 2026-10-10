@@ -26,7 +26,10 @@ test('the profile always returns a complete default sidebar layout', function ()
     $this->actingAs($user, 'api')->getJson('/api/profile')
         ->assertOk()
         ->assertJsonPath('data.sidebar_preferences.sections.0', ['key' => 'home', 'is_visible' => true])
-        ->assertJsonPath('data.sidebar_preferences.sections.2', ['key' => 'automations', 'is_visible' => true])
+        ->assertJsonPath('data.sidebar_preferences.sections.2', ['key' => 'favorites', 'is_visible' => true])
+        ->assertJsonPath('data.sidebar_preferences.sections.3', ['key' => 'automations', 'is_visible' => true])
+        // Recent starts out in the rail's "More" menu.
+        ->assertJsonPath('data.sidebar_preferences.sections.4', ['key' => 'recent', 'is_visible' => false])
         ->assertJsonCount(5, 'data.sidebar_preferences.sections')
         ->assertJsonPath('data.sidebar_preferences.collapsed_sections', []);
 });
@@ -45,8 +48,9 @@ test('section order, visibility and collapse state are saved without touching th
         ->assertJsonPath('user.sidebar_width', 300)
         ->assertJsonPath('user.sidebar_preferences.sections.0.key', 'favorites')
         ->assertJsonPath('user.sidebar_preferences.sections.1', ['key' => 'home', 'is_visible' => false])
-        // Sections left out are appended, still visible.
-        ->assertJsonPath('user.sidebar_preferences.sections.2.key', 'my_work')
+        // Sections left out are appended with their default visibility.
+        ->assertJsonPath('user.sidebar_preferences.sections.2', ['key' => 'my_work', 'is_visible' => true])
+        ->assertJsonPath('user.sidebar_preferences.sections.4', ['key' => 'recent', 'is_visible' => false])
         ->assertJsonPath('user.sidebar_preferences.collapsed_sections', ['recent', 'favorites_workspace:12']);
 
     // Saving only the collapse state keeps the saved order.
