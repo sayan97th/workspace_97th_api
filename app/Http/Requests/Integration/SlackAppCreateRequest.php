@@ -18,6 +18,7 @@ class SlackAppCreateRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'label' => ['sometimes', 'nullable', 'string', 'max:80'],
             'configuration_token' => ['required', 'string', 'max:512', 'starts_with:xoxe.xoxp-', 'regex:/^[A-Za-z0-9.\-]+$/'],
         ];
     }

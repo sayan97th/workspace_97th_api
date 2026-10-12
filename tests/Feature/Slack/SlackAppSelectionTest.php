@@ -40,21 +40,23 @@ function installUrlClientId(object $test, $owner): string
     return $query['client_id'];
 }
 
-test('the production app comes from the environment and its secrets never leak', function () {
+test('the environment app is listed first and its secrets never leak', function () {
     $owner = makeSlackAppAdministrator();
 
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack/app')
         ->assertOk()
         ->assertJsonPath('source', 'environment')
+        ->assertJsonPath('active_key', 'environment')
         ->assertJsonPath('app_name', '97th Floor')
         ->assertJsonPath('app_id', 'APRODUCTION')
         ->assertJsonPath('client_id', '2374960174.1001')
         ->assertJsonPath('redirect_uri', 'https://api.97thfloor.example/api/integrations/slack/callback')
-        ->assertJsonPath('environment_app.is_configured', true)
-        ->assertJsonPath('environment_app.is_active', true)
-        ->assertJsonPath('environment_app.client_secret_hint', '••••et01')
-        ->assertJsonPath('environment_app.has_verification_token', true)
-        ->assertJsonPath('testing_app', null)
+        ->assertJsonCount(1, 'apps')
+        ->assertJsonPath('apps.0.key', 'environment')
+        ->assertJsonPath('apps.0.is_editable', false)
+        ->assertJsonPath('apps.0.is_active', true)
+        ->assertJsonPath('apps.0.client_secret_hint', '••••et01')
+        ->assertJsonPath('apps.0.has_verification_token', true)
         ->assertJsonMissing(['client_secret' => 'productionclientsecret01'])
         ->assertJsonMissing(['verification_token' => 'legacytoken']);
 
@@ -66,34 +68,49 @@ test('the production app comes from the environment and its secrets never leak',
     expect(installUrlClientId($this, $owner))->toBe('2374960174.1001');
 });
 
-test('saving a testing app keeps production in use until an administrator switches', function () {
+test('several apps can be saved and the selected one is used', function () {
     $owner = makeSlackAppAdministrator();
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', [
+    $first = $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/app', [
         'label' => 'Make It Simple',
         'client_id' => '2476073539605.2002',
-        'client_secret' => 'testingclientsecret0002',
+        'client_secret' => 'savedclientsecret0002',
         'signing_secret' => 'c0c1c2c3c4c5c6c7c8c9cacbcccdcecf',
     ])
-        ->assertOk()
+        ->assertCreated()
         ->assertJsonPath('source', 'environment')
-        ->assertJsonPath('testing_app.name', 'Make It Simple')
-        ->assertJsonPath('testing_app.is_active', false)
-        ->assertJsonPath('testing_app.client_id', '2476073539605.2002');
+        ->assertJsonPath('apps.1.name', 'Make It Simple')
+        ->assertJsonPath('apps.1.is_active', false)
+        ->assertJsonPath('apps.1.is_editable', true)
+        ->json('apps.1.key');
+
+    $second = $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/app', [
+        'label' => 'Sandbox',
+        'client_id' => '3333.3003',
+        'client_secret' => 'savedclientsecret0003',
+    ])->assertCreated()->assertJsonCount(3, 'apps')->json('apps.2.key');
 
     expect(installUrlClientId($this, $owner))->toBe('2374960174.1001');
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'database'])
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => $first])
         ->assertOk()
         ->assertJsonPath('source', 'database')
+        ->assertJsonPath('active_key', $first)
         ->assertJsonPath('app_name', 'Make It Simple')
-        ->assertJsonPath('client_id', '2476073539605.2002')
-        ->assertJsonPath('environment_app.is_active', false)
-        ->assertJsonPath('testing_app.is_active', true);
+        ->assertJsonPath('apps.0.is_active', false)
+        ->assertJsonPath('apps.1.is_active', true);
 
     expect(installUrlClientId($this, $owner))->toBe('2476073539605.2002');
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'environment'])
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => $second])
+        ->assertOk()
+        ->assertJsonPath('apps.1.is_active', false)
+        ->assertJsonPath('apps.2.is_active', true);
+
+    expect(installUrlClientId($this, $owner))->toBe('3333.3003')
+        ->and(SlackAppSetting::query()->where('is_active', true)->count())->toBe(1);
+
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => 'environment'])
         ->assertOk()
         ->assertJsonPath('source', 'environment');
 
@@ -103,65 +120,66 @@ test('saving a testing app keeps production in use until an administrator switch
 
 test('switching apps activates the newest workspace installed with that app', function () {
     $owner = makeSlackAppAdministrator();
-    saveSlackAppCredentials(['app_id' => 'ATESTING', 'label' => 'Make It Simple']);
+    $setting = saveSlackAppCredentials(['app_id' => 'ASAVED', 'label' => 'Make It Simple']);
 
-    $production = SlackInstallation::create(['team_id' => 'T97', 'team_name' => '97th Floor', 'app_id' => 'APRODUCTION', 'bot_token' => 'xoxb-97']);
-    $testing = SlackInstallation::create(['team_id' => 'TMIS', 'team_name' => 'Make It Simple', 'app_id' => 'ATESTING', 'bot_token' => 'xoxb-mis']);
+    $environment_workspace = SlackInstallation::create(['team_id' => 'T97', 'team_name' => '97th Floor', 'app_id' => 'APRODUCTION', 'bot_token' => 'xoxb-97']);
+    $saved_workspace = SlackInstallation::create(['team_id' => 'TMIS', 'team_name' => 'Make It Simple', 'app_id' => 'ASAVED', 'bot_token' => 'xoxb-mis']);
 
-    expect($production->fresh()->is_active)->toBeTrue();
+    expect($environment_workspace->fresh()->is_active)->toBeTrue();
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'database'])
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => (string) $setting->id])
         ->assertOk()
         ->assertJsonPath('message', 'Slack now uses the Make It Simple app and the Make It Simple workspace.');
 
-    expect($testing->fresh()->is_active)->toBeTrue()->and($production->fresh()->is_active)->toBeFalse();
+    expect($saved_workspace->fresh()->is_active)->toBeTrue()->and($environment_workspace->fresh()->is_active)->toBeFalse();
 
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack/workspaces')
         ->assertJsonPath('data.0.team_id', 'TMIS')
-        ->assertJsonPath('data.0.app_source', 'database')
-        ->assertJsonPath('data.1.app_source', 'environment');
+        ->assertJsonPath('data.0.app', ['key' => (string) $setting->id, 'name' => 'Make It Simple'])
+        ->assertJsonPath('data.1.app', ['key' => 'environment', 'name' => '97th Floor']);
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'environment'])->assertOk();
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => 'environment'])->assertOk();
 
-    expect($production->fresh()->is_active)->toBeTrue();
+    expect($environment_workspace->fresh()->is_active)->toBeTrue();
 });
 
-test('switching to an app that is not set up is refused', function () {
+test('selecting an app that is not set up is refused', function () {
     $owner = makeSlackAppAdministrator();
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'database'])
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => '999'])
         ->assertUnprocessable()
-        ->assertJsonPath('code', 'testing_app_missing');
+        ->assertJsonPath('code', 'app_not_found');
 
     config(['services.slack.client_id' => null, 'services.slack.client_secret' => null]);
     saveSlackAppCredentials();
 
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack/app')->assertJsonPath('source', 'database');
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'environment'])
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => 'environment'])
         ->assertUnprocessable()
         ->assertJsonPath('code', 'environment_app_missing');
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'other'])->assertJsonValidationErrors(['source']);
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => 'other'])->assertJsonValidationErrors(['app']);
 });
 
-test('removing the testing app falls back to the production app', function () {
+test('removing the app in use falls back to the environment app', function () {
     $owner = makeSlackAppAdministrator();
-    saveSlackAppCredentials(['is_active' => true]);
+    $setting = saveSlackAppCredentials(['is_active' => true, 'label' => 'Make It Simple']);
 
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack/app')->assertJsonPath('source', 'database');
-    $this->actingAs($owner, 'api')->deleteJson('/api/integrations/slack/app')
+    $this->actingAs($owner, 'api')->deleteJson("/api/integrations/slack/app/{$setting->id}")
         ->assertOk()
+        ->assertJsonPath('message', 'Make It Simple removed.')
         ->assertJsonPath('source', 'environment')
-        ->assertJsonPath('testing_app', null);
+        ->assertJsonCount(1, 'apps');
 });
 
-test('only administrators switch the slack app', function () {
+test('only administrators select the slack app', function () {
     $staff = User::factory()->create();
     $staff->assignRole('staff');
 
-    $this->actingAs($staff, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'environment'])->assertForbidden();
+    $this->actingAs($staff, 'api')->putJson('/api/integrations/slack/app/active', ['app' => 'environment'])->assertForbidden();
 });
 
-test('events signed by either app are accepted', function () {
+test('events signed by any known app are accepted', function () {
     saveSlackAppCredentials(['signing_secret' => 'c0c1c2c3c4c5c6c7c8c9cacbcccdcecf']);
     $body = json_encode(['type' => 'url_verification', 'challenge' => 'abc']);
 
@@ -181,15 +199,15 @@ test('events signed by either app are accepted', function () {
     $send('d0d1d2d3d4d5d6d7d8d9dadbdcdddedf')->assertUnauthorized();
 });
 
-test('an authorization started with one app cannot finish after switching to the other', function () {
+test('an authorization started with one app cannot finish after switching to another', function () {
     $owner = makeSlackAppAdministrator();
-    saveSlackAppCredentials();
+    $setting = saveSlackAppCredentials();
     Http::fake();
 
     $url = $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/install-url')->json('url');
     parse_str(parse_url($url, PHP_URL_QUERY), $query);
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['source' => 'database'])->assertOk();
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => (string) $setting->id])->assertOk();
 
     $this->get('/api/integrations/slack/callback?code=abc&state='.$query['state'])->assertRedirect();
 
@@ -197,11 +215,11 @@ test('an authorization started with one app cannot finish after switching to the
     expect(SlackInstallation::count())->toBe(0);
 });
 
-test('an install with the testing app remembers its app id', function () {
+test('an install with a saved app remembers its app id', function () {
     $owner = makeSlackAppAdministrator();
-    saveSlackAppCredentials(['is_active' => true]);
+    $setting = saveSlackAppCredentials(['is_active' => true]);
     Http::fake([
-        'slack.com/api/oauth.v2.access' => Http::response(['ok' => true, 'app_id' => 'ANEWTEST', 'access_token' => 'xoxb-new', 'scope' => implode(',', SlackService::BOT_SCOPES), 'team' => ['id' => 'TMIS', 'name' => 'Make It Simple'], 'bot_user_id' => 'UBOT']),
+        'slack.com/api/oauth.v2.access' => Http::response(['ok' => true, 'app_id' => 'ANEWAPP', 'access_token' => 'xoxb-new', 'scope' => implode(',', SlackService::BOT_SCOPES), 'team' => ['id' => 'TMIS', 'name' => 'Make It Simple'], 'bot_user_id' => 'UBOT']),
         'slack.com/api/*' => Http::response(['ok' => true, 'members' => []]),
     ]);
 
@@ -209,6 +227,6 @@ test('an install with the testing app remembers its app id', function () {
     parse_str(parse_url($url, PHP_URL_QUERY), $query);
     $this->get('/api/integrations/slack/callback?code=abc&state='.$query['state'])->assertRedirect();
 
-    expect(SlackAppSetting::current()->app_id)->toBe('ANEWTEST')
-        ->and(SlackInstallation::first()->app_id)->toBe('ANEWTEST');
+    expect($setting->fresh()->app_id)->toBe('ANEWAPP')
+        ->and(SlackInstallation::first()->app_id)->toBe('ANEWAPP');
 });

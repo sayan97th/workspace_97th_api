@@ -138,7 +138,7 @@ test('members cannot manage workspaces or app credentials', function () {
     $this->actingAs($member, 'api')->deleteJson("/api/integrations/slack/workspaces/{$installation->id}")->assertForbidden();
     $this->actingAs($member, 'api')->postJson('/api/integrations/slack/match-members')->assertForbidden();
     $this->actingAs($member, 'api')->getJson('/api/integrations/slack/app')->assertForbidden();
-    $this->actingAs($member, 'api')->putJson('/api/integrations/slack/app', ['client_id' => '1.2'])->assertForbidden();
+    $this->actingAs($member, 'api')->postJson('/api/integrations/slack/app', ['client_id' => '1.2'])->assertForbidden();
 });
 
 test('member links are kept per workspace so switching back needs no new sign in', function () {
@@ -269,7 +269,7 @@ test('installing a workspace matches members by email right away', function () {
     expect($amanda->slackLink()->first()->slack_user_id)->toBe('UAMANDA');
 });
 
-test('administrators change the slack app from the site and secrets never leak', function () {
+test('administrators add another slack app, select it and secrets never leak', function () {
     $owner = makeWorkspaceOwner();
 
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack/app')
@@ -278,69 +278,80 @@ test('administrators change the slack app from the site and secrets never leak',
         ->assertJsonPath('client_id', '111.222')
         ->assertJsonMissing(['client_secret' => 'firstappsecret0001']);
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', [
+    $response = $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/app', [
+        'label' => 'Second app',
         'client_id' => '999.888',
         'client_secret' => 'savedclientsecret0001',
         'signing_secret' => 'f0e1d2c3b4a5968778695a4b3c2d1e0f',
     ])
-        ->assertOk()
-        ->assertJsonPath('client_id', '999.888')
-        ->assertJsonPath('client_secret_hint', '••••0001')
+        ->assertCreated()
+        ->assertJsonPath('apps.2.name', 'Second app')
+        ->assertJsonPath('apps.2.client_id', '999.888')
+        ->assertJsonPath('apps.2.client_secret_hint', '••••0001')
+        ->assertJsonPath('apps.2.is_active', false)
         ->assertJsonMissing(['client_secret' => 'savedclientsecret0001']);
 
-    expect(DB::table('slack_app_settings')->value('client_secret'))->not->toBe('savedclientsecret0001')
-        ->and(SlackAppSetting::count())->toBe(1);
+    expect(DB::table('slack_app_settings')->where('client_id', '999.888')->value('client_secret'))->not->toBe('savedclientsecret0001')
+        ->and(SlackAppSetting::count())->toBe(2);
+
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/active', ['app' => $response->json('apps.2.key')])
+        ->assertOk()
+        ->assertJsonPath('client_id', '999.888')
+        ->assertJsonPath('apps.1.is_active', false)
+        ->assertJsonPath('apps.2.is_active', true);
 
     $url = $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/install-url')->json('url');
     parse_str(parse_url($url, PHP_URL_QUERY), $query);
     expect($query['client_id'])->toBe('999.888');
 
-    $this->assertDatabaseHas('audit_logs', ['event' => 'slack.app_credentials_updated', 'user_id' => $owner->id]);
+    $this->assertDatabaseHas('audit_logs', ['event' => 'slack.app_credentials_created', 'user_id' => $owner->id]);
 });
 
 test('a blank secret keeps the saved one only for the same slack app', function () {
     $owner = makeWorkspaceOwner();
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', ['client_id' => '999.888', 'client_secret' => 'savedclientsecret0001'])->assertOk();
+    $setting = SlackAppSetting::current();
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', [
-        'client_id' => '999.888',
+    $this->actingAs($owner, 'api')->putJson("/api/integrations/slack/app/{$setting->id}", [
+        'client_id' => '111.222',
         'redirect_uri' => 'https://tunnel.example.com/api/integrations/slack/callback',
     ])->assertOk()->assertJsonPath('redirect_uri', 'https://tunnel.example.com/api/integrations/slack/callback');
 
-    expect(SlackAppSetting::current()->client_secret)->toBe('savedclientsecret0001');
+    expect($setting->fresh()->client_secret)->toBe('firstappsecret0001');
 
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', ['client_id' => '555.444'])
+    $this->actingAs($owner, 'api')->putJson("/api/integrations/slack/app/{$setting->id}", ['client_id' => '555.444'])
         ->assertUnprocessable()
         ->assertJsonPath('message', 'Enter the client secret of this Slack app.');
 });
 
 test('invalid app credentials are rejected', function () {
-    $this->actingAs(makeWorkspaceOwner(), 'api')->putJson('/api/integrations/slack/app', [
+    $this->actingAs(makeWorkspaceOwner(), 'api')->postJson('/api/integrations/slack/app', [
         'client_id' => 'not-a-client-id',
         'client_secret' => 'has spaces in it!',
         'redirect_uri' => 'https://evil.example/phish',
-    ])->assertJsonValidationErrors(['client_id', 'client_secret', 'redirect_uri']);
+    ])->assertJsonValidationErrors(['label', 'client_id', 'client_secret', 'redirect_uri']);
 });
 
-test('without a testing app or environment app slack is not configured', function () {
+test('without a saved app or environment app slack is not configured', function () {
     $owner = makeWorkspaceOwner();
 
-    $this->actingAs($owner, 'api')->deleteJson('/api/integrations/slack/app')
+    $this->actingAs($owner, 'api')->deleteJson('/api/integrations/slack/app/'.SlackAppSetting::current()->id)
         ->assertOk()
         ->assertJsonPath('source', 'none')
         ->assertJsonPath('is_configured', false)
         ->assertJsonPath('client_id', null)
-        ->assertJsonPath('testing_app', null);
+        ->assertJsonCount(1, 'apps')
+        ->assertJsonPath('apps.0.key', 'environment')
+        ->assertJsonPath('apps.0.is_configured', false);
 
     $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/install-url')->assertStatus(503);
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack')->assertJsonPath('is_configured', false);
 });
 
-test('events are verified with the signing secret saved in administration only', function () {
+test('events are verified with the signing secrets of the known slack apps only', function () {
     $owner = makeWorkspaceOwner();
     $new_secret = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
-    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app', [
-        'client_id' => '999.888', 'client_secret' => 'savedclientsecret0001', 'signing_secret' => $new_secret,
+    $this->actingAs($owner, 'api')->putJson('/api/integrations/slack/app/'.SlackAppSetting::current()->id, [
+        'client_id' => '111.222', 'signing_secret' => $new_secret,
     ])->assertOk();
 
     $body = json_encode(['type' => 'url_verification', 'challenge' => 'abc']);
@@ -374,17 +385,20 @@ test('administrators and the account owner set up the slack app, members and sta
         ->assertJsonPath('needs_setup', true)
         ->assertJsonPath('setup_path', '/administration?section=slack');
     $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/app')->assertOk()->assertJsonPath('is_configured', false);
-    $this->actingAs($admin, 'api')->putJson('/api/integrations/slack/app', [
+    $this->actingAs($admin, 'api')->postJson('/api/integrations/slack/app', [
+        'label' => 'Make It Simple',
         'client_id' => '111.222',
         'client_secret' => 'adminclientsecret1234',
         'signing_secret' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
-    ])->assertOk()->assertJsonPath('is_configured', true);
-    $this->assertDatabaseHas('audit_logs', ['event' => 'slack.app_credentials_updated', 'user_id' => $admin->id]);
+    ])->assertCreated()->assertJsonPath('is_configured', true);
+    $this->assertDatabaseHas('audit_logs', ['event' => 'slack.app_credentials_created', 'user_id' => $admin->id]);
 
     $this->actingAs($staff, 'api')->getJson('/api/integrations/slack')->assertJsonPath('can_configure_app', false);
     $this->actingAs($staff, 'api')->getJson('/api/integrations/slack/app')->assertForbidden();
-    $this->actingAs($staff, 'api')->putJson('/api/integrations/slack/app', ['client_id' => '1.2'])->assertForbidden();
-    $this->actingAs($staff, 'api')->deleteJson('/api/integrations/slack/app')->assertForbidden();
+    $setting_id = SlackAppSetting::current()->id;
+    $this->actingAs($staff, 'api')->postJson('/api/integrations/slack/app', ['client_id' => '1.2'])->assertForbidden();
+    $this->actingAs($staff, 'api')->putJson("/api/integrations/slack/app/{$setting_id}", ['client_id' => '1.2'])->assertForbidden();
+    $this->actingAs($staff, 'api')->deleteJson("/api/integrations/slack/app/{$setting_id}")->assertForbidden();
 
     $this->actingAs(makeWorkspaceOwner(), 'api')->getJson('/api/integrations/slack')->assertJsonPath('can_configure_app', true);
 });

@@ -330,13 +330,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('diagnostics/slack-members', [SlackNotificationTestController::class, 'slackMembers'])->middleware('throttle:30,1');
             Route::post('diagnostics/notification-tests/{test}', [SlackNotificationTestController::class, 'run'])->middleware('throttle:40,1');
 
-            // The production Slack app comes from the API environment, the testing app is saved here,
-            // and an administrator switches between them. Members only ever use "Connect my Slack".
+            // The Slack app set in the API environment plus any apps saved here, an administrator
+            // selects the one in use. Members only ever use "Connect my Slack".
             Route::get('app', [SlackAppCredentialsController::class, 'show']);
             Route::put('app/active', [SlackAppCredentialsController::class, 'select'])->middleware('throttle:20,1');
             Route::post('app/create', [SlackAppCredentialsController::class, 'create'])->middleware('throttle:10,1');
-            Route::put('app', [SlackAppCredentialsController::class, 'update'])->middleware('throttle:20,1');
-            Route::delete('app', [SlackAppCredentialsController::class, 'destroy']);
+            Route::post('app', [SlackAppCredentialsController::class, 'store'])->middleware('throttle:20,1');
+            Route::put('app/{slack_app}', [SlackAppCredentialsController::class, 'update'])->whereNumber('slack_app')->middleware('throttle:20,1');
+            Route::delete('app/{slack_app}', [SlackAppCredentialsController::class, 'destroy'])->whereNumber('slack_app');
         });
     });
 

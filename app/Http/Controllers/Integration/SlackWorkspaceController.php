@@ -162,8 +162,8 @@ class SlackWorkspaceController extends Controller
                 'team_name' => $installation->team_name,
                 'team_url' => $installation->team_url,
                 'is_active' => $installation->is_active,
-                // Which Slack app installed it, `environment` (production) or `database` (testing).
-                'app_source' => $this->credentials->sourceOfAppId($installation->app_id),
+                // Which Slack app installed it, `environment` or a saved app's id, with its name.
+                'app' => $this->credentials->appForAppId($installation->app_id),
                 'connected_at' => $installation->created_at,
                 'updated_at' => $installation->updated_at,
                 'connected_by' => $installation->installedBy?->full_name,

@@ -9,10 +9,9 @@ return new class extends Migration
     /**
      * Run the migrations.
      *
-     * The production Slack app now comes from the API environment (SLACK_* variables) and the
-     * saved row becomes the testing app. `label` names it on the administration page, for
-     * example "Make It Simple", and `is_active` is whether the site uses it instead of the
-     * production app.
+     * The 97th Floor Slack app now comes from the API environment (SLACK_* variables) and any
+     * number of other apps can be saved next to it. `label` names a saved app on the
+     * administration page, for example "Make It Simple", and `is_active` marks the selected one.
      */
     public function up(): void
     {

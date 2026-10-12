@@ -24,7 +24,7 @@ class SlackAppProvisioner
     /**
      * @throws SlackException
      */
-    public function createApp(string $configuration_token, User $actor): SlackAppSetting
+    public function createApp(string $configuration_token, ?string $label, User $actor): SlackAppSetting
     {
         $payload = $this->client->createAppFromManifest($configuration_token, $this->credentials->manifest());
 
@@ -37,6 +37,6 @@ class SlackAppProvisioner
             throw new SlackException('invalid_response', 'Slack did not return the new app credentials.');
         }
 
-        return $this->credentials->storeCreatedApp($app_id, $client_id, $client_secret, is_string($signing_secret) ? $signing_secret : null, $actor);
+        return $this->credentials->storeCreatedApp($app_id, $client_id, $client_secret, is_string($signing_secret) ? $signing_secret : null, $label, $actor);
     }
 }

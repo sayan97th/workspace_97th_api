@@ -99,7 +99,7 @@ class SlackService
     ) {}
 
     /**
-     * Whether a Slack app is set up, the production app from the environment or the testing app.
+     * Whether a Slack app is in use, the one from the environment or one saved from Administration.
      */
     public function isConfigured(): bool
     {
@@ -411,15 +411,16 @@ class SlackService
     }
 
     /**
-     * Switches between the production and the testing Slack app. A bot token only works with the
-     * app that installed it for OAuth flows, so the active workspace follows the app: the newest
-     * workspace installed with the chosen app becomes active, when there is one. Returns it.
+     * Selects the Slack app the integration uses, `environment` or a saved app's id. OAuth flows
+     * only work for workspaces installed with the app in use, so the active workspace follows the
+     * app: the newest workspace installed with the chosen app becomes active, when there is one.
+     * Returns the active workspace.
      *
      * @throws SlackException
      */
-    public function useApp(string $source, User $actor): ?SlackInstallation
+    public function useApp(string $app_key, User $actor): ?SlackInstallation
     {
-        $this->credentials->useApp($source, $actor);
+        $this->credentials->useApp($app_key, $actor);
 
         $app_id = $this->credentials->appId();
         $current = $this->installation();

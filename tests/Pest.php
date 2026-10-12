@@ -52,7 +52,7 @@ function something()
 
 /**
  * Saves the Slack app credentials the way an administrator does from Administration >
- * Integrations, the only place the Slack integration reads them from.
+ * Integrations > Slack, replacing any saved app. Tests run without the SLACK_* environment app.
  */
 function saveSlackAppCredentials(array $overrides = []): SlackAppSetting
 {

@@ -12,7 +12,7 @@ class SlackErrorMessage
     public static function describe(SlackException $exception): string
     {
         return match ($exception->error_code) {
-            'not_configured' => 'Slack is not set up yet. Ask an administrator to add the Slack app to the server, or to save a testing app in Administration > Integrations > Slack.',
+            'not_configured' => 'Slack is not set up yet. Ask an administrator to add the Slack app to the server, or to add Slack app credentials in Administration > Integrations > Slack.',
             'client_secret_required' => 'Enter the client secret of this Slack app.',
             'not_installed' => 'Slack is not connected to this account yet. An administrator connects a workspace in Administration > Integrations > Slack.',
             'not_linked' => 'Connect your Slack account first.',
@@ -27,7 +27,7 @@ class SlackErrorMessage
             'missing_scope' => 'The Slack app is missing a permission. Use "Reconnect" on the workspace in Administration > Integrations > Slack to grant it.',
             'time_in_past', 'time_too_far' => 'Slack did not accept the time the message was scheduled for.',
             'cant_update_message', 'message_not_found' => 'Slack did not let the app edit that message.',
-            'upload_failed', 'environment_app_missing', 'testing_app_missing', 'app_changed' => $exception->getMessage(),
+            'upload_failed', 'environment_app_missing', 'app_not_found', 'app_changed' => $exception->getMessage(),
             default => $exception->isTokenInvalid()
                 ? 'The Slack connection is no longer valid. Reconnect the workspace from Administration > Integrations > Slack.'
                 : "Slack returned an error ({$exception->error_code}).",

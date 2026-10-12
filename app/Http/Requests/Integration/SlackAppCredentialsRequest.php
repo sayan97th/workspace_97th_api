@@ -11,8 +11,8 @@ class SlackAppCredentialsRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * The testing Slack app, for example the Make It Simple app. The values come from the Slack
-     * app's "Basic Information" page, `label` is how the administration page names it. Both secrets may be left
+     * A saved Slack app, for example the Make It Simple app. The values come from the Slack app's
+     * "Basic Information" page, `label` is how the administration page names it, required for a new app. Both secrets may be left
      * blank to keep the saved ones, see {@see SlackAppCredentials::save()}.
      *
      * @return array<string, ValidationRule|array<mixed>|string>
@@ -20,7 +20,7 @@ class SlackAppCredentialsRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'label' => ['sometimes', 'nullable', 'string', 'max:80'],
+            'label' => [$this->isMethod('post') ? 'required' : 'sometimes', 'string', 'max:80'],
             'client_id' => ['required', 'string', 'max:64', 'regex:/^\d+\.\d+$/'],
             'client_secret' => ['sometimes', 'nullable', 'string', 'min:16', 'max:128', 'regex:/^[A-Za-z0-9]+$/'],
             'signing_secret' => ['sometimes', 'nullable', 'string', 'min:16', 'max:128', 'regex:/^[A-Za-z0-9]+$/'],

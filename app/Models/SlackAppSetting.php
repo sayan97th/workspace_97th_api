@@ -10,10 +10,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
- * The testing Slack app an administrator saved from Administration > Integrations > Slack, for
- * example the Make It Simple app, so tests never reach the production 97th Floor workspace. The
- * production app itself lives in the API environment. Both secrets are encrypted at rest and
- * never serialized, see {@see SlackAppCredentials} for which app is used.
+ * A Slack app an administrator saved from Administration > Integrations > Slack, for example the
+ * Make It Simple app. Several can be saved next to the app in the API environment, `is_active`
+ * marks the selected one. Both secrets are encrypted at rest and never serialized, see
+ * {@see SlackAppCredentials} for which app is used.
  *
  * @property int $id
  * @property string|null $app_id
@@ -33,11 +33,12 @@ use Illuminate\Support\Carbon;
 class SlackAppSetting extends Model
 {
     /**
-     * The single testing app row, or null when none was saved.
+     * The selected saved app, or the first one saved when none is selected. Whether a saved app is
+     * in use at all also depends on the environment, see {@see SlackAppCredentials::activeSetting()}.
      */
     public static function current(): ?self
     {
-        return static::query()->latest('id')->first();
+        return static::query()->orderByDesc('is_active')->oldest('id')->first();
     }
 
     /**
