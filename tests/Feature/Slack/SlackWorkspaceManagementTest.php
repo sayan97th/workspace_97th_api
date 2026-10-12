@@ -322,15 +322,15 @@ test('invalid app credentials are rejected', function () {
     ])->assertJsonValidationErrors(['client_id', 'client_secret', 'redirect_uri']);
 });
 
-test('without saved credentials slack is not configured, whatever the environment holds', function () {
-    config(['services.slack.client_id' => '111.222', 'services.slack.client_secret' => 'environmentsecret0001']);
+test('without a testing app or environment app slack is not configured', function () {
     $owner = makeWorkspaceOwner();
 
     $this->actingAs($owner, 'api')->deleteJson('/api/integrations/slack/app')
         ->assertOk()
         ->assertJsonPath('source', 'none')
         ->assertJsonPath('is_configured', false)
-        ->assertJsonPath('client_id', null);
+        ->assertJsonPath('client_id', null)
+        ->assertJsonPath('testing_app', null);
 
     $this->actingAs($owner, 'api')->postJson('/api/integrations/slack/install-url')->assertStatus(503);
     $this->actingAs($owner, 'api')->getJson('/api/integrations/slack')->assertJsonPath('is_configured', false);

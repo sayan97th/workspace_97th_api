@@ -330,9 +330,10 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('diagnostics/slack-members', [SlackNotificationTestController::class, 'slackMembers'])->middleware('throttle:30,1');
             Route::post('diagnostics/notification-tests/{test}', [SlackNotificationTestController::class, 'run'])->middleware('throttle:40,1');
 
-            // The Slack app itself is a one time setup done from Administration > Integrations > Slack
-            // by an administrator or the account owner. Members only ever use "Connect my Slack".
+            // The production Slack app comes from the API environment, the testing app is saved here,
+            // and an administrator switches between them. Members only ever use "Connect my Slack".
             Route::get('app', [SlackAppCredentialsController::class, 'show']);
+            Route::put('app/active', [SlackAppCredentialsController::class, 'select'])->middleware('throttle:20,1');
             Route::post('app/create', [SlackAppCredentialsController::class, 'create'])->middleware('throttle:10,1');
             Route::put('app', [SlackAppCredentialsController::class, 'update'])->middleware('throttle:20,1');
             Route::delete('app', [SlackAppCredentialsController::class, 'destroy']);

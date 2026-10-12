@@ -44,7 +44,9 @@ class SlackStatus
             'link_method' => $this->slack_service->linkMethod(),
             // The Slack app is a one time setup done by an administrator or the account owner.
             'can_configure_app' => $can_manage,
+            // `environment` is the production 97th Floor app, `database` the testing app.
             'credentials_source' => $this->credentials->source(),
+            'app_name' => $this->credentials->appName(),
             'workspaces_count' => SlackInstallation::count(),
             'workspace' => $installation ? [
                 'id' => $installation->id,

@@ -80,6 +80,7 @@ class SlackDiagnosticsService
                 'redirect_uri' => $this->credentials->redirectUri(),
                 'events_url' => $this->credentials->eventsUrl(),
                 'credentials_source' => $this->credentials->source(),
+                'app_name' => $this->credentials->appName(),
                 'bot_scopes' => SlackService::BOT_SCOPES,
                 'user_scopes' => SlackService::USER_SCOPES,
             ],
@@ -172,7 +173,7 @@ class SlackDiagnosticsService
         $label = 'Client ID and secret are set';
 
         if (! $is_configured) {
-            return $this->result('credentials', $label, self::STATUS_FAILED, 'Add the Slack app credentials in Administration > Integrations > Slack.');
+            return $this->result('credentials', $label, self::STATUS_FAILED, 'Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in the API .env file for the production app, or save a testing app in Administration > Integrations > Slack.');
         }
 
         if (! preg_match('/^\d+\.\d+$/', (string) $this->credentials->clientId())) {
@@ -193,11 +194,11 @@ class SlackDiagnosticsService
         $redirect_uri = $this->credentials->redirectUri();
 
         if (! filter_var($redirect_uri, FILTER_VALIDATE_URL)) {
-            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Set it in Administration > Integrations > Slack.');
+            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Fix SLACK_REDIRECT_URI in the API .env file, or the testing app redirect URL in Administration > Integrations > Slack.');
         }
 
         if (parse_url($redirect_uri, PHP_URL_SCHEME) !== 'https') {
-            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set it as the redirect URL in Administration > Integrations > Slack and add that URL in the Slack app.');
+            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set it as SLACK_REDIRECT_URI (production app) or as the testing app redirect URL, and add that URL in the Slack app.');
         }
 
         return $this->result('redirect_uri', $label, self::STATUS_PASSED, 'Make sure this exact URL is listed under OAuth & Permissions in the Slack app.');
@@ -212,7 +213,7 @@ class SlackDiagnosticsService
         $signing_secret = (string) $this->credentials->signingSecret();
 
         if ($signing_secret === '') {
-            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Add the signing secret in Administration > Integrations > Slack.');
+            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Set SLACK_SIGNING_SECRET in the API .env file for the production app, or add it to the testing app in Administration > Integrations > Slack.');
         }
 
         if (! preg_match('/^[a-f0-9]{32}$/', $signing_secret)) {

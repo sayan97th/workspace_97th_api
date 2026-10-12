@@ -47,4 +47,17 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI'),
     ],
 
+    // The 97th Floor Slack app, the production app. Administration > Integrations > Slack can
+    // switch to a testing app saved in the database, see App\Services\Slack\SlackAppCredentials.
+    // The verification token is Slack's legacy check, requests are verified with the signing secret.
+    'slack' => [
+        'app_name' => env('SLACK_APP_NAME', '97th Floor'),
+        'app_id' => env('SLACK_APP_ID'),
+        'client_id' => env('SLACK_CLIENT_ID'),
+        'client_secret' => env('SLACK_CLIENT_SECRET'),
+        'signing_secret' => env('SLACK_SIGNING_SECRET'),
+        'verification_token' => env('SLACK_VERIFICATION_TOKEN'),
+        'redirect_uri' => env('SLACK_REDIRECT_URI'),
+    ],
+
 ];

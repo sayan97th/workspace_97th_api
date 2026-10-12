@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\Integration\Concerns\RespondsWithSlackErrors;
 use App\Models\BoardAutomation;
 use App\Models\SlackInstallation;
+use App\Services\Slack\SlackAppCredentials;
 use App\Services\Slack\SlackException;
 use App\Services\Slack\SlackService;
 use App\Services\Slack\SlackStatus;
@@ -28,6 +29,7 @@ class SlackWorkspaceController extends Controller
     public function __construct(
         private readonly SlackService $slack_service,
         private readonly SlackStatus $slack_status,
+        private readonly SlackAppCredentials $credentials,
     ) {}
 
     /**
@@ -160,6 +162,8 @@ class SlackWorkspaceController extends Controller
                 'team_name' => $installation->team_name,
                 'team_url' => $installation->team_url,
                 'is_active' => $installation->is_active,
+                // Which Slack app installed it, `environment` (production) or `database` (testing).
+                'app_source' => $this->credentials->sourceOfAppId($installation->app_id),
                 'connected_at' => $installation->created_at,
                 'updated_at' => $installation->updated_at,
                 'connected_by' => $installation->installedBy?->full_name,

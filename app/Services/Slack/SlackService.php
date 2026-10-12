@@ -99,7 +99,7 @@ class SlackService
     ) {}
 
     /**
-     * Whether the Slack app's credentials were saved in Administration.
+     * Whether a Slack app is set up, the production app from the environment or the testing app.
      */
     public function isConfigured(): bool
     {
@@ -225,6 +225,11 @@ class SlackService
             throw new SlackException('invalid_state', 'The Slack connection request expired. Please try again.');
         }
 
+        // Slack issued the code for the app the flow started with, it cannot be redeemed with another one.
+        if (isset($payload['client_id']) && $payload['client_id'] !== $this->credentials->clientId()) {
+            throw new SlackException('app_changed', 'The Slack app was switched while you were in Slack. Please try again.');
+        }
+
         return [
             'purpose' => $payload['purpose'],
             'user' => $user,
@@ -323,7 +328,7 @@ class SlackService
             'team_name' => (string) ($payload['team']['name'] ?? $team_id),
             'team_url' => $this->fetchTeamUrl($bot_token),
             'bot_user_id' => $payload['bot_user_id'] ?? null,
-            'app_id' => $payload['app_id'] ?? null,
+            'app_id' => $payload['app_id'] ?? $this->credentials->appId(),
             'bot_token' => $bot_token,
             'scopes' => $payload['scope'] ?? null,
         ];
@@ -340,6 +345,7 @@ class SlackService
 
         $installation = SlackInstallation::updateOrCreate(['team_id' => $team_id], $attributes);
         $this->forgetChannels($installation);
+        $this->credentials->rememberAppId($payload['app_id'] ?? null);
 
         return $installation;
     }
@@ -402,6 +408,29 @@ class SlackService
         $this->forgetChannels($installation);
 
         return $installation->refresh();
+    }
+
+    /**
+     * Switches between the production and the testing Slack app. A bot token only works with the
+     * app that installed it for OAuth flows, so the active workspace follows the app: the newest
+     * workspace installed with the chosen app becomes active, when there is one. Returns it.
+     *
+     * @throws SlackException
+     */
+    public function useApp(string $source, User $actor): ?SlackInstallation
+    {
+        $this->credentials->useApp($source, $actor);
+
+        $app_id = $this->credentials->appId();
+        $current = $this->installation();
+
+        if (! $app_id || $current?->app_id === $app_id) {
+            return $current;
+        }
+
+        $installation = SlackInstallation::query()->where('app_id', $app_id)->latest('id')->first();
+
+        return $installation ? $this->activate($installation) : $current;
     }
 
     /**
@@ -793,7 +822,7 @@ class SlackService
 
         Cache::put(
             $this->stateCacheKey($state),
-            ['purpose' => $purpose, 'user_id' => $user->id, 'return_path' => $return_path, 'display' => $display, 'method' => $method],
+            ['purpose' => $purpose, 'user_id' => $user->id, 'return_path' => $return_path, 'display' => $display, 'method' => $method, 'client_id' => $this->credentials->clientId()],
             now()->addMinutes(self::STATE_TTL_MINUTES),
         );
 

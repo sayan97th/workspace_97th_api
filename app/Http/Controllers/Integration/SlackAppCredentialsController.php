@@ -6,18 +6,21 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\Integration\Concerns\RespondsWithSlackErrors;
 use App\Http\Requests\Integration\SlackAppCreateRequest;
 use App\Http\Requests\Integration\SlackAppCredentialsRequest;
+use App\Http\Requests\Integration\SlackAppSelectionRequest;
 use App\Services\Slack\SlackAppCredentials;
 use App\Services\Slack\SlackAppProvisioner;
 use App\Services\Slack\SlackException;
+use App\Services\Slack\SlackService;
 use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
  * Administration > Integrations > Slack (administrators and the account owner, `admin`, `super_admin`).
- * The Slack app is set up here once, never in the API environment, so an administrator can point
- * the integration at a different Slack app at any time. Secrets are write only, the API only
- * ever answers with their last four characters.
+ * The production 97th Floor Slack app comes from the API environment and is read only here. The
+ * testing app (for example Make It Simple) is saved, replaced and removed here, and an
+ * administrator switches between the two, see {@see SlackAppCredentials}. Secrets are write
+ * only, the API only ever answers with their last four characters.
  */
 class SlackAppCredentialsController extends Controller
 {
@@ -60,6 +63,8 @@ class SlackAppCredentialsController extends Controller
 
     /**
      * PUT /api/integrations/slack/app
+     *
+     * Saves the testing app, it is not used until an administrator switches to it.
      */
     public function update(SlackAppCredentialsRequest $request): JsonResponse
     {
@@ -69,25 +74,55 @@ class SlackAppCredentialsController extends Controller
             return $this->errorResponse($exception);
         }
 
-        AuditLogger::log('slack.app_credentials_updated', 'Updated the Slack app credentials.', $request->user(), [
+        AuditLogger::log('slack.app_credentials_updated', 'Updated the testing Slack app credentials.', $request->user(), [
             'client_id' => $request->validated('client_id'),
         ]);
 
-        return response()->json(['message' => 'Slack app credentials saved.', ...$this->credentials->describe()]);
+        return response()->json(['message' => 'Testing Slack app saved.', ...$this->credentials->describe()]);
+    }
+
+    /**
+     * PUT /api/integrations/slack/app/active
+     *
+     * Switches between the production app (`environment`) and the testing app (`database`). The
+     * active workspace follows the app when one was installed with it.
+     */
+    public function select(SlackAppSelectionRequest $request, SlackService $slack_service): JsonResponse
+    {
+        $source = $request->validated('source');
+
+        try {
+            $installation = $slack_service->useApp($source, $request->user());
+        } catch (SlackException $exception) {
+            return $this->errorResponse($exception);
+        }
+
+        $app_name = $this->credentials->appName();
+
+        AuditLogger::log('slack.app_selected', "Switched Slack to the {$app_name} app.", $request->user(), [
+            'source' => $source,
+            'client_id' => $this->credentials->clientId(),
+        ]);
+
+        $message = $installation && $this->credentials->sourceOfAppId($installation->app_id) === $source
+            ? "Slack now uses the {$app_name} app and the {$installation->team_name} workspace."
+            : "Slack now uses the {$app_name} app. Add a workspace with it to start sending messages.";
+
+        return response()->json(['message' => $message, ...$this->credentials->describe()]);
     }
 
     /**
      * DELETE /api/integrations/slack/app
      *
-     * Forgets the saved credentials. Connected workspaces keep working, new ones cannot be added until an app is saved again.
+     * Forgets the testing app, the production app from the environment takes over.
      */
     public function destroy(Request $request): JsonResponse
     {
         $this->credentials->clear();
 
-        AuditLogger::log('slack.app_credentials_cleared', 'Removed the saved Slack app credentials.', $request->user());
+        AuditLogger::log('slack.app_credentials_cleared', 'Removed the testing Slack app.', $request->user());
 
-        return response()->json(['message' => 'Saved Slack app credentials removed.', ...$this->credentials->describe()]);
+        return response()->json(['message' => 'Testing Slack app removed.', ...$this->credentials->describe()]);
     }
 
     /**

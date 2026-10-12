@@ -33,5 +33,11 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="SLACK_APP_ID" value=""/>
+        <env name="SLACK_CLIENT_ID" value=""/>
+        <env name="SLACK_CLIENT_SECRET" value=""/>
+        <env name="SLACK_SIGNING_SECRET" value=""/>
+        <env name="SLACK_VERIFICATION_TOKEN" value=""/>
+        <env name="SLACK_REDIRECT_URI" value=""/>
     </php>
 </phpunit>

@@ -1,6 +1,5 @@
 <?php
 
-use App\Models\SlackAppSetting;
 use Illuminate\Database\Migrations\Migration;
 
 return new class extends Migration
@@ -8,31 +7,15 @@ return new class extends Migration
     /**
      * Run the migrations.
      *
-     * The Slack app credentials now live only in Administration > Integrations. A deployment
-     * that still had them in the environment gets them copied over once, so the connection keeps
-     * working, after which the SLACK_* variables can be deleted. Run before removing them.
+     * Used to copy the SLACK_* environment values into `slack_app_settings`. The environment is
+     * the production Slack app again and the saved row is only the testing app, so copying would
+     * turn the production app into the testing one. Kept as a no-op so the migration history of
+     * servers that already ran it stays the same.
      */
-    public function up(): void
-    {
-        $client_id = env('SLACK_CLIENT_ID');
-        $client_secret = env('SLACK_CLIENT_SECRET');
-
-        if (SlackAppSetting::query()->exists() || ! filled($client_id) || ! filled($client_secret)) {
-            return;
-        }
-
-        SlackAppSetting::create([
-            'client_id' => (string) $client_id,
-            'client_secret' => (string) $client_secret,
-            'signing_secret' => filled(env('SLACK_SIGNING_SECRET')) ? (string) env('SLACK_SIGNING_SECRET') : null,
-            'redirect_uri' => filled(env('SLACK_REDIRECT_URI')) ? (string) env('SLACK_REDIRECT_URI') : null,
-        ]);
-    }
+    public function up(): void {}
 
     /**
      * Reverse the migrations.
-     *
-     * Nothing to undo, the copied credentials stay editable in Administration.
      */
     public function down(): void {}
 };
