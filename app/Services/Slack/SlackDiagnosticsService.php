@@ -2,6 +2,7 @@
 
 namespace App\Services\Slack;
 
+use App\Models\SlackConnection;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
@@ -10,8 +11,10 @@ use Illuminate\Support\Facades\Cache;
 
 /**
  * Checks every piece the Slack integration depends on, one at a time, so an administrator
- * can see exactly which one is broken: the saved app credentials, the redirect URL, the signing secret, the installed workspace, its bot
- * token and scopes, the channel list and the caller's own linked account.
+ * can see exactly which one is broken: the Slack app in use (from the API .env file or saved in
+ * Administration), its redirect URL and signing secret, the active workspace and whether it was
+ * installed with that app, its bot token and scopes, the channel list, the caller's own linked
+ * account and the Slack accounts the caller connected for automations.
  *
  * A check that depends on an earlier one which failed is reported as `skipped` rather than
  * failing again with a less useful error.
@@ -54,6 +57,9 @@ class SlackDiagnosticsService
 
         $installation = SlackInstallation::current();
         $checks[] = $this->checkWorkspace($installation, $is_configured);
+        $checks[] = $installation
+            ? $this->checkWorkspaceApp($installation)
+            : $this->skipped('workspace_app', 'Workspace uses the Slack app in use', 'Connect a workspace first.');
 
         $bot_check = $installation
             ? $this->checkBotToken($installation)
@@ -71,6 +77,7 @@ class SlackDiagnosticsService
         $checks[] = $installation
             ? $this->checkPersonalLink($installation, $user)
             : $this->skipped('personal_link', 'Your Slack account is linked', 'Connect a workspace first.');
+        $checks[] = $this->checkAutomationConnections($user);
 
         return [
             'ran_at' => now()->toIso8601String(),
@@ -81,6 +88,7 @@ class SlackDiagnosticsService
                 'events_url' => $this->credentials->eventsUrl(),
                 'credentials_source' => $this->credentials->source(),
                 'app_name' => $this->credentials->appName(),
+                'link_method' => $this->slack_service->linkMethod(),
                 'bot_scopes' => SlackService::BOT_SCOPES,
                 'user_scopes' => SlackService::USER_SCOPES,
             ],
@@ -173,7 +181,7 @@ class SlackDiagnosticsService
         $label = 'Client ID and secret are set';
 
         if (! $is_configured) {
-            return $this->result('credentials', $label, self::STATUS_FAILED, 'Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in the API .env file, or add Slack app credentials in Administration > Integrations > Slack.');
+            return $this->result('credentials', $label, self::STATUS_FAILED, 'Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in the API .env file, or add Slack app credentials in Administration > Slack settings.');
         }
 
         if (! preg_match('/^\d+\.\d+$/', (string) $this->credentials->clientId())) {
@@ -182,7 +190,10 @@ class SlackDiagnosticsService
 
         // Slack only checks the secret while exchanging a real authorization code, so there is
         // no way to test it from here. A successful "Add to Slack" is what proves it.
-        return $this->result('credentials', $label, self::STATUS_PASSED, 'Both values are present. Slack verifies the secret during "Add to Slack", a wrong one makes that step fail with bad_client_secret.');
+        $source = $this->credentials->source() === SlackAppCredentials::SOURCE_ENVIRONMENT ? 'the API .env file' : 'Administration > Slack settings';
+        $app_name = $this->credentials->appName() ?? 'Slack';
+
+        return $this->result('credentials', $label, self::STATUS_PASSED, "Using the {$app_name} app from {$source}. Slack verifies the secret during \"Add to Slack\", a wrong one makes that step fail with bad_client_secret.");
     }
 
     /**
@@ -194,11 +205,11 @@ class SlackDiagnosticsService
         $redirect_uri = $this->credentials->redirectUri();
 
         if (! filter_var($redirect_uri, FILTER_VALIDATE_URL)) {
-            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Fix SLACK_REDIRECT_URI in the API .env file, or the saved app redirect URL in Administration > Integrations > Slack.');
+            return $this->result('redirect_uri', $label, self::STATUS_FAILED, 'The redirect URL is not a valid URL. Fix SLACK_REDIRECT_URI in the API .env file, or the saved app redirect URL in Administration > Slack settings.');
         }
 
         if (parse_url($redirect_uri, PHP_URL_SCHEME) !== 'https') {
-            return $this->result('redirect_uri', $label, self::STATUS_WARNING, '"Add to Slack" may accept this plain http URL, but "Sign in with Slack" (Connect my Slack) only accepts HTTPS and fails with invalid redirect_uri. For local testing expose the API through an HTTPS tunnel, set it as SLACK_REDIRECT_URI or as the saved app redirect URL, and add that URL in the Slack app.');
+            return $this->result('redirect_uri', $label, self::STATUS_WARNING, 'This plain http URL works for "Add to Slack" and for "Connect my Slack", which falls back to a Slack authorization pinned to the active workspace. "Sign in with Slack" only accepts HTTPS, so production should use an https URL. Set it as SLACK_REDIRECT_URI or as the saved app redirect URL, and add it in the Slack app.');
         }
 
         return $this->result('redirect_uri', $label, self::STATUS_PASSED, 'Make sure this exact URL is listed under OAuth & Permissions in the Slack app.');
@@ -213,7 +224,7 @@ class SlackDiagnosticsService
         $signing_secret = (string) $this->credentials->signingSecret();
 
         if ($signing_secret === '') {
-            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Set SLACK_SIGNING_SECRET in the API .env file, or add it to the saved app in Administration > Integrations > Slack.');
+            return $this->result('signing_secret', $label, self::STATUS_FAILED, 'Set SLACK_SIGNING_SECRET in the API .env file, or add it to the saved app in Administration > Slack settings.');
         }
 
         if (! preg_match('/^[a-f0-9]{32}$/', $signing_secret)) {
@@ -245,6 +256,32 @@ class SlackDiagnosticsService
         }
 
         return $this->result('workspace', $label, self::STATUS_PASSED, "Connected to {$installation->team_name} ({$installation->team_id}).");
+    }
+
+    /**
+     * A workspace keeps the app it was installed with. After switching to another app the active
+     * workspace can still belong to the previous one, so "Connect my Slack" and reinstalls would
+     * talk to a different app than the bot token does.
+     *
+     * @return array{key: string, label: string, status: string, detail: string}
+     */
+    private function checkWorkspaceApp(SlackInstallation $installation): array
+    {
+        $label = 'Workspace uses the Slack app in use';
+        $active_app_id = $this->credentials->appId();
+        $active_name = $this->credentials->appName() ?? 'selected';
+
+        if (! filled($installation->app_id) || ! filled($active_app_id)) {
+            return $this->result('workspace_app', $label, self::STATUS_PASSED, "{$installation->team_name} is the active workspace. The app id is not known yet, it is saved the next time the workspace is installed.");
+        }
+
+        if ($installation->app_id !== $active_app_id) {
+            $installed_name = $this->credentials->appForAppId($installation->app_id)['name'] ?? 'another';
+
+            return $this->result('workspace_app', $label, self::STATUS_WARNING, "{$installation->team_name} was installed with the {$installed_name} app, but the {$active_name} app is in use. Messages still use the workspace bot token, but \"Connect my Slack\" and reinstalls use the app in use. Add the workspace again with it, or switch the app back in Administration > Slack settings.");
+        }
+
+        return $this->result('workspace_app', $label, self::STATUS_PASSED, "{$installation->team_name} was installed with the {$active_name} app.");
     }
 
     /**
@@ -284,8 +321,8 @@ class SlackDiagnosticsService
             $only_optional = array_diff($missing_scopes, SlackService::OPTIONAL_BOT_SCOPES) === [];
 
             return $only_optional
-                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).'. Notifications still work, but matching members by email or some notification tests need them. Use "Reconnect" on the workspace in Administration > Integrations > Slack to grant them.')
-                : $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Reconnect" on the workspace in Administration > Integrations > Slack.');
+                ? $this->result('bot_scopes', $label, self::STATUS_WARNING, 'Missing '.implode(', ', $missing_scopes).'. Notifications still work, but matching members by email or some notification tests need them. Use "Reconnect" on the workspace in Administration > Slack settings to grant them.')
+                : $this->result('bot_scopes', $label, self::STATUS_FAILED, 'Missing '.implode(', ', $missing_scopes).'. Add them under OAuth & Permissions, then use "Reconnect" on the workspace in Administration > Slack settings.');
         }
 
         return $this->result('bot_scopes', $label, self::STATUS_PASSED, 'Granted '.implode(', ', SlackService::BOT_SCOPES).'.');
@@ -326,6 +363,30 @@ class SlackDiagnosticsService
         $display_name = $link->slack_display_name ?? $link->slack_user_id;
 
         return $this->result('personal_link', $label, self::STATUS_PASSED, "Linked to {$display_name}.");
+    }
+
+    /**
+     * The Slack accounts the caller connected in the Automations center. Channel automations post
+     * with the connection picked in the recipe, whatever workspace is active.
+     *
+     * @return array{key: string, label: string, status: string, detail: string}
+     */
+    private function checkAutomationConnections(User $user): array
+    {
+        $label = 'Your Slack account for automations';
+        $team_names = $user->slackConnections()
+            ->whereHas('installation')
+            ->with('installation')
+            ->get()
+            ->map(fn (SlackConnection $connection) => $connection->installation->team_name)
+            ->unique()
+            ->values();
+
+        if ($team_names->isEmpty()) {
+            return $this->result('automation_connection', $label, self::STATUS_WARNING, 'You have no Slack account connected for automations. Use a Slack template in the Automations center, its first step connects your account.');
+        }
+
+        return $this->result('automation_connection', $label, self::STATUS_PASSED, 'Connected in '.$team_names->join(', ', ' and ').'.');
     }
 
     /**

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\SlackAppSetting;
+use App\Models\SlackConnection;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
@@ -267,4 +268,43 @@ test('the user notification validates input and reports unlinked members and sla
         ->postJson('/api/integrations/slack/diagnostics/user-test', ['user_id' => $member->id, 'message' => 'Hello'])
         ->assertUnprocessable()
         ->assertJsonPath('message', 'Slack could not find where to send that message.');
+});
+
+test('diagnostics warn when the active workspace was installed with another slack app', function () {
+    SlackAppSetting::current()->update(['app_id' => 'A_IN_USE']);
+    makeDiagnosticsInstallation(['app_id' => 'A_PREVIOUS']);
+    Http::fake([
+        'slack.com/api/auth.test' => Http::response(['ok' => true, 'team_id' => 'T100', 'team' => 'Acme', 'user' => 'workspace_bot']),
+        'slack.com/api/conversations.list*' => Http::response(['ok' => true, 'channels' => []]),
+    ]);
+
+    $checks = $this->actingAs(makeDiagnosticsAdmin(), 'api')->getJson('/api/integrations/slack/diagnostics')->assertOk()->json('checks');
+
+    expect(checkStatus($checks, 'workspace_app'))->toBe('warning');
+
+    SlackInstallation::query()->update(['app_id' => 'A_IN_USE']);
+    $checks = $this->actingAs(makeDiagnosticsAdmin(), 'api')->getJson('/api/integrations/slack/diagnostics')->json('checks');
+
+    expect(checkStatus($checks, 'workspace_app'))->toBe('passed');
+});
+
+test('diagnostics report the slack accounts the caller connected for automations', function () {
+    $installation = makeDiagnosticsInstallation();
+    $admin = makeDiagnosticsAdmin();
+    Http::fake([
+        'slack.com/api/auth.test' => Http::response(['ok' => true, 'team_id' => 'T100', 'team' => 'Acme', 'user' => 'workspace_bot']),
+        'slack.com/api/conversations.list*' => Http::response(['ok' => true, 'channels' => []]),
+    ]);
+
+    $response = $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/diagnostics')->assertOk();
+
+    expect(checkStatus($response->json('checks'), 'automation_connection'))->toBe('warning')
+        ->and($response->json('app.link_method'))->toBe('sign_in');
+
+    SlackConnection::create(['user_id' => $admin->id, 'slack_installation_id' => $installation->id, 'slack_user_id' => 'U200', 'connected_at' => now()]);
+
+    $check = collect($this->actingAs($admin, 'api')->getJson('/api/integrations/slack/diagnostics')->json('checks'))->firstWhere('key', 'automation_connection');
+
+    expect($check['status'])->toBe('passed')
+        ->and($check['detail'])->toBe('Connected in Acme.');
 });
