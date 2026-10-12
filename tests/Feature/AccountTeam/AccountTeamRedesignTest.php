@@ -148,6 +148,56 @@ test('admins and team owners can upload and remove the team picture and cover', 
     $this->actingAs($owner, 'api')->deleteJson("/api/account-teams/{$team->id}/cover")->assertOk()->assertJsonPath('team.cover_url', null);
 });
 
+test('a team cover keeps the position it was uploaded with and can be repositioned', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    $owner = teamUserWithRole('staff');
+    $team = AccountTeam::factory()->create();
+    $team->members()->attach($owner->id, ['is_team_owner' => true]);
+
+    $this->actingAs($owner, 'api')
+        ->post(
+            "/api/account-teams/{$team->id}/cover",
+            ['file' => UploadedFile::fake()->image('cover.png', 1600, 900), 'cover_position_y' => 30],
+            ['Accept' => 'application/json'],
+        )
+        ->assertOk()
+        ->assertJsonPath('team.cover_position_y', 30);
+
+    $this->actingAs($owner, 'api')
+        ->patchJson("/api/account-teams/{$team->id}/cover", ['cover_position_y' => 75])
+        ->assertOk()
+        ->assertJsonPath('team.cover_position_y', 75);
+    expect($team->refresh()->cover_position_y)->toBe(75);
+
+    $this->actingAs($owner, 'api')
+        ->patchJson("/api/account-teams/{$team->id}/cover", ['cover_position_y' => 101])
+        ->assertUnprocessable();
+
+    $this->actingAs($owner, 'api')
+        ->deleteJson("/api/account-teams/{$team->id}/cover")
+        ->assertOk()
+        ->assertJsonPath('team.cover_position_y', 50);
+});
+
+test('a team without a cover cannot be repositioned', function () {
+    $owner = teamUserWithRole('staff');
+    $team = AccountTeam::factory()->create();
+    $team->members()->attach($owner->id, ['is_team_owner' => true]);
+
+    $this->actingAs($owner, 'api')
+        ->patchJson("/api/account-teams/{$team->id}/cover", ['cover_position_y' => 40])
+        ->assertUnprocessable();
+});
+
+test('plain staff cannot reposition a team cover', function () {
+    $staff = teamUserWithRole('staff');
+    $team = AccountTeam::factory()->create(['cover_path' => 'account-teams/1/cover.webp']);
+
+    $this->actingAs($staff, 'api')
+        ->patchJson("/api/account-teams/{$team->id}/cover", ['cover_position_y' => 40])
+        ->assertForbidden();
+});
+
 test('plain staff cannot change a team picture', function () {
     Storage::fake(config('filesystems.app_disk'));
     $staff = teamUserWithRole('staff');

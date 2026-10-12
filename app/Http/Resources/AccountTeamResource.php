@@ -31,6 +31,7 @@ class AccountTeamResource extends JsonResource
             'allow_guests' => (bool) $this->allow_guests,
             'picture_url' => $this->picture_url,
             'cover_url' => $this->cover_url,
+            'cover_position_y' => (int) ($this->cover_position_y ?? 50),
             'member_count' => (int) $this->members_count,
             'sub_team_count' => (int) ($this->sub_teams_count ?? 0),
             'board_count' => (int) ($this->boards_count ?? 0),

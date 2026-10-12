@@ -4,6 +4,7 @@ namespace App\Http\Controllers\AccountTeam;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AccountTeam\StoreAccountTeamImageRequest;
+use App\Http\Requests\AccountTeam\UpdateAccountTeamCoverPositionRequest;
 use App\Http\Resources\AccountTeamResource;
 use App\Models\AccountTeam;
 use App\Services\AccountTeam\AccountTeamImageService;
@@ -43,6 +44,22 @@ class AccountTeamImageController extends Controller
     }
 
     /**
+     * PATCH /api/account-teams/{team}/cover, saves where the cover is framed inside the banner.
+     */
+    public function updateCover(UpdateAccountTeamCoverPositionRequest $request, AccountTeam $team): JsonResponse
+    {
+        abort_unless($team->canBeManagedBy($request->user()), 403, 'You cannot manage this team.');
+        abort_if($team->cover_path === null, 422, 'This team has no cover image to reposition.');
+
+        $this->images->reposition($team, (int) $request->validated('cover_position_y'));
+
+        return response()->json([
+            'message' => 'Team cover repositioned successfully.',
+            'team' => new AccountTeamResource($team->loadResourceData($request->user())),
+        ]);
+    }
+
+    /**
      * DELETE /api/account-teams/{team}/cover
      */
     public function destroyCover(Request $request, AccountTeam $team): JsonResponse
@@ -54,7 +71,12 @@ class AccountTeamImageController extends Controller
     {
         abort_unless($team->canBeManagedBy($request->user()), 403, 'You cannot manage this team.');
 
-        $this->images->store($team, $kind, $request->file('file'));
+        $this->images->store(
+            $team,
+            $kind,
+            $request->file('file'),
+            (int) $request->validated('cover_position_y', AccountTeamImageService::DEFAULT_COVER_POSITION_Y),
+        );
 
         return response()->json([
             'message' => $message,

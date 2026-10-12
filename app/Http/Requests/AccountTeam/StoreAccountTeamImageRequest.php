@@ -19,6 +19,8 @@ class StoreAccountTeamImageRequest extends FormRequest
     {
         return [
             'file' => ['required', 'image', 'mimes:png,jpg,jpeg,webp,gif', 'max:10240'],
+            // Only read on a cover upload, so the new image starts where the user framed it.
+            'cover_position_y' => ['sometimes', 'integer', 'between:0,100'],
         ];
     }
 }

@@ -20,6 +20,9 @@ class AccountTeamImageService
 
     public const KIND_COVER = 'cover';
 
+    /** Where a cover is framed when nobody has repositioned it, the middle of the image. */
+    public const DEFAULT_COVER_POSITION_Y = 50;
+
     /** Longest side of the stored image per kind, 2x the largest size the page renders. */
     private const MAX_SIZES = [
         self::KIND_PICTURE => 400,
@@ -30,8 +33,9 @@ class AccountTeamImageService
 
     /**
      * Replaces the team's picture or cover with the uploaded file, deleting the previous one.
+     * A new cover starts framed at `$cover_position_y`.
      */
-    public function store(AccountTeam $team, string $kind, UploadedFile $file): AccountTeam
+    public function store(AccountTeam $team, string $kind, UploadedFile $file, int $cover_position_y = self::DEFAULT_COVER_POSITION_Y): AccountTeam
     {
         $encoded = $this->encode((string) $file->getRealPath(), self::MAX_SIZES[$kind]);
 
@@ -40,7 +44,21 @@ class AccountTeamImageService
         $path = "account-teams/{$team->id}/{$kind}-".Str::uuid().'.webp';
         Storage::disk(config('filesystems.app_disk'))->put($path, $encoded);
 
-        $team->update([$this->column($kind) => $path]);
+        $attributes = [$this->column($kind) => $path];
+        if ($kind === self::KIND_COVER) {
+            $attributes['cover_position_y'] = $cover_position_y;
+        }
+        $team->update($attributes);
+
+        return $team;
+    }
+
+    /**
+     * Saves the cover's vertical focal point, 0 (top) to 100 (bottom).
+     */
+    public function reposition(AccountTeam $team, int $cover_position_y): AccountTeam
+    {
+        $team->update(['cover_position_y' => $cover_position_y]);
 
         return $team;
     }
@@ -51,7 +69,12 @@ class AccountTeamImageService
     public function destroy(AccountTeam $team, string $kind): AccountTeam
     {
         $this->purge($team, $kind);
-        $team->update([$this->column($kind) => null]);
+
+        $attributes = [$this->column($kind) => null];
+        if ($kind === self::KIND_COVER) {
+            $attributes['cover_position_y'] = self::DEFAULT_COVER_POSITION_Y;
+        }
+        $team->update($attributes);
 
         return $team;
     }

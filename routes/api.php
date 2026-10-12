@@ -904,6 +904,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{team}/picture', [AccountTeamImageController::class, 'storePicture']);
             Route::delete('{team}/picture', [AccountTeamImageController::class, 'destroyPicture']);
             Route::post('{team}/cover', [AccountTeamImageController::class, 'storeCover']);
+            Route::patch('{team}/cover', [AccountTeamImageController::class, 'updateCover']);
             Route::delete('{team}/cover', [AccountTeamImageController::class, 'destroyCover']);
             Route::get('{team}/boards', [AccountTeamBoardController::class, 'index']);
             Route::get('{team}/board-candidates', [AccountTeamBoardController::class, 'candidates']);

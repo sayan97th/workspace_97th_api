@@ -30,6 +30,7 @@ use Illuminate\Support\Facades\Storage;
  * @property bool $allow_guests
  * @property string|null $picture_path
  * @property string|null $cover_path
+ * @property int $cover_position_y
  * @property int|null $created_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -43,7 +44,7 @@ use Illuminate\Support\Facades\Storage;
  * @property-read string|null $picture_url
  * @property-read string|null $cover_url
  */
-#[Fillable(['name', 'parent_id', 'allow_guests', 'picture_path', 'cover_path', 'created_by_id'])]
+#[Fillable(['name', 'parent_id', 'allow_guests', 'picture_path', 'cover_path', 'cover_position_y', 'created_by_id'])]
 class AccountTeam extends Model
 {
     /** @use HasFactory<AccountTeamFactory> */
@@ -62,6 +63,7 @@ class AccountTeam extends Model
     {
         return [
             'allow_guests' => 'boolean',
+            'cover_position_y' => 'integer',
         ];
     }
 
