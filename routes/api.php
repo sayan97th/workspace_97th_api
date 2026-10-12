@@ -42,6 +42,7 @@ use App\Http\Controllers\Board\BoardAutomationController;
 use App\Http\Controllers\Board\BoardAutomationManageController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
+use App\Http\Controllers\Board\BoardDocController;
 use App\Http\Controllers\Board\BoardExportController;
 use App\Http\Controllers\Board\BoardFormController;
 use App\Http\Controllers\Board\BoardGroupController;
@@ -466,6 +467,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::delete('trash/groups/{group}', [BoardTrashController::class, 'forceDeleteGroup']);
 
         Route::get('export', [BoardExportController::class, 'export'])->middleware('account.permission:export_data');
+    });
+
+    // A Doc's body (`view_key = doc`): the Notion style editor's JSON document
+    // and the images, videos and files embedded in it.
+    Route::prefix('boards/{item}')->group(function () {
+        Route::get('doc', [BoardDocController::class, 'show']);
+        Route::put('doc', [BoardDocController::class, 'update']);
+        Route::post('doc/files', [BoardDocController::class, 'storeFile']);
     });
 
     // Board options menu's "Give feedback" — a free-form product note,

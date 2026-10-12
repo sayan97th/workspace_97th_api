@@ -5,6 +5,7 @@ namespace App\Services\Board;
 use App\Http\Controllers\Board\BoardViewController;
 use App\Http\Controllers\Workspace\WorkspaceNavigationItemController;
 use App\Models\BoardColumn;
+use App\Models\BoardDoc;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
 use App\Support\FormulaReferences;
@@ -124,10 +125,19 @@ class BoardDuplicationService
      * Duplicates every view (tab) of `$source_board` into `$target_board`,
      * preserving each tab's label, position and primary/pinned status — used
      * for a whole-board duplicate, as opposed to {@see duplicateView()}'s
-     * single-tab "Duplicate this view".
+     * single-tab "Duplicate this view". A Doc's body ({@see BoardDoc}) is
+     * copied along with them.
      */
     public function duplicateAllViews(WorkspaceNavigationItem $source_board, WorkspaceNavigationItem $target_board, ?int $created_by_id = null): void
     {
+        $source_doc = $source_board->doc;
+        if ($source_doc) {
+            $target_board->doc()->updateOrCreate([], [
+                'content' => $source_doc->content,
+                'updated_by_id' => $created_by_id,
+            ]);
+        }
+
         foreach ($source_board->views()->orderBy('position')->get() as $view) {
             $this->duplicateView($view, $target_board, [
                 'position' => $view->position,

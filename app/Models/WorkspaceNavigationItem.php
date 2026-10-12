@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 
@@ -58,6 +59,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardGroup> $groups
  * @property-read Collection<int, BoardItem> $items
  * @property-read Collection<int, BoardView> $views
+ * @property-read BoardDoc|null $doc
  * @property-read Collection<int, BoardComment> $comments
  * @property-read Collection<int, BoardDiscussionView> $discussionViews
  */
@@ -269,6 +271,16 @@ class WorkspaceNavigationItem extends Model
     public function views(): HasMany
     {
         return $this->hasMany(BoardView::class, 'board_id')->orderBy('position');
+    }
+
+    /**
+     * The body of a Doc (`view_key = doc`), see {@see BoardDoc}.
+     *
+     * @return HasOne<BoardDoc, $this>
+     */
+    public function doc(): HasOne
+    {
+        return $this->hasOne(BoardDoc::class, 'board_id');
     }
 
     /**
