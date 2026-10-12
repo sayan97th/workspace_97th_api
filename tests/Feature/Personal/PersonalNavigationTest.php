@@ -4,6 +4,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
+use App\Models\BoardView;
 use App\Models\BoardVisit;
 use App\Models\User;
 use App\Models\Workspace;
@@ -101,6 +102,35 @@ test('opening the same board twice keeps a single visit row', function () {
     $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}");
 
     expect(BoardVisit::where('user_id', $user->id)->count())->toBe(1);
+});
+
+test('recently visited boards carry a preview of the primary view groups', function () {
+    $user = User::factory()->create();
+    $board = createPersonalBoard(['label' => 'Roadmap']);
+    $primary_view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $other_view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false]);
+
+    $planning = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $primary_view->id, 'name' => 'Planning', 'accent_color' => '#579bfc', 'position' => 0]);
+    $shipped = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $primary_view->id, 'name' => 'Shipped', 'accent_color' => '#00c875', 'position' => 1]);
+    BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $primary_view->id, 'name' => 'Old', 'is_archived' => true, 'position' => 2]);
+    BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $other_view->id, 'name' => 'Other tab', 'position' => 0]);
+
+    $parent = BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $planning->id]);
+    BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $planning->id]);
+    BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $planning->id, 'parent_id' => $parent->id]);
+    BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $shipped->id, 'is_archived' => true]);
+
+    BoardVisit::record($user->id, $board->id);
+
+    $this->actingAs($user, 'api')->getJson('/api/home/recent-boards')
+        ->assertOk()
+        ->assertJsonPath('data.0.preview.item_count', 2)
+        ->assertJsonPath('data.0.preview.group_count', 2)
+        ->assertJsonPath('data.0.preview.groups.0.name', 'Planning')
+        ->assertJsonPath('data.0.preview.groups.0.color', '#579bfc')
+        ->assertJsonPath('data.0.preview.groups.0.item_count', 2)
+        ->assertJsonPath('data.0.preview.groups.1.name', 'Shipped')
+        ->assertJsonPath('data.0.preview.groups.1.item_count', 0);
 });
 
 // ── My Work ────────────────────────────────────────────────────────────────

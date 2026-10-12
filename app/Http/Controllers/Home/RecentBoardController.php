@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Home;
 use App\Http\Controllers\Controller;
 use App\Models\BoardVisit;
 use App\Services\Favorite\UserFavoriteService;
+use App\Services\Home\RecentBoardPreviewService;
 use App\Support\VisibleBoards;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,9 +19,10 @@ class RecentBoardController extends Controller
      * GET /api/home/recent-boards
      *
      * The boards the user opened most recently, newest first. Archived and
-     * deleted boards drop out on their own.
+     * deleted boards drop out on their own. Each board carries a small
+     * `preview` (its first groups and item counts) for the card snapshot.
      */
-    public function index(Request $request, UserFavoriteService $favorites): JsonResponse
+    public function index(Request $request, UserFavoriteService $favorites, RecentBoardPreviewService $previews): JsonResponse
     {
         $user = $request->user();
 
@@ -31,6 +33,8 @@ class RecentBoardController extends Controller
             ->orderByDesc('visited_at')
             ->limit(self::LIMIT)
             ->get();
+
+        $board_previews = $previews->previewsFor($visits->map(fn (BoardVisit $visit) => (int) $visit->board->id)->all());
 
         return response()->json([
             'data' => $visits->map(fn (BoardVisit $visit) => [
@@ -47,6 +51,7 @@ class RecentBoardController extends Controller
                     'color' => $visit->board->workspace->color,
                     'mono' => $visit->board->workspace->mono,
                 ] : null,
+                'preview' => $board_previews[(int) $visit->board->id] ?? null,
             ])->values(),
         ]);
     }
