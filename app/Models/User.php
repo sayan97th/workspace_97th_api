@@ -47,6 +47,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  * @property string|null $working_status_dates
  * @property bool $disable_notifications_while_away
  * @property bool $hide_online_status
+ * @property bool $do_not_disturb
  * @property array<string, bool>|null $notification_preferences
  * @property bool $quiet_hours_enabled
  * @property string $quiet_hours_start
@@ -91,7 +92,7 @@ use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
  */
 #[Fillable([
     'first_name', 'last_name', 'email', 'google_id', 'password', 'current_team_id', 'last_active_workspace_id', 'phone', 'job_title', 'department_id', 'timezone', 'profile_photo_path', 'is_active',
-    'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status',
+    'working_status', 'working_status_dates', 'disable_notifications_while_away', 'hide_online_status', 'do_not_disturb',
     'notification_preferences', 'desktop_notifications_enabled', 'notification_sound_enabled', 'tab_badge_enabled', 'auto_follow_enabled',
     'quiet_hours_enabled', 'quiet_hours_start', 'quiet_hours_end', 'email_digest_frequency',
     'language', 'time_format', 'date_format', 'first_day_of_week', 'sidebar_width', 'sidebar_preferences',
@@ -158,6 +159,7 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
             'is_active' => 'boolean',
             'disable_notifications_while_away' => 'boolean',
             'hide_online_status' => 'boolean',
+            'do_not_disturb' => 'boolean',
             'notification_preferences' => 'array',
             'sidebar_preferences' => 'array',
             'desktop_notifications_enabled' => 'boolean',
@@ -170,12 +172,18 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
-     * Whether `$now` falls inside this user's Do Not Disturb window, read as
-     * wall-clock times in their own `timezone` (UTC when unset). A window that
-     * ends before it starts (22:00 to 07:00) spans midnight.
+     * Whether this user's notifications are silenced right now: either the manual
+     * Do not disturb switch (account menu > Working status) is on, or `$now` falls
+     * inside their scheduled quiet hours window, read as wall-clock times in their
+     * own `timezone` (UTC when unset). A window that ends before it starts
+     * (22:00 to 07:00) spans midnight.
      */
     public function isInQuietHours(?CarbonInterface $now = null): bool
     {
+        if ($this->do_not_disturb) {
+            return true;
+        }
+
         if (! $this->quiet_hours_enabled) {
             return false;
         }

@@ -43,6 +43,7 @@ class ProfileResource extends JsonResource
             'working_status_dates' => $this->working_status_dates,
             'disable_notifications_while_away' => $this->disable_notifications_while_away,
             'hide_online_status' => $this->hide_online_status,
+            'do_not_disturb' => (bool) $this->do_not_disturb,
 
             'notification_preferences' => $this->notification_preferences ?? [],
             'desktop_notifications_enabled' => $this->desktop_notifications_enabled,

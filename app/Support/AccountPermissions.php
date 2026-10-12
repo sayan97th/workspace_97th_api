@@ -33,32 +33,48 @@ class AccountPermissions
     public const UNRESTRICTED_ROLES = ['super_admin', 'admin'];
 
     /**
-     * @var array<string, array{label: string, description: string}>
+     * Headings the Permissions page lists the definitions under, in display order.
+     *
+     * @var array<string, string>
+     */
+    public const GROUPS = [
+        'account' => 'Account',
+        'boards' => 'Boards',
+    ];
+
+    /**
+     * @var array<string, array{label: string, description: string, group: string}>
      */
     public const DEFINITIONS = [
         self::CREATE_WORKSPACES => [
             'label' => 'Create workspaces',
             'description' => 'Create new workspaces in the account.',
+            'group' => 'account',
         ],
         self::CREATE_BOARDS => [
             'label' => 'Create boards',
             'description' => 'Create boards, docs and dashboards inside a workspace.',
+            'group' => 'boards',
         ],
         self::DELETE_BOARDS => [
             'label' => 'Delete boards and folders',
             'description' => 'Permanently delete boards and folders from a workspace.',
+            'group' => 'boards',
         ],
         self::INVITE_MEMBERS => [
             'label' => 'Invite members',
             'description' => 'Invite people to workspaces and boards by email.',
+            'group' => 'account',
         ],
         self::EXPORT_DATA => [
             'label' => 'Export data',
             'description' => 'Export boards, item updates and the feed to Excel or CSV.',
+            'group' => 'boards',
         ],
         self::USE_INTEGRATIONS => [
             'label' => 'Connect integrations',
             'description' => 'Connect a personal account to integrations such as Slack.',
+            'group' => 'account',
         ],
     ];
 

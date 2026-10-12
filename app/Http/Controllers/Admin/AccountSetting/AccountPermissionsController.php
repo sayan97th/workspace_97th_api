@@ -77,6 +77,9 @@ class AccountPermissionsController extends Controller
     private function payload(AccountSetting $settings): array
     {
         return [
+            'groups' => collect(AccountPermissions::GROUPS)
+                ->map(fn (string $label, string $key) => ['key' => $key, 'label' => $label])
+                ->values(),
             'definitions' => collect(AccountPermissions::DEFINITIONS)
                 ->map(fn (array $definition, string $key) => ['key' => $key, ...$definition])
                 ->values(),

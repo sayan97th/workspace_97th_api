@@ -180,6 +180,20 @@ test('account permissions block a role from exporting and creating workspaces', 
         ->assertJsonPath('permissions.create_workspaces', true);
 });
 
+test('account permissions are listed under their page groups', function () {
+    $response = $this->actingAs($this->admin, 'api')
+        ->getJson('/api/admin/account-settings/permissions')
+        ->assertOk()
+        ->assertJsonPath('groups.0', ['key' => 'account', 'label' => 'Account'])
+        ->assertJsonPath('groups.1', ['key' => 'boards', 'label' => 'Boards']);
+
+    $group_keys = collect($response->json('groups'))->pluck('key');
+    collect($response->json('definitions'))->each(
+        fn (array $definition) => expect($group_keys)->toContain($definition['group'])
+    );
+    expect(collect($response->json('definitions'))->firstWhere('key', 'create_boards')['group'])->toBe('boards');
+});
+
 test('staff cannot change account permissions', function () {
     $staff = User::factory()->create();
     $staff->assignRole('staff');

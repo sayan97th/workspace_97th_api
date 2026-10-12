@@ -31,3 +31,25 @@ test('working status update rejects an invalid status key', function () {
         ->assertStatus(422)
         ->assertJsonValidationErrors('working_status');
 });
+
+test('the do not disturb switch is saved and silences notifications at any hour', function () {
+    $user = User::factory()->create(['quiet_hours_enabled' => false]);
+
+    expect($user->isInQuietHours())->toBeFalse();
+
+    $this->actingAs($user, 'api')
+        ->patchJson('/api/profile/working-status', ['do_not_disturb' => true])
+        ->assertOk()
+        ->assertJsonPath('user.do_not_disturb', true);
+
+    $user->refresh();
+    expect($user->do_not_disturb)->toBeTrue();
+    expect($user->isInQuietHours())->toBeTrue();
+
+    $this->actingAs($user, 'api')
+        ->patchJson('/api/profile/working-status', ['do_not_disturb' => false])
+        ->assertOk()
+        ->assertJsonPath('user.do_not_disturb', false);
+
+    expect($user->refresh()->isInQuietHours())->toBeFalse();
+});

@@ -21,6 +21,7 @@ class UpdateWorkingStatusRequest extends FormRequest
             'working_status_dates' => ['sometimes', 'nullable', 'string', 'max:255'],
             'disable_notifications_while_away' => ['sometimes', 'boolean'],
             'hide_online_status' => ['sometimes', 'boolean'],
+            'do_not_disturb' => ['sometimes', 'boolean'],
         ];
     }
 }
