@@ -26,6 +26,8 @@ class WorkspaceMemberResource extends JsonResource
             'full_name' => $this->full_name,
             'email' => $this->email,
             'profile_photo_url' => $this->profile_photo_url,
+            // Shown next to the name in the board People pickers, "Name (Job title)".
+            'job_title' => $this->job_title,
             'is_deactivated' => $this->is_deactivated,
             'role' => $this->pivot->role,
             'is_recent' => (bool) $this->pivot->is_recent,

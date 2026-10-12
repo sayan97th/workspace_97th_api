@@ -200,3 +200,17 @@ test('re-inviting a previously removed member to a home workspace clears the exc
         'user_id' => $member->id,
     ]);
 });
+
+test('the members roster includes each member\'s job title for the people pickers', function () {
+    $owner = User::factory()->create(['job_title' => 'Content Marketer']);
+    $member = User::factory()->create(['job_title' => null]);
+    $workspace = Workspace::factory()->create(['created_by' => $owner->id]);
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+
+    $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/members")
+        ->assertOk()
+        ->assertJsonFragment(['id' => $owner->id, 'job_title' => 'Content Marketer'])
+        ->assertJsonFragment(['id' => $member->id, 'job_title' => null]);
+});
