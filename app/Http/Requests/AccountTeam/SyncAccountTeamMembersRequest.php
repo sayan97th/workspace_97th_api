@@ -3,6 +3,7 @@
 namespace App\Http\Requests\AccountTeam;
 
 use App\Concerns\ValidatesStaffMemberIds;
+use App\Models\AccountTeam;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -19,7 +20,15 @@ class SyncAccountTeamMembersRequest extends FormRequest
     {
         return [
             'member_ids' => ['present', 'array'],
-            'member_ids.*' => ['integer', $this->staffMemberIdRule()],
+            'member_ids.*' => ['integer', $this->teamMemberIdRule($this->team()->allow_guests)],
         ];
+    }
+
+    private function team(): AccountTeam
+    {
+        /** @var AccountTeam $team */
+        $team = $this->route('team');
+
+        return $team;
     }
 }

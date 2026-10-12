@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\AccountTeam\AccountTeamBoardController;
 use App\Http\Controllers\AccountTeam\AccountTeamController;
+use App\Http\Controllers\AccountTeam\AccountTeamImageController;
 use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
 use App\Http\Controllers\Admin\AccountSetting\AccountPermissionsController;
 use App\Http\Controllers\Admin\AccountSetting\AccountSettingController;
@@ -217,7 +219,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
     // Organization branding (corner logo, favicon, brand color, Help links, announcement), readable
     // by any authenticated user, not just staff, since the app shell shows it for everyone.
-    // Managed at `/admin/organization`.
+    // Managed at `/administration?section=organization`.
     Route::get('branding', [PublicBrandingController::class, 'show']);
 
     // The caller's own account permissions (Administration > Permissions), so the app can hide
@@ -827,7 +829,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             });
         });
 
-        // Organization settings (`/admin/organization`): company profile, contact details, brand
+        // Organization settings (`/administration?section=organization`): company profile, contact details, brand
         // color, logos and favicon, sign in page copy and the announcement banner. Same singleton
         // row as the account settings above, staff may read it, only admins may change it.
         Route::prefix('organization')->group(function () {
@@ -886,7 +888,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Account Teams, company-wide staff groupings (Monday-style "Teams"), independent of any
     // single workspace. Staff-level roles and above can read them, but only admins and the
     // account owner create, edit or delete a team and pick its owners. Adding and removing
-    // members is also open to that team's own owners, checked in `AccountTeamMemberController`.
+    // members is also open to that team's own owners, checked in `AccountTeamMemberController`,
+    // and anyone may leave a team.
     Route::middleware('role:super_admin,admin,staff')->group(function () {
         Route::get('account-team-members', [AccountTeamMemberController::class, 'all']);
         Route::get('account-team-candidates', [AccountTeamMemberController::class, 'candidates']);
@@ -897,6 +900,15 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::get('{team}/members', [AccountTeamMemberController::class, 'forTeam']);
             Route::post('{team}/members', [AccountTeamMemberController::class, 'store']);
             Route::delete('{team}/members/{user}', [AccountTeamMemberController::class, 'destroy']);
+            // Picture, cover and joined boards are open to admins and the team's owners, checked in the controllers.
+            Route::post('{team}/picture', [AccountTeamImageController::class, 'storePicture']);
+            Route::delete('{team}/picture', [AccountTeamImageController::class, 'destroyPicture']);
+            Route::post('{team}/cover', [AccountTeamImageController::class, 'storeCover']);
+            Route::delete('{team}/cover', [AccountTeamImageController::class, 'destroyCover']);
+            Route::get('{team}/boards', [AccountTeamBoardController::class, 'index']);
+            Route::get('{team}/board-candidates', [AccountTeamBoardController::class, 'candidates']);
+            Route::post('{team}/boards', [AccountTeamBoardController::class, 'store']);
+            Route::delete('{team}/boards/{board}', [AccountTeamBoardController::class, 'destroy']);
 
             Route::middleware('role:super_admin,admin')->group(function () {
                 Route::post('/', [AccountTeamController::class, 'store']);

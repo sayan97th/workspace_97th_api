@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\AccountTeam;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -9,7 +10,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
 /**
  * A staff user shown in a Teams roster (a single team's members, the account-wide
  * "All members" dedupe, or the "add members" candidate directory). The controller
- * must eager-load `roles:id,name` before returning this, since `is_owner` reads it. `is_team_owner`
+ * must eager-load `roles:id,name` before returning this, since `is_owner` and `is_guest` read it. `is_team_owner`
  * is only meaningful when the row came through a team's `members()` relation (it reads the
  * membership pivot), every other listing reports false.
  *
@@ -30,6 +31,14 @@ class AccountTeamMemberResource extends JsonResource
             'profile_photo_url' => $this->profile_photo_url,
             'is_owner' => $this->hasRole('super_admin'),
             'is_team_owner' => $this->relationLoaded('pivot') && (bool) $this->pivot->is_team_owner,
+            'is_guest' => $this->hasRole('client') && ! $this->hasRole(AccountTeam::STAFF_ROLES),
+            'is_deactivated' => $this->is_deactivated,
+            // Only the "All users" listing loads the teams each person belongs to.
+            'teams' => $this->whenLoaded('accountTeams', fn () => $this->accountTeams->map(fn (AccountTeam $team) => [
+                'id' => (string) $team->id,
+                'name' => $team->name,
+                'picture_url' => $team->picture_url,
+            ])->values()),
         ];
     }
 }

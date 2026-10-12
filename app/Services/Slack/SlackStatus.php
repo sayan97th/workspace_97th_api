@@ -14,8 +14,8 @@ class SlackStatus
     /** Roles allowed to set up the Slack app and manage workspaces, the same `role:` gate as the routes. */
     public const MANAGER_ROLES = ['super_admin', 'admin'];
 
-    /** Frontend page where the Slack app and workspaces are set up, Administration > Integrations > Slack. */
-    public const SETUP_PATH = '/administration/integrations/slack';
+    /** Frontend page where the Slack app and workspaces are set up, Administration > Connections > Slack settings. */
+    public const SETUP_PATH = '/administration?section=slack';
 
     public function __construct(
         private readonly SlackAppCredentials $credentials,

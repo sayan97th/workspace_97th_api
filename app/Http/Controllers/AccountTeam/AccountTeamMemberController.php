@@ -10,6 +10,7 @@ use App\Http\Resources\AccountTeamMemberResource;
 use App\Http\Resources\AccountTeamResource;
 use App\Models\AccountTeam;
 use App\Models\User;
+use App\Services\AccountTeam\AccountTeamBoardAccess;
 use App\Support\AuditLogger;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
@@ -22,6 +23,8 @@ class AccountTeamMemberController extends Controller
     use ValidatesStaffMemberIds;
 
     private const MAX_PER_PAGE = 100;
+
+    public function __construct(private readonly AccountTeamBoardAccess $board_access) {}
 
     /**
      * GET /api/account-teams/{team}/members
@@ -44,16 +47,18 @@ class AccountTeamMemberController extends Controller
     /**
      * PUT /api/account-teams/{team}/members
      *
-     * Replaces the team's roster wholesale with `member_ids` — simpler than
+     * Replaces the team's roster wholesale with `member_ids`, simpler than
      * add/remove diff endpoints, and matches how the "Edit team" dialog's
      * member picker always submits the full selection.
      */
     public function sync(SyncAccountTeamMembersRequest $request, AccountTeam $team): JsonResponse
     {
-        $team->members()->sync($request->validated('member_ids'));
+        $changes = $team->members()->sync($request->validated('member_ids'));
+        $this->board_access->grantMembers($team, array_map('intval', $changes['attached']), $request->user());
 
         return response()->json([
             'message' => 'Team members updated successfully.',
+            'team' => new AccountTeamResource($team->loadResourceData($request->user())),
         ]);
     }
 
@@ -71,8 +76,9 @@ class AccountTeamMemberController extends Controller
         abort_unless($team->canBeManagedBy($actor), 403, 'You cannot manage this team.');
 
         $member_ids = $request->validated('member_ids');
-        $team->members()->syncWithoutDetaching($member_ids);
-        $team->loadCount('members')->load('owners');
+        $changes = $team->members()->syncWithoutDetaching($member_ids);
+        $this->board_access->grantMembers($team, array_map('intval', $changes['attached']), $actor);
+        $team->loadResourceData($actor);
 
         AuditLogger::log(
             'team.members_added',
@@ -91,33 +97,38 @@ class AccountTeamMemberController extends Controller
      * DELETE /api/account-teams/{team}/members/{user}
      *
      * Removes a single member from the team's roster. Backs the roster
-     * panel's per-row remove action. Team owners can remove regular members but only an admin
-     * can remove another owner, so an owner cannot lock out the person who delegated to them.
+     * panel's per-row remove action and "Leave team", anyone may remove themselves. Team owners
+     * can remove regular members but only an admin can remove another owner, so an owner cannot
+     * lock out the person who delegated to them.
      */
     public function destroy(Request $request, AccountTeam $team, User $user): JsonResponse
     {
         $actor = $request->user();
-        abort_unless($team->canBeManagedBy($actor), 403, 'You cannot manage this team.');
+        $is_leaving = $actor->id === $user->id;
 
-        $is_target_owner = $team->owners()->whereKey($user->id)->exists();
-        abort_if(
-            $is_target_owner && ! $actor->hasRole(['super_admin', 'admin']),
-            403,
-            'Only an admin can remove a team owner.'
-        );
+        if (! $is_leaving) {
+            abort_unless($team->canBeManagedBy($actor), 403, 'You cannot manage this team.');
+
+            $is_target_owner = $team->owners()->whereKey($user->id)->exists();
+            abort_if(
+                $is_target_owner && ! $actor->hasRole(['super_admin', 'admin']),
+                403,
+                'Only an admin can remove a team owner.'
+            );
+        }
 
         $team->members()->detach($user->id);
-        $team->loadCount('members')->load('owners');
+        $team->loadResourceData($actor);
 
         AuditLogger::log(
-            'team.member_removed',
-            "Removed {$user->full_name} from team \"{$team->name}\".",
+            $is_leaving ? 'team.member_left' : 'team.member_removed',
+            $is_leaving ? "{$user->full_name} left team \"{$team->name}\"." : "Removed {$user->full_name} from team \"{$team->name}\".",
             $actor,
             ['team_id' => $team->id, 'user_id' => $user->id],
         );
 
         return response()->json([
-            'message' => 'Member removed successfully.',
+            'message' => $is_leaving ? 'You left the team.' : 'Member removed successfully.',
             'team' => new AccountTeamResource($team),
         ]);
     }
@@ -126,14 +137,15 @@ class AccountTeamMemberController extends Controller
      * PUT /api/account-teams/{team}/owners/{user}
      *
      * Makes a staff user an owner of the team, adding them to the roster first when they are
-     * not on it yet. Admin only, the route sits behind the admin role gate.
+     * not on it yet. Guests never own a team. Admin only, the route sits behind the admin role gate.
      */
     public function assignOwner(Request $request, AccountTeam $team, User $user): JsonResponse
     {
         abort_unless($user->hasRole(self::staffRoles()), 422, 'Only staff users can own a team.');
 
-        $team->members()->syncWithoutDetaching([$user->id => ['is_team_owner' => true]]);
-        $team->loadCount('members')->load('owners');
+        $changes = $team->members()->syncWithoutDetaching([$user->id => ['is_team_owner' => true]]);
+        $this->board_access->grantMembers($team, array_map('intval', $changes['attached']), $request->user());
+        $team->loadResourceData($request->user());
 
         AuditLogger::log(
             'team.owner_assigned',
@@ -156,7 +168,7 @@ class AccountTeamMemberController extends Controller
     public function removeOwner(Request $request, AccountTeam $team, User $user): JsonResponse
     {
         $team->members()->updateExistingPivot($user->id, ['is_team_owner' => false]);
-        $team->loadCount('members')->load('owners');
+        $team->loadResourceData($request->user());
 
         AuditLogger::log(
             'team.owner_removed',
@@ -174,15 +186,15 @@ class AccountTeamMemberController extends Controller
     /**
      * GET /api/account-team-members
      *
-     * The account-wide "All members" dedupe: every staff user who belongs to
-     * at least one team, once each — not literally every staff account (a
-     * new hire with no team yet stays absent until they're added to one).
+     * The "All users" directory: every staff user, with or without a team, plus the guests
+     * who were added to a team, each with the teams they belong to.
      */
     public function all(Request $request): JsonResponse
     {
-        $query = User::whereHas('accountTeams')
+        $query = User::where(fn (Builder $inner) => $inner
             ->whereHas('roles', fn (Builder $roles) => $roles->whereIn('name', self::staffRoles()))
-            ->with('roles:id,name')
+            ->orWhereHas('accountTeams'))
+            ->with(['roles:id,name', 'accountTeams' => fn ($teams) => $teams->select('account_teams.id', 'name', 'picture_path')->orderBy('name')])
             ->orderBy('first_name')
             ->orderBy('last_name');
 
@@ -197,22 +209,27 @@ class AccountTeamMemberController extends Controller
     /**
      * GET /api/account-team-candidates
      *
-     * The staff directory a team's member picker searches against — every
-     * staff user regardless of existing team membership, unless
-     * `exclude_team_id` is given (the "Add members" panel, which only wants
-     * people who aren't already on that team).
+     * The directory a team's member picker searches against, every staff user regardless of
+     * existing team membership, unless `exclude_team_id` is given (the "Add users" dialog,
+     * which only wants people who aren't already on that team). Guests are included with
+     * `include_guests=1`, or when the excluded team allows guests.
      */
     public function candidates(Request $request): JsonResponse
     {
-        $query = User::whereHas('roles', fn (Builder $roles) => $roles->whereIn('name', self::staffRoles()))
+        $exclude_team = $request->query('exclude_team_id') ? AccountTeam::find($request->query('exclude_team_id')) : null;
+        $roles = ($request->boolean('include_guests') || $exclude_team?->allow_guests)
+            ? [...self::staffRoles(), AccountTeam::GUEST_ROLE]
+            : self::staffRoles();
+
+        $query = User::whereHas('roles', fn (Builder $roles_query) => $roles_query->whereIn('name', $roles))
             ->with('roles:id,name')
             ->orderBy('first_name')
             ->orderBy('last_name');
 
-        if ($exclude_team_id = $request->query('exclude_team_id')) {
+        if ($exclude_team !== null) {
             $query->whereDoesntHave(
                 'accountTeams',
-                fn (Builder $teams) => $teams->where('account_teams.id', $exclude_team_id)
+                fn (Builder $teams) => $teams->where('account_teams.id', $exclude_team->id)
             );
         }
 

@@ -331,6 +331,17 @@ class WorkspaceNavigationItem extends Model
     }
 
     /**
+     * The account teams that joined this board, see {@see AccountTeam::boards()}.
+     *
+     * @return BelongsToMany<AccountTeam, $this>
+     */
+    public function accountTeams(): BelongsToMany
+    {
+        return $this->belongsToMany(AccountTeam::class, 'account_team_boards', 'board_id', 'account_team_id')
+            ->withTimestamps();
+    }
+
+    /**
      * Scope: leaves that count as an actual "board" (not a doc/dashboard/workflow, and not
      * the special workspace-manage view), matching {@see ContentController}'s own asset-type
      * bucketing. Used by Administration > Board ownership, which only deals in real boards.

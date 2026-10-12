@@ -103,7 +103,7 @@ test('an administrator can complete the install through the callback', function 
     parse_str($state, $query);
 
     $this->get('/api/integrations/slack/callback?code=abc&state='.$query['state'])
-        ->assertRedirect('http://frontend.test/administration/integrations/slack?slack=connected');
+        ->assertRedirect('http://frontend.test/administration?section=slack&slack=connected');
 
     $installation = SlackInstallation::current();
     expect($installation->team_name)->toBe('Acme')

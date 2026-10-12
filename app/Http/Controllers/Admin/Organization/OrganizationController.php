@@ -10,7 +10,7 @@ use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 
 /**
- * Administration > Organization (`/admin/organization`): the company profile, contact and
+ * Administration > Organization (`/administration?section=organization`): the company profile, contact and
  * support details, brand color, sign in page copy and the announcement banner. Uploaded
  * images go through {@see OrganizationAssetController}.
  */

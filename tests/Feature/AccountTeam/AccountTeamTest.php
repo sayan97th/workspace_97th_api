@@ -155,29 +155,33 @@ test('a client cannot be added as a team member', function () {
         ->assertStatus(422);
 });
 
-test('"all members" dedupes staff who belong to more than one team', function () {
-    $staff = staffUser();
-    $shared_member = staffUser();
-    $team_one = AccountTeam::factory()->create();
-    $team_two = AccountTeam::factory()->create();
+test('"all users" lists each staff user once with every team they belong to', function () {
+    $staff = staffUser(['first_name' => 'Aaron']);
+    $shared_member = staffUser(['first_name' => 'Zoe']);
+    $team_one = AccountTeam::factory()->create(['name' => 'Alpha']);
+    $team_two = AccountTeam::factory()->create(['name' => 'Beta']);
     $team_one->members()->attach($shared_member->id);
     $team_two->members()->attach($shared_member->id);
 
     $this->actingAs($staff, 'api')
         ->getJson('/api/account-team-members')
         ->assertOk()
-        ->assertJsonCount(1, 'data')
-        ->assertJsonPath('team_count', 2);
+        ->assertJsonCount(2, 'data')
+        ->assertJsonPath('team_count', 2)
+        ->assertJsonPath('data.1.id', (string) $shared_member->id)
+        ->assertJsonPath('data.1.teams.0.name', 'Alpha')
+        ->assertJsonPath('data.1.teams.1.name', 'Beta');
 });
 
-test('"all members" excludes staff who belong to no team', function () {
+test('"all users" includes staff who belong to no team', function () {
     $staff = staffUser();
     staffUser(); // never attached to a team
 
     $this->actingAs($staff, 'api')
         ->getJson('/api/account-team-members')
         ->assertOk()
-        ->assertJsonCount(0, 'data');
+        ->assertJsonCount(2, 'data')
+        ->assertJsonPath('data.0.teams', []);
 });
 
 test('the candidate directory excludes client accounts', function () {

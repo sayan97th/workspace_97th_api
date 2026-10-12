@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
- * Administration view of the organization settings (`/admin/organization`), every field the
+ * Administration view of the organization settings (`/administration?section=organization`), every field the
  * Organization page can edit plus the uploaded asset URLs.
  *
  * @mixin AccountSetting

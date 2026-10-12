@@ -3,14 +3,15 @@
 namespace App\Concerns;
 
 use App\Http\Controllers\AccountTeam\AccountTeamMemberController;
+use App\Models\AccountTeam;
 use App\Models\User;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\In;
 
 /**
- * Shared by every request that assigns Account Team membership: Teams only
- * ever draw from — and only ever display — the internal staff roster, never
- * client-portal accounts. See {@see AccountTeamMemberController}
+ * Shared by every request that assigns Account Team membership: Teams draw from
+ * the internal staff roster, and from guests (client accounts) only on a team
+ * that allows guests. See {@see AccountTeamMemberController}
  * for the read-side counterpart of this same role list.
  */
 trait ValidatesStaffMemberIds
@@ -20,7 +21,7 @@ trait ValidatesStaffMemberIds
      */
     public static function staffRoles(): array
     {
-        return ['super_admin', 'admin', 'staff'];
+        return AccountTeam::STAFF_ROLES;
     }
 
     /**
@@ -32,5 +33,16 @@ trait ValidatesStaffMemberIds
             ->pluck('id');
 
         return Rule::in($staff_ids);
+    }
+
+    /**
+     * A `member_ids.*` rule for one team: staff only, plus guests when the team allows them.
+     */
+    protected function teamMemberIdRule(bool $allow_guests): In
+    {
+        $roles = $allow_guests ? [...self::staffRoles(), AccountTeam::GUEST_ROLE] : self::staffRoles();
+        $member_ids = User::whereHas('roles', fn ($query) => $query->whereIn('name', $roles))->pluck('id');
+
+        return Rule::in($member_ids);
     }
 }

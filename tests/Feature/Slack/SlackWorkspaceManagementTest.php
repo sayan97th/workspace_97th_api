@@ -372,7 +372,7 @@ test('administrators and the account owner set up the slack app, members and sta
         ->assertJsonPath('can_manage', true)
         ->assertJsonPath('can_configure_app', true)
         ->assertJsonPath('needs_setup', true)
-        ->assertJsonPath('setup_path', '/administration/integrations/slack');
+        ->assertJsonPath('setup_path', '/administration?section=slack');
     $this->actingAs($admin, 'api')->getJson('/api/integrations/slack/app')->assertOk()->assertJsonPath('is_configured', false);
     $this->actingAs($admin, 'api')->putJson('/api/integrations/slack/app', [
         'client_id' => '111.222',
