@@ -48,6 +48,7 @@ use App\Http\Controllers\Board\BoardFormController;
 use App\Http\Controllers\Board\BoardGroupController;
 use App\Http\Controllers\Board\BoardImportController;
 use App\Http\Controllers\Board\BoardInvitationController;
+use App\Http\Controllers\Board\BoardItemActivityController;
 use App\Http\Controllers\Board\BoardItemAttachmentController;
 use App\Http\Controllers\Board\BoardItemButtonController;
 use App\Http\Controllers\Board\BoardItemCellFileController;
@@ -634,6 +635,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // A button column's "press", fires the automations watching that button.
             Route::post('{board_item}/buttons/{column}', [BoardItemButtonController::class, 'press'])->middleware('throttle:60,1');
             Route::put('{board_item}/dependencies/{column}', [BoardItemDependencyController::class, 'update']);
+            // The item card's Activity Log tab.
+            Route::get('{board_item}/activity', [BoardItemActivityController::class, 'index']);
             Route::get('{board_item}/updates/export', [BoardItemUpdatesExportController::class, 'export'])->middleware('account.permission:export_data');
             Route::post('{board_item}/mute', [BoardItemNotificationMuteController::class, 'store']);
             Route::delete('{board_item}/mute', [BoardItemNotificationMuteController::class, 'destroy']);

@@ -15,11 +15,13 @@ use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
 use App\Http\Resources\BoardItemDetailResource;
 use App\Http\Resources\BoardItemResource;
 use App\Models\BoardColumn;
+use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardDependencyScheduler;
+use App\Services\Board\BoardItemActivityService;
 use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardItemScopeConversionService;
 use App\Services\Board\BoardItemValueService;
@@ -45,6 +47,7 @@ class BoardItemController extends Controller
         private readonly BoardDependencyScheduler $dependency_scheduler,
         private readonly BoardItemScopeConversionService $scope_conversion_service,
         private readonly ColumnPermissionService $column_permissions,
+        private readonly BoardItemActivityService $activity_service,
     ) {}
 
     /**
@@ -274,8 +277,19 @@ class BoardItemController extends Controller
             $this->cascadeGroupToDescendants($board_item, $validated['group_id']);
             $this->automation_service->handleItemMoved($board_item->fresh('group'), $from_group_id, $request->user());
         }
+        if (array_key_exists('group_id', $validated) && $from_group_id !== $board_item->group_id) {
+            $this->activity_service->recordField(
+                $board_item,
+                BoardItemActivityService::FIELD_GROUP,
+                'Group',
+                BoardGroup::whereKey($from_group_id)->value('name'),
+                $board_item->fresh('group')->group?->name,
+                $request->user(),
+            );
+        }
         if (array_key_exists('name', $validated) && $old_name !== (string) $board_item->name) {
             $this->automation_service->handleNameChanged($board_item->fresh('group'), $old_name, $request->user());
+            $this->activity_service->recordField($board_item, BoardItemActivityService::FIELD_NAME, 'Name', $old_name, (string) $board_item->name, $request->user());
         }
 
         return response()->json([

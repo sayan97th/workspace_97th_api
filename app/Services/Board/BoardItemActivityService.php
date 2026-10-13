@@ -27,6 +27,12 @@ class BoardItemActivityService
     /** Most changes shown under one update. */
     public const MAX_PER_UPDATE = 10;
 
+    /** `column_type` of an entry recording a rename of the item. */
+    public const FIELD_NAME = 'item_name';
+
+    /** `column_type` of an entry recording a move to another group. */
+    public const FIELD_GROUP = 'item_group';
+
     public function __construct(private readonly AutomationRunContext $run_context) {}
 
     /** Column types whose values are computed or too bulky to describe as a change. */
@@ -64,6 +70,32 @@ class BoardItemActivityService
             'column_type' => $column->type,
             'old_display' => $this->display($column, $old_value),
             'new_display' => $this->display($column, $new_value),
+        ]);
+    }
+
+    /**
+     * Stores a change to one of the item's own fields rather than a cell (its
+     * name, or the group it sits in), when the two sides really differ.
+     * `$field_type` is one of the `FIELD_*` constants.
+     */
+    public function recordField(BoardItem $board_item, string $field_type, string $field_label, ?string $old_display, ?string $new_display, ?User $actor): void
+    {
+        if ($old_display === $new_display) {
+            return;
+        }
+
+        $automation = $this->run_context->current();
+
+        BoardItemActivity::create([
+            'item_id' => $board_item->id,
+            'user_id' => $actor?->id,
+            'automation_id' => $automation?->id,
+            'automation_name' => $automation ? Str::limit($automation->name ?: 'Automation', 250, '') : null,
+            'column_id' => null,
+            'column_label' => $field_label,
+            'column_type' => $field_type,
+            'old_display' => $old_display === null || $old_display === '' ? null : Str::limit($old_display, self::MAX_DISPLAY_LENGTH),
+            'new_display' => $new_display === null || $new_display === '' ? null : Str::limit($new_display, self::MAX_DISPLAY_LENGTH),
         ]);
     }
 

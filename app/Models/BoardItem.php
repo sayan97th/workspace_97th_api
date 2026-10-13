@@ -207,6 +207,16 @@ class BoardItem extends Model
     }
 
     /**
+     * Every recorded change to this item's cells, for the item card's Activity Log tab.
+     *
+     * @return HasMany<BoardItemActivity, $this>
+     */
+    public function activities(): HasMany
+    {
+        return $this->hasMany(BoardItemActivity::class, 'item_id');
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
