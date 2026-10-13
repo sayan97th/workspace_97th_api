@@ -76,7 +76,7 @@ class ImportedCellValueCaster
             BoardColumn::TYPE_LONG_TEXT => $raw,
             BoardColumn::TYPE_NUMBER => $this->castNumber($raw),
             BoardColumn::TYPE_PROGRESS => $this->parsePercent($raw),
-            BoardColumn::TYPE_RATING => $this->castRating($raw),
+            BoardColumn::TYPE_RATING => $this->castRating($raw, $column->ratingMax()),
             BoardColumn::TYPE_CHECKBOX => $this->isUncheckedToken($raw) ? null : true,
             BoardColumn::TYPE_DATE => $this->parseDate($raw) ?? $this->parseActivityLogDate($raw),
             BoardColumn::TYPE_TIMELINE => $this->castTimeline($raw),
@@ -245,11 +245,11 @@ class ImportedCellValueCaster
         return floor($number) === $number && abs($number) < PHP_INT_MAX ? (int) $number : $number;
     }
 
-    private function castRating(string $raw): ?int
+    private function castRating(string $raw, int $rating_max): ?int
     {
         $number = $this->parseNumber($raw);
 
-        return $number === null ? null : (int) max(0, min(5, round($number)));
+        return $number === null ? null : (int) max(0, min($rating_max, round($number)));
     }
 
     /**

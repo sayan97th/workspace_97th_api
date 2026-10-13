@@ -200,6 +200,8 @@ class BoardFormService
                         'description' => $question['description'],
                         'is_required' => $question['is_required'],
                         'options' => $this->presentColumn($column)['options'],
+                        // Rating questions only: the column's own scale, so the form draws and accepts the same range as the board.
+                        'rating_max' => $column->type === BoardColumn::TYPE_RATING ? $column->ratingMax() : null,
                     ];
                 })
                 ->values(),
@@ -346,7 +348,9 @@ class BoardFormService
                 return $ok(filter_var($raw, FILTER_VALIDATE_BOOLEAN));
 
             case BoardColumn::TYPE_RATING:
-                return is_numeric($raw) && (int) $raw >= 1 && (int) $raw <= 5 ? $ok((int) $raw) : $fail("{$label} must be between 1 and 5.");
+                $rating_max = (int) ($question['rating_max'] ?? BoardColumn::RATING_DEFAULT_MAX);
+
+                return is_numeric($raw) && (int) $raw >= 1 && (int) $raw <= $rating_max ? $ok((int) $raw) : $fail("{$label} must be between 1 and {$rating_max}.");
         }
 
         return $fail("{$label} can't be answered from a form.");

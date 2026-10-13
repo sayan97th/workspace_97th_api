@@ -629,7 +629,7 @@ test('converting a root item into a subitem carries its values over to the match
     $this->assertDatabaseMissing('board_item_values', ['item_id' => $item->id, 'column_id' => $item_only->id]);
 });
 
-test('converting a row across the item and subitem boundary assigns a fresh auto number', function () {
+test('converting a row across the item and subitem boundary fills the subitem Item ID with the item id', function () {
     [$board, $group] = createItemTestBoard();
     $user = User::factory()->create();
     $sub_number = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'scope' => BoardColumn::SCOPE_SUBITEM, 'label' => 'ID', 'type' => BoardColumn::TYPE_AUTO_NUMBER]);
@@ -638,7 +638,7 @@ test('converting a row across the item and subitem boundary assigns a fresh auto
 
     $response = $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/parent", ['parent_id' => $parent->id]);
 
-    $response->assertOk()->assertJsonPath("item.values.{$sub_number->id}", 1);
+    $response->assertOk()->assertJsonPath("item.values.{$sub_number->id}", $item->id);
 });
 
 test('a subitem can be moved to a different parent item', function () {

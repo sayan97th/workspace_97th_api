@@ -136,7 +136,7 @@ trait RunsColumnActions
                 return null;
             }
             $number = match ($to->type) {
-                BoardColumn::TYPE_RATING => max(0, min(5, (int) round($number))),
+                BoardColumn::TYPE_RATING => max(0, min($to->ratingMax(), (int) round($number))),
                 BoardColumn::TYPE_PROGRESS => max(0, min(100, $number)),
                 default => $number,
             };

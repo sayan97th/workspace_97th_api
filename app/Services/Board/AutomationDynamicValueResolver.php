@@ -124,7 +124,7 @@ class AutomationDynamicValueResolver
                 $number = max(0, min(100, $number));
             }
             if ($target->type === BoardColumn::TYPE_RATING) {
-                $number = max(0, min(5, round($number)));
+                $number = max(0, min($target->ratingMax(), round($number)));
             }
 
             return [true, floor($number) === $number ? (int) $number : round($number, 6)];

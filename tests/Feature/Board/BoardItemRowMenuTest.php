@@ -112,7 +112,7 @@ test('moving a subitem to another parent keeps its values because both parents u
         ->assertJsonPath("item.values.{$notes->id}", 'stays');
 });
 
-test('promoting a subitem carries its values back to the matching item columns and assigns an item auto number', function () {
+test('promoting a subitem carries its values back to the matching item columns and fills the item Item ID with its id', function () {
     [, $board, $group] = createRowMenuBoard();
     $user = User::factory()->create();
     $sub_notes = createRowMenuColumn($board, $group, BoardColumn::SCOPE_SUBITEM, BoardColumn::TYPE_TEXT, 'Notes');
@@ -125,7 +125,7 @@ test('promoting a subitem carries its values back to the matching item columns a
     $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$sub->id}/parent", ['parent_id' => null, 'group_id' => $group->id])
         ->assertOk()
         ->assertJsonPath("item.values.{$item_notes->id}", 'moved back')
-        ->assertJsonPath("item.values.{$item_number->id}", 1);
+        ->assertJsonPath("item.values.{$item_number->id}", $sub->id);
 });
 
 test('a status value is translated to the option with the same label in the target column', function () {

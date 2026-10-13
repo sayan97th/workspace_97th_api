@@ -14,6 +14,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
+use App\Services\Board\BoardItemIdAssigner;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
@@ -28,6 +29,7 @@ class BoardColumnController extends Controller
     public function __construct(
         private readonly BoardViewResolver $view_resolver,
         private readonly ColumnPermissionService $column_permissions,
+        private readonly BoardItemIdAssigner $item_id_assigner,
     ) {}
 
     /**
@@ -101,6 +103,9 @@ class BoardColumnController extends Controller
             'pinnable' => $validated['pinnable'] ?? true,
         ]);
 
+        // An Item ID column shows every existing item's id right away.
+        $this->item_id_assigner->backfillColumn($column);
+
         return response()->json([
             'message' => 'Column created successfully.',
             'column' => new BoardColumnResource($column),
@@ -129,7 +134,13 @@ class BoardColumnController extends Controller
             $validated['config'] = $this->withDependencyDefaults(BoardColumn::TYPE_DEPENDENCY, $validated['config'] ?? $column->config, $column->board_view_id, $column->scope);
         }
 
+        $was_item_id = $column->type === BoardColumn::TYPE_AUTO_NUMBER;
         $column->fill($validated)->save();
+
+        // A column turned into an Item ID column swaps its old values for the item ids.
+        if (! $was_item_id) {
+            $this->item_id_assigner->backfillColumn($column);
+        }
 
         return response()->json([
             'message' => 'Column updated successfully.',
@@ -296,6 +307,9 @@ class BoardColumnController extends Controller
             }
         }
 
+        // An Item ID copy always holds the item ids, with or without values.
+        $this->item_id_assigner->backfillColumn($copy);
+
         return response()->json([
             'message' => 'Column duplicated successfully.',
             'column' => new BoardColumnResource($copy),
@@ -331,6 +345,7 @@ class BoardColumnController extends Controller
         $copy->label = "{$column->label} copy";
         $copy->position = $this->nextPosition($target_view, $column->scope);
         $copy->save();
+        $this->item_id_assigner->backfillColumn($copy);
 
         return response()->json([
             'message' => 'Column duplicated to the other board successfully.',

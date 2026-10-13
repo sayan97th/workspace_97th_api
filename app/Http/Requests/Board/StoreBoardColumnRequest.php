@@ -86,6 +86,9 @@ class StoreBoardColumnRequest extends FormRequest
             // Any column: the description the header's info popover shows ("Column description").
             // Hour columns only: 12 hour ("2:30 PM") or 24 hour ("14:30") display.
             'config.hour_format' => ['sometimes', Rule::in(['12', '24'])],
+            // Rating columns only: how many symbols the scale has, and which symbol draws it.
+            'config.rating_max' => ['sometimes', 'integer', 'min:1', 'max:'.BoardColumn::RATING_MAX_LIMIT],
+            'config.rating_icon' => ['sometimes', Rule::in(BoardColumn::RATING_ICONS)],
             'config.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'config.validation' => ['sometimes', 'nullable', 'array'],
             'config.validation.required' => ['sometimes', 'boolean'],

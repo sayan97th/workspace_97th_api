@@ -96,6 +96,9 @@ class SharedViewService
                 'options' => collect($column->config['options'] ?? [])
                     ->map(fn ($option) => ['id' => (string) $option['id'], 'label' => (string) $option['label'], 'color' => (string) ($option['color'] ?? '#c4c4c4')])
                     ->values(),
+                // Rating columns only: the scale and icon the shared view draws the value with.
+                'rating_max' => $column->type === BoardColumn::TYPE_RATING ? $column->ratingMax() : null,
+                'rating_icon' => $column->type === BoardColumn::TYPE_RATING ? ($column->config['rating_icon'] ?? 'star') : null,
             ])->values(),
             'groups' => $groups->map(fn (BoardGroup $group) => ['id' => $group->id, 'name' => $group->name, 'color' => $group->accent_color])->values(),
             'items' => $items->map(fn (BoardItem $item) => [

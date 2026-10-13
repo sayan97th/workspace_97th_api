@@ -6,7 +6,6 @@ use App\Models\BoardActivityLog;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
-use App\Models\BoardItemValue;
 use App\Models\WorkspaceNavigationItem;
 use Illuminate\Support\Carbon;
 
@@ -20,7 +19,10 @@ use Illuminate\Support\Carbon;
  */
 class RecurringItemService
 {
-    public function __construct(private readonly BoardActivityLogger $activity_logger) {}
+    public function __construct(
+        private readonly BoardActivityLogger $activity_logger,
+        private readonly BoardItemIdAssigner $item_id_assigner,
+    ) {}
 
     public function run(): int
     {
@@ -123,20 +125,9 @@ class RecurringItemService
         return $copy;
     }
 
+    /** The new occurrence's Item ID columns get its own id, see {@see BoardItemIdAssigner}. */
     private function assignAutoNumberValues(BoardItem $board_item, string $scope): void
     {
-        $auto_number_columns = BoardColumn::where('board_view_id', $board_item->group->board_view_id)
-            ->where('scope', $scope)
-            ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
-            ->get(['id']);
-
-        foreach ($auto_number_columns as $column) {
-            $next = BoardItemValue::where('column_id', $column->id)
-                ->pluck('value')
-                ->map(fn ($value) => is_numeric($value) ? (int) $value : 0)
-                ->max() ?? 0;
-
-            $board_item->values()->create(['column_id' => $column->id, 'value' => $next + 1]);
-        }
+        $this->item_id_assigner->assignToItem($board_item, $board_item->group->board_view_id, $scope);
     }
 }

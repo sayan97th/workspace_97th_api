@@ -123,8 +123,17 @@ class BoardColumn extends Model
 
     public const TYPE_EMAIL = 'email';
 
-    /** A 0-5 star rating, set by clicking a star directly in the cell. */
+    /** A star rating from 0 up to the column's own scale (`config.rating_max`, 5 by default), set by clicking a star directly in the cell. */
     public const TYPE_RATING = 'rating';
+
+    /** A Rating column's scale when `config.rating_max` is unset. */
+    public const RATING_DEFAULT_MAX = 5;
+
+    /** The largest scale a Rating column can be set to. */
+    public const RATING_MAX_LIMIT = 10;
+
+    /** The symbols a Rating column can draw its scale with (`config.rating_icon`). */
+    public const RATING_ICONS = ['star', 'heart', 'thumbs_up', 'smiley'];
 
     /** A team "vote" button — the cell stores the array of user ids who voted, mirroring a People column's own array shape. */
     public const TYPE_VOTE = 'vote';
@@ -226,6 +235,16 @@ class BoardColumn extends Model
         $mode = $this->config['dependency_mode'] ?? null;
 
         return in_array($mode, self::DEPENDENCY_MODES, true) ? $mode : self::DEPENDENCY_MODE_NONE;
+    }
+
+    /**
+     * A Rating column's scale, the highest value one of its cells can hold.
+     */
+    public function ratingMax(): int
+    {
+        $max = $this->config['rating_max'] ?? null;
+
+        return is_numeric($max) ? max(1, min(self::RATING_MAX_LIMIT, (int) $max)) : self::RATING_DEFAULT_MAX;
     }
 
     /**
