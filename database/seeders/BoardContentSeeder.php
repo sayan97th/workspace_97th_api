@@ -83,6 +83,7 @@ class BoardContentSeeder extends Seeder
         ]);
 
         $columns = $this->seedColumns($board);
+        $tag_ids = $this->seedTags($board);
         $groups = [];
         foreach ($group_names as $position => $name) {
             $groups[] = $board->groups()->create([
@@ -95,7 +96,7 @@ class BoardContentSeeder extends Seeder
         $first_item = null;
         foreach ($groups as $group) {
             for ($i = 0; $i < $items_per_group; $i++) {
-                $item = $this->seedItem($board, $group, $columns, $user_ids, $i);
+                $item = $this->seedItem($board, $group, $columns, $tag_ids, $user_ids, $i);
                 $first_item ??= $item;
             }
         }
@@ -123,13 +124,8 @@ class BoardContentSeeder extends Seeder
             ]],
             ['key' => 'owner', 'label' => 'Owner', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 130],
             ['key' => 'due_date', 'label' => 'Due Date', 'type' => BoardColumn::TYPE_DATE, 'width' => 130],
-            ['key' => 'tags', 'label' => 'Tags', 'type' => BoardColumn::TYPE_TAGS, 'width' => 180, 'config' => [
-                'options' => [
-                    ['id' => 'design', 'label' => 'Design', 'color' => '#a25ddc'],
-                    ['id' => 'backend', 'label' => 'Backend', 'color' => '#579bfc'],
-                    ['id' => 'urgent', 'label' => 'Urgent', 'color' => '#e2445c'],
-                ],
-            ]],
+            // Tags live on the board (`board_tags`), not in the column config, see `seedTags()`.
+            ['key' => 'tags', 'label' => 'Tags', 'type' => BoardColumn::TYPE_TAGS, 'width' => 180],
             ['key' => 'budget', 'label' => 'Budget', 'type' => BoardColumn::TYPE_NUMBER, 'width' => 110],
             ['key' => 'is_blocked', 'label' => 'Blocked', 'type' => BoardColumn::TYPE_CHECKBOX, 'width' => 90],
         ];
@@ -146,10 +142,32 @@ class BoardContentSeeder extends Seeder
     }
 
     /**
+     * The board's Tags column options, like monday.com's tags they live on the board.
+     *
+     * @return array<string, string> Tag key => tag id, as Tags cells store it
+     */
+    private function seedTags(WorkspaceNavigationItem $board): array
+    {
+        $definitions = [
+            'design' => ['label' => '#design', 'color' => '#a25ddc'],
+            'backend' => ['label' => '#backend', 'color' => '#579bfc'],
+            'urgent' => ['label' => '#urgent', 'color' => '#e2445c'],
+        ];
+
+        $tag_ids = [];
+        foreach (array_keys($definitions) as $position => $key) {
+            $tag_ids[$key] = (string) $board->tags()->create([...$definitions[$key], 'position' => $position])->id;
+        }
+
+        return $tag_ids;
+    }
+
+    /**
      * @param  array<string, BoardColumn>  $columns
+     * @param  array<string, string>  $tag_ids  See `seedTags()`.
      * @param  array<int, int>  $user_ids
      */
-    private function seedItem(WorkspaceNavigationItem $board, BoardGroup $group, array $columns, array $user_ids, int $index): BoardItem
+    private function seedItem(WorkspaceNavigationItem $board, BoardGroup $group, array $columns, array $tag_ids, array $user_ids, int $index): BoardItem
     {
         $statuses = ['not_started', 'in_progress', 'done'];
         $tag_sets = [['design'], ['backend', 'urgent'], ['design', 'backend'], []];
@@ -165,7 +183,7 @@ class BoardContentSeeder extends Seeder
             ['column_id' => $columns['status']->id, 'value' => $statuses[$index % 3]],
             ['column_id' => $columns['owner']->id, 'value' => $user_ids === [] ? [] : [$user_ids[$index % count($user_ids)]]],
             ['column_id' => $columns['due_date']->id, 'value' => now()->addDays($index)->toDateString()],
-            ['column_id' => $columns['tags']->id, 'value' => $tag_sets[$index % 4]],
+            ['column_id' => $columns['tags']->id, 'value' => array_map(fn (string $key) => $tag_ids[$key], $tag_sets[$index % 4])],
             ['column_id' => $columns['budget']->id, 'value' => ($index + 1) * 500],
             ['column_id' => $columns['is_blocked']->id, 'value' => $index % 3 === 0],
         ]);

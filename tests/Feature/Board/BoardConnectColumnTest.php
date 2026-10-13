@@ -75,6 +75,18 @@ test('connect items lists the connected board with its groups, columns and searc
         ->assertJsonPath("boards.0.items.0.texts.{$this->status->id}", 'Done');
 });
 
+test('connect items resolve tags shared from another board to their labels', function () {
+    $tags = BoardColumn::factory()->create(['board_id' => $this->sprints->id, 'type' => BoardColumn::TYPE_TAGS, 'label' => 'Tags']);
+    $own_tag = $this->sprints->tags()->create(['label' => '#qa', 'color' => '#579bfc', 'position' => 0]);
+    $public_tag = $this->roadmap->tags()->create(['label' => '#seo', 'color' => '#00c875', 'position' => 0]);
+    $this->task->values()->create(['column_id' => $tags->id, 'value' => [(string) $own_tag->id, (string) $public_tag->id]]);
+
+    $this->actingAs($this->user, 'api')
+        ->getJson(connectItemsUrl($this->roadmap, $this->column))
+        ->assertOk()
+        ->assertJsonPath("boards.0.items.0.texts.{$tags->id}", '#qa, #seo');
+});
+
 test('connect items leaves out private boards the user may not open', function () {
     $this->sprints->update(['board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE]);
 

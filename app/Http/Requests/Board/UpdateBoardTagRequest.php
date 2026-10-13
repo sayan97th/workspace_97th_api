@@ -17,9 +17,10 @@ class UpdateBoardTagRequest extends FormRequest
     public function rules(): array
     {
         $board = $this->route('item');
-        $board_id = $board instanceof WorkspaceNavigationItem ? $board->id : null;
         $tag = $this->route('tag');
         $tag_id = is_object($tag) ? $tag->id : null;
+        // A shared public tag can be edited from another board, its label stays unique on its own board.
+        $board_id = is_object($tag) ? $tag->board_id : ($board instanceof WorkspaceNavigationItem ? $board->id : null);
 
         return [
             'label' => [

@@ -103,6 +103,8 @@ use App\Http\Controllers\PublicAccess\PublicFormController;
 use App\Http\Controllers\PublicAccess\PublicSharedDocController;
 use App\Http\Controllers\PublicAccess\PublicSharedViewController;
 use App\Http\Controllers\Search\GlobalSearchController;
+use App\Http\Controllers\Search\SavedSearchController;
+use App\Http\Controllers\Search\SearchEverythingController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Controllers\Workspace\ContentController;
 use App\Http\Controllers\Workspace\WorkspaceAvatarController;
@@ -235,6 +237,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Top bar "Search for anything..." box, a typeahead so it is throttled more loosely than
     // most endpoints, the frontend already debounces and cancels stale requests.
     Route::get('search', GlobalSearchController::class)->middleware('throttle:120,1');
+
+    // "Search Everything" dialog (tabs, facets, infinite scroll) and the searches starred with its "Save" button.
+    Route::prefix('search')->group(function () {
+        Route::get('everything', SearchEverythingController::class)->middleware('throttle:120,1');
+        Route::get('saved', [SavedSearchController::class, 'index']);
+        Route::post('saved', [SavedSearchController::class, 'store']);
+        Route::delete('saved/{saved_search}', [SavedSearchController::class, 'destroy']);
+    });
 
     // Notifications — real-time (Reverb) + REST-readable notification feed.
     Route::prefix('notifications')->group(function () {

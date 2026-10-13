@@ -5,8 +5,8 @@ namespace App\Services\Board;
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemValue;
+use App\Models\BoardTag;
 use App\Models\User;
-use App\Models\WorkspaceNavigationItem;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -27,7 +27,7 @@ final class ConnectItemSearchText
      * @param  Collection<int, BoardColumn>  $columns  Keyed by id.
      * @param  Collection<int, BoardItem>  $items
      */
-    public function __construct(WorkspaceNavigationItem $board, private readonly Collection $columns, Collection $items)
+    public function __construct(private readonly Collection $columns, Collection $items)
     {
         $people_column_ids = $columns->where('type', BoardColumn::TYPE_PEOPLE)->keys()->all();
         $user_ids = $items->flatMap(fn (BoardItem $item) => $item->values->whereIn('column_id', $people_column_ids)->flatMap(fn (BoardItemValue $value) => (array) $value->value))
@@ -39,9 +39,16 @@ final class ConnectItemSearchText
             ? collect()
             : User::whereIn('id', $user_ids)->get()->mapWithKeys(fn (User $user) => [(string) $user->id => (string) $user->full_name]);
 
-        $this->tag_labels = $columns->contains('type', BoardColumn::TYPE_TAGS)
-            ? $board->tags()->get(['id', 'label'])->mapWithKeys(fn ($tag) => [(string) $tag->id => (string) $tag->label])
-            : collect();
+        // A cell can hold the board's own tags or public tags of other boards (see `TagCatalog`), so tags load by id.
+        $tags_column_ids = $columns->where('type', BoardColumn::TYPE_TAGS)->keys()->all();
+        $tag_ids = $items->flatMap(fn (BoardItem $item) => $item->values->whereIn('column_id', $tags_column_ids)->flatMap(fn (BoardItemValue $value) => (array) $value->value))
+            ->filter(fn ($id) => is_numeric($id))
+            ->unique()
+            ->values();
+
+        $this->tag_labels = $tag_ids->isEmpty()
+            ? collect()
+            : BoardTag::whereIn('id', $tag_ids)->get(['id', 'label'])->mapWithKeys(fn (BoardTag $tag) => [(string) $tag->id => (string) $tag->label]);
     }
 
     /**

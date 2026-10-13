@@ -21,13 +21,16 @@ final class VisibleBoards
     private const PRIVILEGED_GLOBAL_ROLES = ['super_admin', 'admin'];
 
     /**
+     * Pass `$include_archived` to keep archived boards too, the "Search archives" option of
+     * Search Everything uses it. Every other rule still applies.
+     *
      * @return Builder<WorkspaceNavigationItem>
      */
-    public static function query(User $user): Builder
+    public static function query(User $user, bool $include_archived = false): Builder
     {
         return WorkspaceNavigationItem::query()
             ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
-            ->notArchived()
+            ->unless($include_archived, fn (Builder $query) => $query->notArchived())
             ->whereHas('workspace')
             ->where(fn (Builder $query) => $query->where('view_key', '!=', self::MANAGE_WORKSPACE_VIEW_KEY)
                 ->orWhereNull('view_key'))

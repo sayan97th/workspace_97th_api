@@ -22,6 +22,8 @@ class BoardTagResource extends JsonResource
             'label' => $this->label,
             'color' => $this->color,
             'position' => $this->position,
+            // Items using the tag, set by `TagCatalog` on list responses only.
+            'usage_count' => $this->when(array_key_exists('usage_count', $this->resource->getAttributes()), fn () => (int) $this->resource->getAttribute('usage_count')),
         ];
     }
 }

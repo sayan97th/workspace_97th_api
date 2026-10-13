@@ -293,7 +293,7 @@ class ConnectBoardColumnService
             ->limit(self::MAX_ITEMS_PER_BOARD)
             ->get(['id', 'name', 'group_id', 'created_at', 'position']);
 
-        $texts = new ConnectItemSearchText($board, $searchable_columns, $items);
+        $texts = new ConnectItemSearchText($searchable_columns, $items);
         $listed_group_ids = $groups->pluck('id')->flip();
 
         return [
