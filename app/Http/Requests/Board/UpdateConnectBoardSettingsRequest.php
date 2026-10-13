@@ -22,7 +22,8 @@ class UpdateConnectBoardSettingsRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'linked_board_ids' => ['required', 'array', 'min:1', 'max:'.ConnectBoardColumnService::MAX_LINKED_BOARDS],
+            // Empty disconnects every board, the column then waits to be connected again.
+            'linked_board_ids' => ['present', 'array', 'max:'.ConnectBoardColumnService::MAX_LINKED_BOARDS],
             'linked_board_ids.*' => ['required', 'integer', 'distinct', $this->visibleBoardRule()],
             'allow_multiple_items' => ['sometimes', 'boolean'],
             'two_way' => ['sometimes', 'boolean'],
@@ -35,8 +36,7 @@ class UpdateConnectBoardSettingsRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'linked_board_ids.required' => 'Choose at least one board to connect.',
-            'linked_board_ids.min' => 'Choose at least one board to connect.',
+            'linked_board_ids.present' => 'Send the boards to connect.',
             'linked_board_ids.max' => 'You can connect up to '.ConnectBoardColumnService::MAX_LINKED_BOARDS.' boards.',
         ];
     }

@@ -115,10 +115,6 @@ test('settings reject boards that do not exist or are hidden', function () {
         ->assertUnprocessable()
         ->assertJsonValidationErrors('linked_board_ids.0');
 
-    $this->actingAs($this->user, 'api')
-        ->putJson(connectSettingsUrl($this->roadmap, $this->column), ['linked_board_ids' => []])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('linked_board_ids');
 });
 
 test('a two-way connection adds a column on the connected board and backfills it', function () {
@@ -206,13 +202,49 @@ test('settings keep an already connected private board and drop a deleted one', 
         ->assertJsonPath('column.config.linked_board_ids', [$secret->id, $this->sprints->id]);
 });
 
-test('settings refuse when every chosen board was deleted', function () {
+test('disconnecting every board leaves the column unconnected', function () {
     $gone = connectTestBoard($this->workspace, 'Gone');
-    $this->column->update(['config' => ['linked_board_id' => $gone->id]]);
+    $this->column->update(['config' => ['linked_board_ids' => [$this->sprints->id, $gone->id], 'linked_board_id' => $this->sprints->id]]);
     $gone->delete();
 
     $this->actingAs($this->user, 'api')
         ->putJson(connectSettingsUrl($this->roadmap, $this->column), ['linked_board_ids' => [$gone->id]])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('linked_board_ids');
+        ->assertOk()
+        ->assertJsonPath('column.config.linked_board_ids', [])
+        ->assertJsonMissingPath('column.config.linked_board_id');
+
+    $this->actingAs($this->user, 'api')
+        ->putJson(connectSettingsUrl($this->roadmap, $this->column), ['linked_board_ids' => []])
+        ->assertOk()
+        ->assertJsonPath('column.config.linked_board_ids', []);
+});
+
+test('the column contents are hidden from users who cannot open every connected board', function () {
+    $secret = connectTestBoard($this->workspace, 'Secret', ['board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE]);
+    $this->column->update(['config' => ['linked_board_ids' => [$this->sprints->id, $secret->id], 'linked_board_id' => $this->sprints->id]]);
+
+    $this->actingAs($this->user, 'api')
+        ->getJson(connectItemsUrl($this->roadmap, $this->column))
+        ->assertOk()
+        ->assertJsonCount(0, 'boards')
+        ->assertJsonPath('hidden_board_count', 1);
+});
+
+test('connect settings list the connected boards with their privacy and path', function () {
+    $secret = connectTestBoard($this->workspace, 'Secret', ['board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE]);
+    $folder = connectTestBoard($this->workspace, 'Dev folder', ['type' => WorkspaceNavigationItem::TYPE_GROUP]);
+    $this->sprints->update(['parent_id' => $folder->id, 'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE, 'created_by_id' => $this->user->id]);
+    $this->column->update(['config' => ['linked_board_ids' => [$this->sprints->id, $secret->id], 'linked_board_id' => $this->sprints->id, 'allow_multiple_items' => false]]);
+
+    $this->actingAs($this->user, 'api')
+        ->getJson(connectSettingsUrl($this->roadmap, $this->column))
+        ->assertOk()
+        ->assertJsonPath('allow_multiple_items', false)
+        ->assertJsonPath('two_way', false)
+        ->assertJsonPath('boards.0.name', 'Sprints')
+        ->assertJsonPath('boards.0.is_private', true)
+        ->assertJsonPath('boards.0.is_accessible', true)
+        ->assertJsonPath('boards.0.path', [$this->workspace->name, 'Dev folder'])
+        ->assertJsonPath('boards.1.name', null)
+        ->assertJsonPath('boards.1.is_accessible', false);
 });

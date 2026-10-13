@@ -539,6 +539,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
             // Connect boards column: the cell picker's boards, groups and items, and its "Boards settings".
             Route::get('{column}/connect-items', [BoardColumnConnectController::class, 'items']);
+            Route::get('{column}/connect-settings', [BoardColumnConnectController::class, 'settings']);
             Route::put('{column}/connect-settings', [BoardColumnConnectController::class, 'updateSettings']);
             Route::delete('{column}', [BoardColumnController::class, 'destroy']);
         });

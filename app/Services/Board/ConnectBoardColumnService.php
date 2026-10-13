@@ -78,10 +78,12 @@ class ConnectBoardColumnService
     }
 
     /**
-     * Everything the cell picker needs for each connected board the user may see: its groups
-     * (with their colors), its columns (for "Choose columns to search"), and its items with
-     * the searchable text of each of their cells. Items this column already links to are
-     * always included, even from another tab, so their names show in the cells.
+     * Everything the cell picker needs for each connected board: its groups (with their
+     * colors), its columns (for "Choose columns to search"), and its items with the searchable
+     * text of each of their cells. Items this column already links to are always included,
+     * even from another tab, so their names show in the cells. Like monday.com, only users who
+     * can open every connected board see the column's contents, everyone else gets no boards
+     * and the count of the ones they cannot open.
      *
      * @return array{boards: array<int, array<string, mixed>>, hidden_board_count: int}
      */
@@ -93,6 +95,10 @@ class ConnectBoardColumnService
         }
 
         $boards = VisibleBoards::query($user)->whereIn('id', $board_ids)->get()->keyBy('id');
+        $hidden_board_count = count($board_ids) - $boards->count();
+        if ($hidden_board_count > 0) {
+            return ['boards' => [], 'hidden_board_count' => $hidden_board_count];
+        }
 
         $linked_item_ids = BoardItemValue::where('column_id', $column->id)
             ->pluck('value')
@@ -102,13 +108,43 @@ class ConnectBoardColumnService
             ->all();
 
         $payload = collect($board_ids)
-            ->map(fn (int $board_id) => $boards->get($board_id))
-            ->filter()
-            ->map(fn (WorkspaceNavigationItem $board) => $this->boardOptions($board, $user, $linked_item_ids))
-            ->values()
+            ->map(fn (int $board_id) => $this->boardOptions($boards->get($board_id), $user, $linked_item_ids))
             ->all();
 
-        return ['boards' => $payload, 'hidden_board_count' => count($board_ids) - count($payload)];
+        return ['boards' => $payload, 'hidden_board_count' => 0];
+    }
+
+    /**
+     * The connected boards as the "Connected board column settings" lists them: name, whether
+     * the board is private, and where it lives ("Workspace > Folder"). A board the user may not
+     * open is listed without its name or path. Deleted boards are left out.
+     *
+     * @return array<int, array{id: int, name: string|null, is_private: bool, is_accessible: bool, path: array<int, string>}>
+     */
+    public function connectedBoards(BoardColumn $column, User $user): array
+    {
+        $board_ids = self::linkedBoardIds($column);
+        $boards = WorkspaceNavigationItem::with('workspace:id,name')->whereIn('id', $board_ids)->get()->keyBy('id');
+        $visible_ids = VisibleBoards::query($user)->whereIn('id', $board_ids)->pluck('id')->flip();
+
+        return collect($board_ids)
+            ->map(fn (int $board_id) => $boards->get($board_id))
+            ->filter()
+            ->map(function (WorkspaceNavigationItem $board) use ($visible_ids) {
+                $is_accessible = $visible_ids->has($board->id);
+
+                return [
+                    'id' => $board->id,
+                    'name' => $is_accessible ? $board->label : null,
+                    'is_private' => $board->board_type === WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+                    'is_accessible' => $is_accessible,
+                    'path' => $is_accessible
+                        ? array_values(array_filter([$board->workspace?->name, ...$board->ancestors()->pluck('label')->all()]))
+                        : [],
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     /**
@@ -119,19 +155,20 @@ class ConnectBoardColumnService
      */
     public function updateSettings(WorkspaceNavigationItem $board, BoardColumn $column, array $settings, User $user): BoardColumn
     {
-        // Boards deleted since they were connected are dropped.
+        // Boards deleted since they were connected are dropped. Disconnecting the last board leaves the column unconnected.
         $requested_ids = array_values(array_unique(array_map('intval', $settings['linked_board_ids'])));
         $existing_ids = WorkspaceNavigationItem::whereIn('id', $requested_ids)->pluck('id')->all();
         $board_ids = array_values(array_filter($requested_ids, fn (int $id) => in_array($id, $existing_ids, true)));
-        if ($board_ids === []) {
-            throw ValidationException::withMessages(['linked_board_ids' => 'Choose at least one board to connect.']);
-        }
 
         $config = $column->config ?? [];
         $previous_reverse_id = isset($config['reverse_column_id']) ? (int) $config['reverse_column_id'] : null;
 
         $config['linked_board_ids'] = $board_ids;
-        $config['linked_board_id'] = $board_ids[0];
+        if ($board_ids === []) {
+            unset($config['linked_board_id']);
+        } else {
+            $config['linked_board_id'] = $board_ids[0];
+        }
         $config['allow_multiple_items'] = (bool) ($settings['allow_multiple_items'] ?? true);
 
         // Two-way only works with a single connected board, like monday.com.

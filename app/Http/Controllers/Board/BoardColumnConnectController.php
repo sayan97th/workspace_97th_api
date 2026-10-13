@@ -35,6 +35,22 @@ class BoardColumnConnectController extends Controller
     }
 
     /**
+     * GET /api/boards/{item}/columns/{column}/connect-settings
+     *
+     * The column's settings with its connected boards, for "Connected board column settings".
+     */
+    public function settings(Request $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
+    {
+        $this->ensureConnectColumn($item, $column);
+
+        return response()->json([
+            'boards' => $this->connect_service->connectedBoards($column, $request->user()),
+            'allow_multiple_items' => (bool) ($column->config['allow_multiple_items'] ?? true),
+            'two_way' => (bool) ($column->config['two_way'] ?? false),
+        ]);
+    }
+
+    /**
      * PUT /api/boards/{item}/columns/{column}/connect-settings
      */
     public function updateSettings(UpdateConnectBoardSettingsRequest $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
