@@ -92,6 +92,8 @@ class UpdateBoardColumnRequest extends FormRequest
             // Validation rules, settable on any column kind — see `StoreBoardColumnRequest`'s own comment.
             // Any column: the description the header's info popover shows ("Column description").
             'config.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            // Any column: the column menu's "Hide column summary", leaves its cell in the group summary footer empty.
+            'config.hide_summary' => ['sometimes', 'boolean'],
             'config.validation' => ['sometimes', 'nullable', 'array'],
             'config.validation.required' => ['sometimes', 'boolean'],
             'config.validation.min' => ['sometimes', 'nullable', 'numeric'],
