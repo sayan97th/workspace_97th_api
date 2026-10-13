@@ -4,6 +4,7 @@ namespace App\Http\Requests\Board;
 
 use App\Models\BoardColumn;
 use App\Rules\ValidFormulaExpression;
+use App\Services\Board\ConnectBoardColumnService;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -78,6 +79,13 @@ class UpdateBoardColumnRequest extends FormRequest
             'config.button_color' => ['sometimes', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
             // Connect-board columns only: the other board this column's cells link items on.
             'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
+            // Connect-board columns only: every connected board (`linked_board_id` is the first one), whether a cell may hold several items,
+            // and the two-way link, all saved through the column's own "connect-settings" endpoint. Kept here so other config saves keep them.
+            'config.linked_board_ids' => ['sometimes', 'array', 'max:'.ConnectBoardColumnService::MAX_LINKED_BOARDS],
+            'config.linked_board_ids.*' => ['integer', Rule::exists('workspace_navigation_items', 'id')],
+            'config.allow_multiple_items' => ['sometimes', 'boolean'],
+            'config.two_way' => ['sometimes', 'boolean'],
+            'config.reverse_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             // Mirror columns only: which of this tab's own connect-board columns to read through, and which column on that linked board to display.
             'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],

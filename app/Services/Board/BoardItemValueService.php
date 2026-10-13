@@ -16,7 +16,8 @@ use App\Services\Notification\NotificationService;
  * of them get the same side effects: the "Assigned you" notification, board
  * automations and the item activity entry the Update Feed shows. A write an
  * automation makes is also written down in its run's journal, for "Undo". A
- * changed date also reschedules the items that depend on it.
+ * changed date also reschedules the items that depend on it, and a two-way
+ * Connect boards link is mirrored on the connected item.
  */
 class BoardItemValueService
 {
@@ -26,6 +27,7 @@ class BoardItemValueService
         private readonly BoardItemActivityService $activity_service,
         private readonly BoardAutomationRunJournal $journal,
         private readonly BoardDependencyScheduler $dependency_scheduler,
+        private readonly ConnectBoardColumnService $connect_service,
     ) {}
 
     /**
@@ -84,6 +86,9 @@ class BoardItemValueService
 
             // Moves the dates of items that depend on this one, see BoardDependencyScheduler.
             $this->dependency_scheduler->handleValueChanged($board_item, $column, $old_value, $value, $actor);
+
+            // A two-way Connect boards column shows the same link from the connected item's side too.
+            $this->connect_service->syncReverseLinks($board_item, $column, $old_value, $value);
         }
     }
 

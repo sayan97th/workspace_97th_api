@@ -40,6 +40,7 @@ use App\Http\Controllers\Board\AccountAutomationTemplateController;
 use App\Http\Controllers\Board\BoardActivityLogController;
 use App\Http\Controllers\Board\BoardAutomationController;
 use App\Http\Controllers\Board\BoardAutomationManageController;
+use App\Http\Controllers\Board\BoardColumnConnectController;
 use App\Http\Controllers\Board\BoardColumnController;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardDocController;
@@ -536,6 +537,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{column}/permissions', [BoardColumnController::class, 'updatePermissions']);
             Route::patch('{column}/move', [BoardColumnController::class, 'move']);
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
+            // Connect boards column: the cell picker's boards, groups and items, and its "Boards settings".
+            Route::get('{column}/connect-items', [BoardColumnConnectController::class, 'items']);
+            Route::put('{column}/connect-settings', [BoardColumnConnectController::class, 'updateSettings']);
             Route::delete('{column}', [BoardColumnController::class, 'destroy']);
         });
 

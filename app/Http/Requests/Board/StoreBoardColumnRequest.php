@@ -5,6 +5,7 @@ namespace App\Http\Requests\Board;
 use App\Models\BoardColumn;
 use App\Models\WorkspaceNavigationItem;
 use App\Rules\ValidFormulaExpression;
+use App\Services\Board\ConnectBoardColumnService;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -97,6 +98,13 @@ class StoreBoardColumnRequest extends FormRequest
             'config.button_label' => ['sometimes', 'string', 'max:40'],
             'config.button_color' => ['sometimes', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
             'config.linked_board_id' => ['sometimes', 'integer', Rule::exists('workspace_navigation_items', 'id')],
+            // Connect-board columns only: every connected board (`linked_board_id` is the first one), whether a cell may hold several items,
+            // and the two-way link, all saved through the column's own "connect-settings" endpoint. Kept here so other config saves keep them.
+            'config.linked_board_ids' => ['sometimes', 'array', 'max:'.ConnectBoardColumnService::MAX_LINKED_BOARDS],
+            'config.linked_board_ids.*' => ['integer', Rule::exists('workspace_navigation_items', 'id')],
+            'config.allow_multiple_items' => ['sometimes', 'boolean'],
+            'config.two_way' => ['sometimes', 'boolean'],
+            'config.reverse_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
             // Validation rules, settable on any column kind from the header
