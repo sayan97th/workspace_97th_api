@@ -90,6 +90,8 @@ class UpdateBoardColumnRequest extends FormRequest
             'config.source_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('type', BoardColumn::TYPE_CONNECT_BOARD))],
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
             // Validation rules, settable on any column kind — see `StoreBoardColumnRequest`'s own comment.
+            // Any column: the description the header's info popover shows ("Column description").
+            'config.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'config.validation' => ['sometimes', 'nullable', 'array'],
             'config.validation.required' => ['sometimes', 'boolean'],
             'config.validation.min' => ['sometimes', 'nullable', 'numeric'],

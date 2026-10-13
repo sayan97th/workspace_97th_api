@@ -110,6 +110,8 @@ class StoreBoardColumnRequest extends FormRequest
             // Validation rules, settable on any column kind from the header
             // menu's "Settings" panel — advisory only (flags an empty/out-of-
             // range/mismatched cell for the user), never blocks a cell save.
+            // Any column: the description the header's info popover shows ("Column description").
+            'config.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'config.validation' => ['sometimes', 'nullable', 'array'],
             'config.validation.required' => ['sometimes', 'boolean'],
             'config.validation.min' => ['sometimes', 'nullable', 'numeric'],

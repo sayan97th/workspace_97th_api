@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\BoardColumn;
+use App\Services\Board\ColumnLinkageResolver;
 use App\Services\Board\ColumnPermissionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -35,6 +36,10 @@ class BoardColumnResource extends JsonResource
             'view_restriction' => $this->view_restriction,
             'edit_restriction' => $this->edit_restriction,
             'can_edit_values' => $this->canEditValues($request),
+            // Connect boards and Mirror columns only: what they are linked to, for the header's info popover.
+            'linkage' => in_array($this->type, [BoardColumn::TYPE_CONNECT_BOARD, BoardColumn::TYPE_MIRROR], true)
+                ? app(ColumnLinkageResolver::class)->resolve($this->resource, $request->user())
+                : null,
         ];
     }
 

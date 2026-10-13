@@ -248,3 +248,41 @@ test('connect settings list the connected boards with their privacy and path', f
         ->assertJsonPath('boards.1.name', null)
         ->assertJsonPath('boards.1.is_accessible', false);
 });
+
+test('connect items carry the raw values and definitions of mirrored columns', function () {
+    BoardColumn::factory()->create([
+        'board_id' => $this->roadmap->id,
+        'type' => BoardColumn::TYPE_MIRROR,
+        'config' => ['source_column_id' => $this->column->id, 'mirrored_column_id' => $this->status->id],
+    ]);
+
+    $this->actingAs($this->user, 'api')
+        ->getJson(connectItemsUrl($this->roadmap, $this->column))
+        ->assertOk()
+        ->assertJsonPath('boards.0.mirrored_columns.0.id', $this->status->id)
+        ->assertJsonPath('boards.0.mirrored_columns.0.type', BoardColumn::TYPE_STATUS)
+        ->assertJsonPath('boards.0.mirrored_columns.0.options.0.label', 'Done')
+        ->assertJsonPath("boards.0.items.0.values.{$this->status->id}", 'done');
+});
+
+test('connect and mirror columns describe their linkage, any column keeps a description', function () {
+    $mirror = BoardColumn::factory()->create([
+        'board_id' => $this->roadmap->id,
+        'type' => BoardColumn::TYPE_MIRROR,
+        'label' => 'Tasks Status',
+        'config' => ['source_column_id' => $this->column->id, 'mirrored_column_id' => $this->status->id],
+    ]);
+
+    $this->actingAs($this->user, 'api')
+        ->patchJson("/api/boards/{$this->roadmap->id}/columns/{$mirror->id}", ['config' => [...$mirror->config, 'description' => 'Task status of the linked tasks']])
+        ->assertOk()
+        ->assertJsonPath('column.config.description', 'Task status of the linked tasks')
+        ->assertJsonPath('column.linkage.boards.0.name', 'Sprints')
+        ->assertJsonPath('column.linkage.mirrored_column.label', 'Status')
+        ->assertJsonPath('column.linkage.mirrored_column.board_name', 'Sprints');
+
+    $columns = $this->actingAs($this->user, 'api')->getJson("/api/boards/{$this->roadmap->id}/columns")->assertOk()->json();
+    $connect = collect($columns['data'] ?? $columns)->firstWhere('id', $this->column->id);
+    expect($connect['linkage']['boards'][0]['name'])->toBe('Sprints')
+        ->and($connect['linkage']['mirrored_column'])->toBeNull();
+});

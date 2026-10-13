@@ -107,8 +107,10 @@ class ConnectBoardColumnService
             ->values()
             ->all();
 
+        $mirrored_column_ids = $this->mirroredColumnIds($column);
+
         $payload = collect($board_ids)
-            ->map(fn (int $board_id) => $this->boardOptions($boards->get($board_id), $user, $linked_item_ids))
+            ->map(fn (int $board_id) => $this->boardOptions($boards->get($board_id), $user, $linked_item_ids, $mirrored_column_ids))
             ->all();
 
         return ['boards' => $payload, 'hidden_board_count' => 0];
@@ -239,10 +241,30 @@ class ConnectBoardColumnService
     }
 
     /**
+     * The connected boards' columns shown by this board's Mirror columns that read through
+     * `$column`. Their raw values travel with each item, so a mirror cell can draw them like
+     * the original column (a status bar, a pill) and edit them.
+     *
+     * @return array<int, int>
+     */
+    private function mirroredColumnIds(BoardColumn $column): array
+    {
+        return BoardColumn::where('board_id', $column->board_id)
+            ->where('type', BoardColumn::TYPE_MIRROR)
+            ->get(['id', 'config'])
+            ->filter(fn (BoardColumn $mirror) => (int) ($mirror->config['source_column_id'] ?? 0) === $column->id && isset($mirror->config['mirrored_column_id']))
+            ->map(fn (BoardColumn $mirror) => (int) $mirror->config['mirrored_column_id'])
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param  array<int, string>  $linked_item_ids
+     * @param  array<int, int>  $mirrored_column_ids
      * @return array<string, mixed>
      */
-    private function boardOptions(WorkspaceNavigationItem $board, User $user, array $linked_item_ids): array
+    private function boardOptions(WorkspaceNavigationItem $board, User $user, array $linked_item_ids, array $mirrored_column_ids = []): array
     {
         $view = $this->primaryView($board);
 
@@ -254,6 +276,9 @@ class ConnectBoardColumnService
             ? BoardColumn::where('board_view_id', $view->id)->where('scope', BoardColumn::SCOPE_ITEM)->orderBy('position')->get(['id', 'label', 'type', 'config'])
             : collect();
         $searchable_columns = $columns->reject(fn (BoardColumn $searchable) => in_array($searchable->type, self::UNSEARCHABLE_TYPES, true))->keyBy('id');
+        $mirrored_columns = $mirrored_column_ids === []
+            ? collect()
+            : BoardColumn::where('board_id', $board->id)->whereIn('id', $mirrored_column_ids)->get(['id', 'label', 'type', 'config'])->keyBy('id');
 
         $items = BoardItem::query()
             ->where('board_id', $board->id)
@@ -262,7 +287,7 @@ class ConnectBoardColumnService
             ->where(fn ($query) => $query->whereIn('group_id', $groups->pluck('id'))->orWhereIn('id', $linked_item_ids))
             ->with([
                 'group:id,accent_color,board_view_id',
-                'values' => fn ($query) => $query->whereIn('column_id', $searchable_columns->keys()),
+                'values' => fn ($query) => $query->whereIn('column_id', $searchable_columns->keys()->merge($mirrored_columns->keys())->unique()),
             ])
             ->orderBy('position')
             ->limit(self::MAX_ITEMS_PER_BOARD)
@@ -296,7 +321,18 @@ class ConnectBoardColumnService
                 'view_id' => $board_item->group?->board_view_id,
                 'created_at' => $board_item->created_at?->toISOString(),
                 'texts' => $texts->forItem($board_item, self::MAX_SEARCH_TEXT_LENGTH),
+                // Raw values of the mirrored columns only, keyed by column id.
+                'values' => (object) $board_item->values
+                    ->whereIn('column_id', $mirrored_columns->keys())
+                    ->mapWithKeys(fn (BoardItemValue $value) => [(string) $value->column_id => $value->value])
+                    ->all(),
             ])->values()->all(),
+            'mirrored_columns' => $mirrored_columns->values()->map(fn (BoardColumn $mirrored) => [
+                'id' => $mirrored->id,
+                'label' => $mirrored->label,
+                'type' => $mirrored->type,
+                'options' => $mirrored->config['options'] ?? [],
+            ])->all(),
         ];
     }
 
