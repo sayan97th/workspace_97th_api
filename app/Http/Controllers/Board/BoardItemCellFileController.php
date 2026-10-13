@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\StoreBoardItemCellFileDocRequest;
 use App\Http\Requests\Board\StoreBoardItemCellFileLinkRequest;
 use App\Http\Requests\Board\StoreBoardItemCellFileRequest;
 use App\Models\BoardColumn;
@@ -11,6 +12,7 @@ use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\ColumnPermissionService;
+use App\Support\AccountPermissions;
 use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,15 +29,22 @@ use Illuminate\Support\Str;
  * separate table for it, so every read of the current list goes through the
  * item's own `values` relation rather than a dedicated model.
  *
- * Each entry is either an uploaded file (`kind: file`, with a storage `path`)
- * or an external link (`kind: link`, no `path`, `size_bytes: 0`). Entries
- * saved before `kind` existed have none and are treated as uploaded files.
+ * Each entry is an uploaded file (`kind: file`, with a storage `path`), an
+ * external link (`kind: link`, no `path`, `size_bytes: 0`, plus a `source`
+ * naming the menu option that added it, "link" or a cloud provider) or a Doc
+ * created from the cell (`kind: doc`, with the Doc's `doc_id`). Entries saved
+ * before `kind` existed have none and are treated as uploaded files.
  */
 class BoardItemCellFileController extends Controller
 {
     public const KIND_FILE = 'file';
 
     public const KIND_LINK = 'link';
+
+    public const KIND_DOC = 'doc';
+
+    /** The Doc editor's view key, see `WorkspaceNavigationItem::ASSET_TYPE_VIEW_KEYS`. */
+    private const DOC_VIEW_KEY = 'doc';
 
     /**
      * POST /api/boards/{item}/items/{board_item}/columns/{column}/files
@@ -78,9 +87,9 @@ class BoardItemCellFileController extends Controller
     /**
      * POST /api/boards/{item}/items/{board_item}/columns/{column}/files/link
      *
-     * Appends an external link (the cell menu's "From Link") onto the
-     * column's existing list for this item. Nothing is downloaded or stored,
-     * the entry simply opens `url` in a new tab.
+     * Appends an external link (the cell menu's "From Link", or one of its
+     * cloud provider options) onto the column's existing list for this item.
+     * Nothing is downloaded or stored, the entry simply opens `url` in a new tab.
      */
     public function storeLink(StoreBoardItemCellFileLinkRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column): JsonResponse
     {
@@ -92,6 +101,7 @@ class BoardItemCellFileController extends Controller
         $link = [
             'id' => (string) Str::uuid(),
             'kind' => self::KIND_LINK,
+            'source' => $request->validated('source'),
             'file_name' => $text !== null && $text !== '' ? $text : $url,
             'path' => null,
             'url' => $url,
@@ -104,6 +114,42 @@ class BoardItemCellFileController extends Controller
 
         return response()->json([
             'message' => 'Link added successfully.',
+            'files' => $next_files,
+        ], 201);
+    }
+
+    /**
+     * POST /api/boards/{item}/items/{board_item}/columns/{column}/files/doc
+     *
+     * The cell menu's "Doc": creates a new Doc right after the board in the
+     * workspace tree (private when the board is private, so it is not exposed
+     * to people who cannot see the board) and attaches it to the cell.
+     * Removing the entry later only detaches it, the Doc itself is kept.
+     */
+    public function storeDoc(StoreBoardItemCellFileDocRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column): JsonResponse
+    {
+        $this->authorizeCellEdit($request, $item, $board_item, $column);
+        AccountPermissions::authorize($request->user(), AccountPermissions::CREATE_BOARDS);
+
+        $name = $request->validated('name') ?: $board_item->name;
+        $doc = $this->createDoc($item, $name, $request->user());
+
+        $entry = [
+            'id' => (string) Str::uuid(),
+            'kind' => self::KIND_DOC,
+            'doc_id' => $doc->id,
+            'file_name' => $doc->label,
+            'path' => null,
+            'url' => "/boards/{$doc->id}",
+            'mime_type' => 'application/vnd.workspace.doc',
+            'size_bytes' => 0,
+        ];
+
+        $next_files = $this->currentFiles($board_item, $column)->push($entry)->values();
+        $this->saveFiles($board_item, $column, $next_files, $request->user());
+
+        return response()->json([
+            'message' => 'Doc created successfully.',
             'files' => $next_files,
         ], 201);
     }
@@ -131,6 +177,36 @@ class BoardItemCellFileController extends Controller
         return response()->json([
             'message' => 'File removed successfully.',
             'files' => $next_files,
+        ]);
+    }
+
+    /**
+     * A new Doc leaf placed right after the board, in the same folder.
+     */
+    private function createDoc(WorkspaceNavigationItem $board, string $name, ?User $creator): WorkspaceNavigationItem
+    {
+        $siblings = WorkspaceNavigationItem::query()
+            ->where('workspace_id', $board->workspace_id)
+            ->where('parent_id', $board->parent_id);
+
+        $base_slug = Str::slug($name) ?: 'doc';
+        $slug = $base_slug;
+        for ($suffix = 1; $siblings->clone()->where('slug', $slug)->exists(); $suffix++) {
+            $slug = $base_slug.'-'.$suffix;
+        }
+
+        return WorkspaceNavigationItem::query()->create([
+            'workspace_id' => $board->workspace_id,
+            'parent_id' => $board->parent_id,
+            'type' => WorkspaceNavigationItem::TYPE_LEAF,
+            'label' => $name,
+            'slug' => $slug,
+            'view_key' => self::DOC_VIEW_KEY,
+            'board_type' => $board->board_type === WorkspaceNavigationItem::BOARD_TYPE_PRIVATE
+                ? WorkspaceNavigationItem::BOARD_TYPE_PRIVATE
+                : WorkspaceNavigationItem::BOARD_TYPE_MAIN,
+            'position' => (int) $siblings->clone()->max('position') + 1,
+            'created_by_id' => $creator?->id,
         ]);
     }
 

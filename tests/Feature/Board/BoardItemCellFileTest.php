@@ -127,3 +127,93 @@ test('deleting a link removes it without touching storage', function () {
         ->assertOk()
         ->assertJsonCount(0, 'files');
 });
+
+test('a plain link is tagged with the link source', function () {
+    [$board_item, $column] = createCellFileTestItem();
+
+    $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => 'https://example.com'])
+        ->assertCreated()
+        ->assertJsonPath('files.0.source', 'link');
+});
+
+test('a cloud provider link keeps its source when the host belongs to the provider', function (string $source, string $url) {
+    [$board_item, $column] = createCellFileTestItem();
+
+    $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => $url, 'source' => $source])
+        ->assertCreated()
+        ->assertJsonPath('files.0.kind', 'link')
+        ->assertJsonPath('files.0.source', $source);
+})->with([
+    'google drive' => ['google_drive', 'https://docs.google.com/spreadsheets/d/abc/edit'],
+    'dropbox' => ['dropbox', 'https://www.dropbox.com/s/abc/file.pdf'],
+    'box' => ['box', 'https://app.box.com/s/abc'],
+    'sharepoint' => ['onedrive', 'https://acme.sharepoint.com/sites/team/doc.docx'],
+]);
+
+test('a cloud provider link from another host is rejected', function () {
+    [$board_item, $column] = createCellFileTestItem();
+
+    $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => 'https://evil-google.com/file', 'source' => 'google_drive'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('url');
+});
+
+test('an unknown link source is rejected', function () {
+    [$board_item, $column] = createCellFileTestItem();
+
+    $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => 'https://example.com', 'source' => 'ftp_server'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('source');
+});
+
+test('the doc option creates a doc next to the board and attaches it to the cell', function () {
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/doc')
+        ->assertCreated()
+        ->assertJsonCount(1, 'files')
+        ->assertJsonPath('files.0.kind', 'doc')
+        ->assertJsonPath('files.0.file_name', 'Task');
+
+    $doc = WorkspaceNavigationItem::query()->findOrFail($response->json('files.0.doc_id'));
+    $board = WorkspaceNavigationItem::query()->findOrFail($board_item->board_id);
+
+    expect($doc->view_key)->toBe('doc')
+        ->and($doc->type)->toBe(WorkspaceNavigationItem::TYPE_LEAF)
+        ->and($doc->workspace_id)->toBe($board->workspace_id)
+        ->and($doc->created_by_id)->toBe($user->id)
+        ->and($response->json('files.0.url'))->toBe("/boards/{$doc->id}");
+});
+
+test('a doc created from a private board cell is private too', function () {
+    [$board_item, $column] = createCellFileTestItem();
+    WorkspaceNavigationItem::query()->whereKey($board_item->board_id)->update(['board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE]);
+
+    $doc_id = $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/doc', ['name' => 'Launch brief'])
+        ->assertCreated()
+        ->assertJsonPath('files.0.file_name', 'Launch brief')
+        ->json('files.0.doc_id');
+
+    expect(WorkspaceNavigationItem::query()->findOrFail($doc_id)->board_type)->toBe(WorkspaceNavigationItem::BOARD_TYPE_PRIVATE);
+});
+
+test('removing a doc entry keeps the doc itself', function () {
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $created = $this->actingAs($user, 'api')->postJson(cellFilesUrl($board_item, $column).'/doc')->json('files.0');
+
+    $this->actingAs($user, 'api')
+        ->deleteJson(cellFilesUrl($board_item, $column)."/{$created['id']}")
+        ->assertOk()
+        ->assertJsonCount(0, 'files');
+
+    expect(WorkspaceNavigationItem::query()->find($created['doc_id']))->not->toBeNull();
+});

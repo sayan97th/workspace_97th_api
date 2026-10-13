@@ -677,6 +677,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::prefix('{board_item}/columns/{column}/files')->group(function () {
                 Route::post('/', [BoardItemCellFileController::class, 'store']);
                 Route::post('link', [BoardItemCellFileController::class, 'storeLink']);
+                Route::post('doc', [BoardItemCellFileController::class, 'storeDoc']);
                 Route::delete('{file_id}', [BoardItemCellFileController::class, 'destroy']);
             });
         });
