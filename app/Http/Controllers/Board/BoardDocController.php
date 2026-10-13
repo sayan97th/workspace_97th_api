@@ -3,13 +3,16 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\PublicAccess\PublicSharedDocController;
 use App\Http\Controllers\Workspace\BoardController;
 use App\Http\Requests\Board\StoreBoardDocFileRequest;
+use App\Http\Requests\Board\UpdateBoardDocPublicLinkRequest;
 use App\Http\Requests\Board\UpdateBoardDocRequest;
 use App\Http\Resources\BoardDocResource;
 use App\Models\BoardDoc;
 use App\Models\WorkspaceNavigationItem;
 use App\Support\BoardEditGate;
+use App\Support\BoardManagementGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -87,6 +90,33 @@ class BoardDocController extends Controller
             'size' => $file->getSize(),
             'mime_type' => $file->getClientMimeType(),
         ], 201);
+    }
+
+    /**
+     * PUT /api/boards/{item}/doc/public-link
+     *
+     * The Share dialog's "Share public link" switch: a read only link anyone
+     * can open, see {@see PublicSharedDocController}. Turning it on creates
+     * the token once, turning it off keeps it so the same url comes back.
+     */
+    public function updatePublicLink(UpdateBoardDocPublicLinkRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $this->ensureLeaf($item);
+        BoardManagementGate::authorize($item, $request->user(), 'share this doc publicly');
+
+        $doc = BoardDoc::firstOrNew(['board_id' => $item->id]);
+        $is_enabled = $request->boolean('is_enabled');
+
+        if ($is_enabled && ! $doc->public_token) {
+            $doc->public_token = Str::random(48);
+        }
+        $doc->is_public_link_enabled = $is_enabled;
+        $doc->save();
+
+        return response()->json([
+            'message' => $is_enabled ? 'Public link created.' : 'Public link turned off.',
+            'doc' => new BoardDocResource($doc->load('updatedBy')),
+        ]);
     }
 
     /**

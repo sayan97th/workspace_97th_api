@@ -127,3 +127,53 @@ test('duplicating a doc copies its body', function () {
     $copy_id = $response->json('id') ?? $response->json('item.id') ?? $response->json('data.id');
     expect(BoardDoc::where('board_id', $copy_id)->value('content'))->toContain('Copied');
 });
+
+test('a doc owner can share a public link and anyone can open it until it is turned off', function () {
+    $owner = User::factory()->create();
+    $board = createDocTestBoard();
+    $board->update(['created_by_id' => $owner->id]);
+    BoardDoc::create(['board_id' => $board->id, 'content' => sampleDocContent('Public')]);
+
+    $token = $this->actingAs($owner, 'api')
+        ->putJson("/api/boards/{$board->id}/doc/public-link", ['is_enabled' => true])
+        ->assertOk()
+        ->assertJsonPath('doc.public_link.is_enabled', true)
+        ->json('doc.public_link.token');
+
+    expect($token)->toBeString()->not->toBeEmpty();
+
+    $this->app['auth']->forgetGuards();
+    $this->getJson("/api/public/docs/{$token}")
+        ->assertOk()
+        ->assertJsonPath('label', $board->label)
+        ->assertJsonPath('creator.full_name', $owner->full_name);
+
+    $this->actingAs($owner, 'api')
+        ->putJson("/api/boards/{$board->id}/doc/public-link", ['is_enabled' => false])
+        ->assertOk()
+        ->assertJsonPath('doc.public_link.token', null);
+
+    $this->app['auth']->forgetGuards();
+    $this->getJson("/api/public/docs/{$token}")->assertNotFound();
+
+    // Turning it back on restores the same url.
+    $this->actingAs($owner, 'api')
+        ->putJson("/api/boards/{$board->id}/doc/public-link", ['is_enabled' => true])
+        ->assertJsonPath('doc.public_link.token', $token);
+});
+
+test('only a doc owner can share a public link', function () {
+    $member = User::factory()->create();
+    $board = createDocTestBoard();
+    DB::table('workspace_user')->insert([
+        'workspace_id' => $board->workspace_id,
+        'user_id' => $member->id,
+        'role' => 'member',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $this->actingAs($member, 'api')
+        ->putJson("/api/boards/{$board->id}/doc/public-link", ['is_enabled' => true])
+        ->assertForbidden();
+});

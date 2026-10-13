@@ -291,3 +291,54 @@ test('a board invitation can be declined', function () {
     $response->assertOk();
     $this->assertDatabaseMissing('board_invitations', ['id' => $invitation->id]);
 });
+
+test('a board owner can give workspace members access right away and they show in the roster with their job title', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create(['job_title' => 'Designer']);
+    $outsider = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+    $board = createInvitationTestBoard($workspace, $owner, WorkspaceNavigationItem::BOARD_TYPE_PRIVATE);
+
+    $this->actingAs($owner, 'api')
+        ->postJson("/api/boards/{$board->id}/collaborators", ['user_ids' => [$member->id]])
+        ->assertCreated()
+        ->assertJsonPath('data.0.id', $member->id)
+        ->assertJsonPath('data.0.kind', 'collaborator')
+        ->assertJsonPath('data.0.job_title', 'Designer');
+
+    $this->assertDatabaseHas('board_collaborators', ['board_id' => $board->id, 'user_id' => $member->id]);
+    expect($workspace->users()->whereKey($member->id)->first()->pivot->role)->toBe('member');
+
+    // Adding them again changes nothing.
+    $this->actingAs($owner, 'api')
+        ->postJson("/api/boards/{$board->id}/collaborators", ['user_ids' => [$member->id]])
+        ->assertCreated()
+        ->assertJsonCount(0, 'data');
+
+    // Someone outside the workspace has to be invited by email instead.
+    $this->actingAs($owner, 'api')
+        ->postJson("/api/boards/{$board->id}/collaborators", ['user_ids' => [$outsider->id]])
+        ->assertInvalid(['user_ids']);
+
+    $this->actingAs($owner, 'api')
+        ->getJson("/api/boards/{$board->id}/invitations")
+        ->assertOk()
+        ->assertJsonPath('data.0.kind', 'owner')
+        ->assertJsonPath('data.0.id', $owner->id)
+        ->assertJsonPath('data.1.id', $member->id);
+});
+
+test('a plain member cannot give other people access to a board', function () {
+    $member = User::factory()->create();
+    $other = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+    $workspace->users()->attach($other->id, ['role' => 'member']);
+    $board = createInvitationTestBoard($workspace);
+
+    $this->actingAs($member, 'api')
+        ->postJson("/api/boards/{$board->id}/collaborators", ['user_ids' => [$other->id]])
+        ->assertForbidden();
+});

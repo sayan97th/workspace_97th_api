@@ -98,6 +98,7 @@ use App\Http\Controllers\Profile\UserSessionController;
 use App\Http\Controllers\Profile\WorkingStatusController;
 use App\Http\Controllers\PublicAccess\AutomationWebhookController;
 use App\Http\Controllers\PublicAccess\PublicFormController;
+use App\Http\Controllers\PublicAccess\PublicSharedDocController;
 use App\Http\Controllers\PublicAccess\PublicSharedViewController;
 use App\Http\Controllers\Search\GlobalSearchController;
 use App\Http\Controllers\Workspace\BoardController;
@@ -189,6 +190,8 @@ Route::prefix('public')->group(function () {
     Route::post('automation-webhooks/{token}', [AutomationWebhookController::class, 'receive'])->middleware('throttle:60,1');
     Route::post('forms/{token}/submissions', [PublicFormController::class, 'submit'])->middleware('throttle:10,1');
     Route::post('views/{token}', [PublicSharedViewController::class, 'show'])->middleware('throttle:60,1');
+    // A Doc opened through the Share dialog's "Share public link", read only.
+    Route::get('docs/{token}', [PublicSharedDocController::class, 'show'])->middleware('throttle:60,1');
     // The sign in page's logo, brand color and welcome copy, see `OrganizationBranding::forSignIn()`.
     Route::get('branding', [PublicBrandingController::class, 'showPublic'])->middleware('throttle:60,1');
 });
@@ -447,6 +450,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('invitations', [BoardInvitationController::class, 'index']);
         Route::post('invitations', [BoardInvitationController::class, 'store'])->middleware('account.permission:invite_members');
         Route::delete('invitations/{invitation:id}', [BoardInvitationController::class, 'destroy']);
+        Route::post('collaborators', [BoardInvitationController::class, 'storeCollaborators']);
         Route::delete('collaborators/{collaborator}', [BoardInvitationController::class, 'removeCollaborator']);
     });
 
@@ -475,6 +479,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('doc', [BoardDocController::class, 'show']);
         Route::put('doc', [BoardDocController::class, 'update']);
         Route::post('doc/files', [BoardDocController::class, 'storeFile']);
+        Route::put('doc/public-link', [BoardDocController::class, 'updatePublicLink']);
     });
 
     // Board options menu's "Give feedback" — a free-form product note,

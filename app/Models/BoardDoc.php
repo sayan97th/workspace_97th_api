@@ -16,6 +16,8 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $board_id
  * @property string|null $content
+ * @property string|null $public_token
+ * @property bool $is_public_link_enabled
  * @property int|null $updated_by_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -25,10 +27,22 @@ use Illuminate\Support\Carbon;
 #[Fillable([
     'board_id',
     'content',
+    'public_token',
+    'is_public_link_enabled',
     'updated_by_id',
 ])]
 class BoardDoc extends Model
 {
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'is_public_link_enabled' => 'boolean',
+        ];
+    }
+
     /**
      * @return BelongsTo<WorkspaceNavigationItem, $this>
      */

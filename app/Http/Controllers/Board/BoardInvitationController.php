@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\StoreBoardCollaboratorsRequest;
 use App\Http\Requests\Board\StoreBoardInvitationRequest;
 use App\Jobs\SendEmailJob;
 use App\Mail\BoardInvitationMail;
 use App\Models\BoardInvitation;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\BoardEditGate;
 use App\Support\BoardManagementGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -32,14 +34,20 @@ class BoardInvitationController extends Controller
      */
     public function index(WorkspaceNavigationItem $item): JsonResponse
     {
-        $item->load(['workspace.owners', 'collaborators']);
+        $item->load(['creator', 'workspace.owners', 'collaborators']);
 
         $known_emails = collect();
         $people = collect();
 
-        foreach ($item->workspace->owners as $owner) {
+        // The board's creator leads the roster as an owner, the way monday's Share dialog shows it.
+        $owners = collect([$item->creator])->filter()->merge($item->workspace->owners);
+
+        foreach ($owners as $owner) {
+            if ($known_emails->contains(strtolower($owner->email))) {
+                continue;
+            }
             $known_emails->push(strtolower($owner->email));
-            $people->push($this->personEntry('owner', $owner->id, $owner->full_name, $owner->email, $owner->profile_photo_url, 'accepted', false));
+            $people->push($this->userEntry('owner', $owner, false));
         }
 
         foreach ($item->collaborators as $collaborator) {
@@ -47,7 +55,7 @@ class BoardInvitationController extends Controller
                 continue;
             }
             $known_emails->push(strtolower($collaborator->email));
-            $people->push($this->personEntry('collaborator', $collaborator->id, $collaborator->full_name, $collaborator->email, $collaborator->profile_photo_url, 'accepted', true));
+            $people->push($this->userEntry('collaborator', $collaborator, true));
         }
 
         $pending_invitations = $item->invitations()
@@ -151,6 +159,51 @@ class BoardInvitationController extends Controller
     }
 
     /**
+     * POST /api/boards/{item}/collaborators
+     *
+     * Gives existing workspace members access right away, no email round
+     * trip: the Share dialog's search picks a person, or every member of a
+     * team. Their workspace role is untouched, so what they may edit still
+     * follows the board's permission ({@see BoardEditGate}).
+     * Anyone who already has access is skipped.
+     */
+    public function storeCollaborators(StoreBoardCollaboratorsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        BoardManagementGate::authorize($item, $user, 'share this board');
+
+        /** @var array<int, int> $user_ids */
+        $user_ids = $request->validated('user_ids');
+
+        $members = $item->workspace->users()->whereIn('users.id', $user_ids)->get();
+
+        if ($members->isEmpty()) {
+            throw ValidationException::withMessages([
+                'user_ids' => 'Only members of this workspace can be added. Invite anyone else by email.',
+            ]);
+        }
+
+        $existing_ids = $item->collaborators()->pluck('users.id')
+            ->merge($item->workspace->owners()->pluck('users.id'))
+            ->push($item->created_by_id)
+            ->filter()
+            ->all();
+
+        $new_members = $members->reject(fn (User $member) => in_array($member->id, $existing_ids, true))->values();
+
+        $item->collaborators()->syncWithoutDetaching(
+            $new_members->mapWithKeys(fn (User $member) => [$member->id => ['invited_by' => $user->id]])->all()
+        );
+
+        return response()->json([
+            'message' => $new_members->isEmpty() ? 'Everyone already has access.' : 'Access granted.',
+            'data' => $new_members->map(fn (User $member) => $this->userEntry('collaborator', $member, true))->values(),
+        ], 201);
+    }
+
+    /**
      * DELETE /api/boards/{item}/invitations/{invitation}
      *
      * Revokes a still-pending invitation so its link stops working.
@@ -198,6 +251,16 @@ class BoardInvitationController extends Controller
     }
 
     /**
+     * A roster row for someone with an account.
+     *
+     * @return array<string, mixed>
+     */
+    private function userEntry(string $kind, User $person, bool $removable): array
+    {
+        return $this->personEntry($kind, $person->id, $person->full_name, $person->email, $person->profile_photo_url, 'accepted', $removable, $person->job_title);
+    }
+
+    /**
      * Shapes one row of the board's "people with access" roster consistently
      * across the owner/collaborator/pending-invitation cases.
      *
@@ -210,7 +273,8 @@ class BoardInvitationController extends Controller
         string $email,
         ?string $profile_photo_url,
         string $status,
-        bool $removable
+        bool $removable,
+        ?string $job_title = null
     ): array {
         return [
             'key' => "{$kind}-{$id}",
@@ -219,9 +283,9 @@ class BoardInvitationController extends Controller
             'full_name' => $full_name,
             'email' => $email,
             'profile_photo_url' => $profile_photo_url,
+            'job_title' => $job_title,
             'status' => $status,
             'removable' => $removable,
         ];
     }
-
 }
