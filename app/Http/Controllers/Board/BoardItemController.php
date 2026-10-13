@@ -89,6 +89,7 @@ class BoardItemController extends Controller
                 'values',
                 'dependencyLinks',
                 'recurrence',
+                'latestActivity',
                 // An archived subitem is hidden like an archived root item, it
                 // only comes back through the board's archive panel.
                 'childrenRecursive' => fn ($q) => $q->where('is_archived', false),

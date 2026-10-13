@@ -38,6 +38,10 @@ class BoardItemResource extends JsonResource
             'created_by_id' => $this->created_by_id,
             'created_at' => $this->created_at?->toIso8601String(),
             'last_updated_at' => BoardItemFilterEvaluator::lastUpdatedAt($this->resource)?->toIso8601String(),
+            // The "Last updated" column's person: whoever made the newest recorded change, else the creator.
+            'last_updated_by_id' => $this->relationLoaded('latestActivity') && $this->latestActivity?->user_id
+                ? $this->latestActivity->user_id
+                : $this->created_by_id,
             // Direct subitem count, for the collapsed-row "N Subitems" badge —
             // falls back to a loaded `children` count when the `withCount`
             // alias isn't present (mirrors `checklist_total_count` below).

@@ -173,7 +173,10 @@ class BoardItemActivityService
             BoardColumn::TYPE_TIMELINE => $this->timelineText($value),
             BoardColumn::TYPE_CHECKBOX => filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 'Checked' : 'Unchecked',
             BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_RATING, BoardColumn::TYPE_PROGRESS, BoardColumn::TYPE_TEXT,
-            BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_PHONE, BoardColumn::TYPE_EMAIL => is_scalar($value) ? (string) $value : null,
+            BoardColumn::TYPE_LONG_TEXT, BoardColumn::TYPE_PHONE, BoardColumn::TYPE_EMAIL, BoardColumn::TYPE_WORLD_CLOCK,
+            BoardColumn::TYPE_LOCATION, BoardColumn::TYPE_COUNTRY, BoardColumn::TYPE_COLOR_PICKER, BoardColumn::TYPE_HOUR,
+            BoardColumn::TYPE_WEEK => is_scalar($value) ? (string) $value : null,
+            BoardColumn::TYPE_DOC => is_array($value) ? (string) ($value['title'] ?? 'Doc') : null,
             default => null,
         };
 

@@ -156,6 +156,39 @@ class BoardColumn extends Model
     /** A clickable button (`config.label`, `config.color`) that stores no value, pressing it fires the `button_clicked` automations watching it. */
     public const TYPE_BUTTON = 'button';
 
+    /** A small rich doc owned by one cell, stored in the cell as `{title, content}` (editor JSON, like a board Doc). */
+    public const TYPE_DOC = 'doc';
+
+    /** A time zone (IANA name, e.g. "Europe/Madrid"), the cell shows that zone's current time. */
+    public const TYPE_WORLD_CLOCK = 'world_clock';
+
+    /** A free form address, the cell links it to a map. */
+    public const TYPE_LOCATION = 'location';
+
+    /** Read only, the item's creator and creation date. Never stores a value. */
+    public const TYPE_CREATION_LOG = 'creation_log';
+
+    /** Read only, who last changed the item and when. Never stores a value. */
+    public const TYPE_LAST_UPDATED = 'last_updated';
+
+    /** Read only, the item's position in its group (1, 2, 3...), unlike `TYPE_AUTO_NUMBER`'s fixed id. Never stores a value. */
+    public const TYPE_ITEM_NUMBER = 'item_number';
+
+    /** A week, stored as the `Y-m-d` date of its Monday. */
+    public const TYPE_WEEK = 'week';
+
+    /** A country, stored as its ISO 3166 alpha 2 code (e.g. "MX"). */
+    public const TYPE_COUNTRY = 'country';
+
+    /** A color, stored as a `#rrggbb` hex string. */
+    public const TYPE_COLOR_PICKER = 'color_picker';
+
+    /** A time of day, stored as `H:i` (24 hour, e.g. "14:30"). */
+    public const TYPE_HOUR = 'hour';
+
+    /** Read only, the share of the board's Status columns marked "Done" on the item, drawn as a battery. Never stores a value. */
+    public const TYPE_PROGRESS_TRACKING = 'progress_tracking';
+
     /**
      * Column types whose value is computed rather than written by a user (or, for a button, never
      * stored at all), so no edit can ever "change" them and they are not offered to a
@@ -163,7 +196,26 @@ class BoardColumn extends Model
      *
      * @var array<int, string>
      */
-    public const READ_ONLY_TYPES = [self::TYPE_FORMULA, self::TYPE_MIRROR, self::TYPE_AUTO_NUMBER, self::TYPE_BUTTON];
+    public const READ_ONLY_TYPES = [
+        self::TYPE_FORMULA, self::TYPE_MIRROR, self::TYPE_AUTO_NUMBER, self::TYPE_BUTTON,
+        self::TYPE_CREATION_LOG, self::TYPE_LAST_UPDATED, self::TYPE_ITEM_NUMBER, self::TYPE_PROGRESS_TRACKING,
+    ];
+
+    /**
+     * Every column type a board can hold, in the order the API validates them.
+     *
+     * @var array<int, string>
+     */
+    public const TYPES = [
+        self::TYPE_TEXT, self::TYPE_STATUS, self::TYPE_PEOPLE, self::TYPE_DATE, self::TYPE_TAGS, self::TYPE_DROPDOWN,
+        self::TYPE_NUMBER, self::TYPE_CHECKBOX, self::TYPE_TIMELINE, self::TYPE_DEPENDENCY, self::TYPE_LABEL,
+        self::TYPE_PROGRESS, self::TYPE_LONG_TEXT, self::TYPE_PHONE, self::TYPE_EMAIL, self::TYPE_RATING, self::TYPE_VOTE,
+        self::TYPE_LINK, self::TYPE_FILES, self::TYPE_TIME_TRACKING, self::TYPE_AUTO_NUMBER, self::TYPE_FORMULA,
+        self::TYPE_CONNECT_BOARD, self::TYPE_MIRROR, self::TYPE_CHECKLIST, self::TYPE_BUTTON, self::TYPE_DOC,
+        self::TYPE_WORLD_CLOCK, self::TYPE_LOCATION, self::TYPE_CREATION_LOG, self::TYPE_LAST_UPDATED,
+        self::TYPE_ITEM_NUMBER, self::TYPE_WEEK, self::TYPE_COUNTRY, self::TYPE_COLOR_PICKER, self::TYPE_HOUR,
+        self::TYPE_PROGRESS_TRACKING,
+    ];
 
     /**
      * A Dependency column's scheduling mode. A column saved before modes existed has none and

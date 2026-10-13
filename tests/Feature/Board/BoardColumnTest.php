@@ -395,3 +395,35 @@ test('GET columns is scoped to the given tab, defaulting to the primary tab', fu
         ->getJson("/api/boards/{$board->id}/columns?view_id={$other_tab->id}")
         ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.key', 'other_col');
 });
+
+test('every Column Center type can be created', function (string $type) {
+    $user = User::factory()->create();
+    $board = createColumnTestBoard();
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/columns", [
+        'key' => $type,
+        'label' => ucfirst(str_replace('_', ' ', $type)),
+        'type' => $type,
+    ])->assertCreated()->assertJsonPath('column.type', $type);
+})->with([
+    BoardColumn::TYPE_DOC,
+    BoardColumn::TYPE_WORLD_CLOCK,
+    BoardColumn::TYPE_LOCATION,
+    BoardColumn::TYPE_CREATION_LOG,
+    BoardColumn::TYPE_LAST_UPDATED,
+    BoardColumn::TYPE_ITEM_NUMBER,
+    BoardColumn::TYPE_WEEK,
+    BoardColumn::TYPE_COUNTRY,
+    BoardColumn::TYPE_COLOR_PICKER,
+    BoardColumn::TYPE_HOUR,
+    BoardColumn::TYPE_PROGRESS_TRACKING,
+]);
+
+test('computed Column Center types are read only', function () {
+    expect(BoardColumn::READ_ONLY_TYPES)->toContain(
+        BoardColumn::TYPE_CREATION_LOG,
+        BoardColumn::TYPE_LAST_UPDATED,
+        BoardColumn::TYPE_ITEM_NUMBER,
+        BoardColumn::TYPE_PROGRESS_TRACKING,
+    );
+});

@@ -96,6 +96,12 @@ class BoardItemFilterEvaluator
         BoardColumn::TYPE_FILES => self::KIND_TEXT,
         BoardColumn::TYPE_MIRROR => self::KIND_TEXT,
         BoardColumn::TYPE_CHECKLIST => self::KIND_TEXT,
+        BoardColumn::TYPE_WORLD_CLOCK => self::KIND_TEXT,
+        BoardColumn::TYPE_LOCATION => self::KIND_TEXT,
+        BoardColumn::TYPE_COUNTRY => self::KIND_TEXT,
+        BoardColumn::TYPE_COLOR_PICKER => self::KIND_TEXT,
+        BoardColumn::TYPE_HOUR => self::KIND_TEXT,
+        BoardColumn::TYPE_WEEK => self::KIND_DATE,
     ];
 
     /**

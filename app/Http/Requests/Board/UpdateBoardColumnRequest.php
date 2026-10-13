@@ -22,34 +22,7 @@ class UpdateBoardColumnRequest extends FormRequest
 
         return [
             'label' => ['sometimes', 'string', 'max:255'],
-            'type' => ['sometimes', 'string', Rule::in([
-                BoardColumn::TYPE_TEXT,
-                BoardColumn::TYPE_STATUS,
-                BoardColumn::TYPE_PEOPLE,
-                BoardColumn::TYPE_DATE,
-                BoardColumn::TYPE_TAGS,
-                BoardColumn::TYPE_DROPDOWN,
-                BoardColumn::TYPE_NUMBER,
-                BoardColumn::TYPE_CHECKBOX,
-                BoardColumn::TYPE_TIMELINE,
-                BoardColumn::TYPE_DEPENDENCY,
-                BoardColumn::TYPE_LABEL,
-                BoardColumn::TYPE_PROGRESS,
-                BoardColumn::TYPE_LONG_TEXT,
-                BoardColumn::TYPE_PHONE,
-                BoardColumn::TYPE_EMAIL,
-                BoardColumn::TYPE_RATING,
-                BoardColumn::TYPE_VOTE,
-                BoardColumn::TYPE_LINK,
-                BoardColumn::TYPE_FILES,
-                BoardColumn::TYPE_TIME_TRACKING,
-                BoardColumn::TYPE_AUTO_NUMBER,
-                BoardColumn::TYPE_FORMULA,
-                BoardColumn::TYPE_CONNECT_BOARD,
-                BoardColumn::TYPE_MIRROR,
-                BoardColumn::TYPE_CHECKLIST,
-                BoardColumn::TYPE_BUTTON,
-            ])],
+            'type' => ['sometimes', 'string', Rule::in(BoardColumn::TYPES)],
             'width' => ['sometimes', 'integer', 'min:40', 'max:600'],
             'config' => ['sometimes', 'nullable', 'array'],
             'config.options' => ['sometimes', 'array'],
@@ -91,6 +64,8 @@ class UpdateBoardColumnRequest extends FormRequest
             'config.mirrored_column_id' => ['sometimes', 'integer', Rule::exists('board_columns', 'id')],
             // Validation rules, settable on any column kind — see `StoreBoardColumnRequest`'s own comment.
             // Any column: the description the header's info popover shows ("Column description").
+            // Hour columns only: 12 hour ("2:30 PM") or 24 hour ("14:30") display.
+            'config.hour_format' => ['sometimes', Rule::in(['12', '24'])],
             'config.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             // Any column: the column menu's "Hide column summary", leaves its cell in the group summary footer empty.
             'config.hide_summary' => ['sometimes', 'boolean'],

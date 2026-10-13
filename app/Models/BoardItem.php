@@ -117,7 +117,7 @@ class BoardItem extends Model
      */
     public function childrenRecursive(): HasMany
     {
-        return $this->children()->with(['childrenRecursive', 'values', 'dependencyLinks'])->withCount([
+        return $this->children()->with(['childrenRecursive', 'values', 'dependencyLinks', 'latestActivity'])->withCount([
             'comments',
             'commentAttachments',
             'attachments',
@@ -214,6 +214,16 @@ class BoardItem extends Model
     public function activities(): HasMany
     {
         return $this->hasMany(BoardItemActivity::class, 'item_id');
+    }
+
+    /**
+     * The newest recorded change, whose author is the item's "Last updated" person.
+     *
+     * @return HasOne<BoardItemActivity, $this>
+     */
+    public function latestActivity(): HasOne
+    {
+        return $this->hasOne(BoardItemActivity::class, 'item_id')->latestOfMany();
     }
 
     /**
