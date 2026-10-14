@@ -233,3 +233,31 @@ test('a disabled link and members who are not owners are both rejected', functio
 
     $this->postJson("/api/public/views/{$token}")->assertNotFound();
 });
+
+test('a Doc tab can be shared and its link returns the doc body read only', function () {
+    [$owner, , $board] = createFormBoard();
+    $doc_view = BoardView::factory()->create([
+        'board_id' => $board->id,
+        'label' => 'Kickoff notes',
+        'view_type' => BoardViewType::Doc->value,
+        'is_primary' => false,
+        'position' => 2,
+        'doc_content' => '{"type":"doc","content":[]}',
+        'created_by_id' => $owner->id,
+    ]);
+
+    $token = $this->actingAs($owner, 'api')
+        ->postJson("/api/boards/{$board->id}/views/{$doc_view->id}/share-link")
+        ->assertCreated()
+        ->json('link.token');
+    auth()->forgetGuards();
+
+    $this->postJson("/api/public/views/{$token}")
+        ->assertOk()
+        ->assertJsonPath('view.label', 'Kickoff notes')
+        ->assertJsonPath('view.view_type', 'doc')
+        ->assertJsonPath('doc.content', '{"type":"doc","content":[]}')
+        ->assertJsonPath('doc.creator.full_name', $owner->full_name)
+        ->assertJsonPath('items', [])
+        ->assertJsonMissing(['email' => $owner->email]);
+});

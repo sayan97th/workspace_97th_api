@@ -115,7 +115,7 @@ class BoardViewShareLinkController extends Controller
     private function ensureShareableView(WorkspaceNavigationItem $item, BoardView $board_view): void
     {
         abort_if($board_view->board_id !== $item->id, 404);
-        abort_unless(in_array($board_view->view_type, SharedViewService::SHAREABLE_VIEW_TYPES, true), 422, 'Only views with items can be shared.');
+        abort_unless(in_array($board_view->view_type, SharedViewService::SHAREABLE_VIEW_TYPES, true), 422, 'Only views with items and Doc views can be shared.');
     }
 
     private function authorizeOwner(WorkspaceNavigationItem $item, Request $request): void

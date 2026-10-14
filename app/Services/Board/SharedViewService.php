@@ -18,7 +18,10 @@ use Illuminate\Support\Facades\Hash;
 class SharedViewService
 {
     /** Views that own columns and items, so they can be shared as a table. */
-    public const SHAREABLE_VIEW_TYPES = ['table', 'kanban', 'calendar', 'gantt'];
+    public const ITEM_VIEW_TYPES = ['table', 'kanban', 'calendar', 'gantt'];
+
+    /** Every view type a public link can open: the item views, plus a Doc tab shared as a read only doc. */
+    public const SHAREABLE_VIEW_TYPES = [...self::ITEM_VIEW_TYPES, 'doc'];
 
     /** Column types left out of a public view: file urls and internal links. */
     private const EXCLUDED_TYPES = [BoardColumn::TYPE_FILES, BoardColumn::TYPE_DEPENDENCY, BoardColumn::TYPE_CONNECT_BOARD, BoardColumn::TYPE_MIRROR, BoardColumn::TYPE_FORMULA];
@@ -58,6 +61,10 @@ class SharedViewService
     public function payload(BoardViewShareLink $link): array
     {
         $view = $link->boardView;
+
+        if ($view->view_type === 'doc') {
+            return $this->docPayload($link);
+        }
         $hidden_ids = $this->column_permissions->hiddenColumnIds($link->board_id, null);
         $view_hidden_ids = array_map('intval', $view->hidden_column_ids ?? []);
 
@@ -110,6 +117,36 @@ class SharedViewService
             ])->values(),
             'people' => $this->people($columns, $items),
             'is_truncated' => $items->count() >= self::MAX_ITEMS,
+        ];
+    }
+
+    /**
+     * A Doc tab's public payload: the body and its creator row, in the same
+     * shape as an item view (no columns, groups or items) so the page can
+     * tell the two apart by `view.view_type`. Only the creator's name and
+     * photo leave the server.
+     *
+     * @return array<string, mixed>
+     */
+    private function docPayload(BoardViewShareLink $link): array
+    {
+        $view = $link->boardView->loadMissing('creator:id,first_name,last_name,profile_photo_path');
+        $link->forceFill(['last_accessed_at' => now()])->saveQuietly();
+
+        return [
+            'board' => ['label' => $link->board->label],
+            'view' => ['label' => $view->label, 'view_type' => $view->view_type],
+            'doc' => [
+                'content' => $view->doc_content,
+                'creator' => $view->creator ? ['full_name' => $view->creator->full_name, 'profile_photo_url' => $view->creator->profile_photo_url] : null,
+                'created_at' => $view->created_at?->toIso8601String(),
+                'updated_at' => $view->updated_at?->toIso8601String(),
+            ],
+            'columns' => [],
+            'groups' => [],
+            'items' => [],
+            'people' => (object) [],
+            'is_truncated' => false,
         ];
     }
 
