@@ -538,9 +538,13 @@ trait ValidatesAutomationDefinition
         $group_in_view = Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id));
         $column_in_scope = fn (string $scope) => Rule::exists('board_columns', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)->where('scope', $scope)->whereNotIn('type', BoardColumn::READ_ONLY_TYPES));
         $recipient_rules = [
-            'notify_user_id' => ['required_without_all:notify_from_people_column_id,recipient_source', 'nullable', 'integer', Rule::exists('users', 'id')],
-            'notify_from_people_column_id' => ['required_without_all:notify_user_id,recipient_source', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
-            'recipient_source' => ['required_without_all:notify_user_id,notify_from_people_column_id', 'nullable', Rule::in(BoardAutomation::RECIPIENT_SOURCES)],
+            'notify_user_id' => ['required_without_all:notify_user_ids,notify_team_ids,notify_from_people_column_id,recipient_source', 'nullable', 'integer', Rule::exists('users', 'id')],
+            'notify_user_ids' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_SUBSCRIPTION_PEOPLE],
+            'notify_user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id')],
+            'notify_team_ids' => ['sometimes', 'nullable', 'array', 'max:20'],
+            'notify_team_ids.*' => ['integer', 'distinct', Rule::exists(AccountTeam::class, 'id')->whereNull('deleted_at')],
+            'notify_from_people_column_id' => ['required_without_all:notify_user_id,notify_user_ids,notify_team_ids,recipient_source', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
+            'recipient_source' => ['required_without_all:notify_user_id,notify_user_ids,notify_team_ids,notify_from_people_column_id', 'nullable', Rule::in(BoardAutomation::RECIPIENT_SOURCES)],
             'message' => ['sometimes', 'nullable', 'string', 'max:1000'],
         ];
         // Who a subscribe or unsubscribe action names, at least one of them.
@@ -597,6 +601,10 @@ trait ValidatesAutomationDefinition
             BoardAutomation::ACTION_NOTIFY_PERSON, BoardAutomation::ACTION_SLACK_NOTIFY_PERSON => $recipient_rules,
             BoardAutomation::ACTION_SEND_EMAIL => [
                 'notify_user_id' => ['sometimes', 'nullable', 'integer', Rule::exists('users', 'id')],
+                'notify_user_ids' => ['sometimes', 'nullable', 'array', 'max:'.self::MAX_SUBSCRIPTION_PEOPLE],
+                'notify_user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id')],
+                'notify_team_ids' => ['sometimes', 'nullable', 'array', 'max:20'],
+                'notify_team_ids.*' => ['integer', 'distinct', Rule::exists(AccountTeam::class, 'id')->whereNull('deleted_at')],
                 'recipient_source' => ['sometimes', 'nullable', Rule::in(BoardAutomation::RECIPIENT_SOURCES)],
                 'notify_from_people_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_PEOPLE])],
                 'email_column_id' => ['sometimes', 'nullable', 'integer', $column_in_view([BoardColumn::TYPE_EMAIL])],
@@ -800,7 +808,7 @@ trait ValidatesAutomationDefinition
         if ($is_itemless_trigger && $index > 0 && ! in_array($type, BoardAutomation::itemlessActions(), true) && ! $has_created_item) {
             $validator->errors()->add("{$branch_key}.{$index}.type", 'This action needs an item, add "create an item" before it.');
         }
-        if ($type === BoardAutomation::ACTION_SEND_EMAIL && empty($params['notify_user_id']) && empty($params['notify_from_people_column_id'])
+        if ($type === BoardAutomation::ACTION_SEND_EMAIL && empty($params['notify_user_id']) && empty($params['notify_user_ids']) && empty($params['notify_team_ids']) && empty($params['notify_from_people_column_id'])
             && empty($params['email_column_id']) && empty($params['email_addresses']) && empty($params['recipient_source'])) {
             $validator->errors()->add("{$prefix}.notify_user_id", 'Choose who the email goes to.');
         }

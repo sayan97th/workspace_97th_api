@@ -5,6 +5,7 @@ namespace App\Services\Board;
 use App\Jobs\SendConnectedAccountEmailJob;
 use App\Jobs\SendEmailJob;
 use App\Mail\Automations\AutomationEmail;
+use App\Models\AccountTeam;
 use App\Models\BoardActivityLog;
 use App\Models\BoardAutomation;
 use App\Models\BoardAutomationSetting;
@@ -618,6 +619,10 @@ class BoardAutomationActionRunner
             ? $this->renderer->render($params['message'], $automation, $item, $actor, $context)
             : ($item ? sprintf('ran on "%s" on the Board "%s"', $item->name, $board->label) : sprintf('ran on the Board "%s"', $board->label));
 
+        // A button press is an explicit ask, so the person who pressed it is notified too, like
+        // monday's "notify Me". Every other trigger keeps skipping the person who caused it.
+        $is_button_press = $automation->trigger_type === BoardAutomation::TRIGGER_BUTTON_CLICKED;
+
         $names = [];
         foreach ($recipients as $recipient) {
             $this->notification_service->notify(
@@ -629,6 +634,7 @@ class BoardAutomationActionRunner
                 action_target: $action_target,
                 link: $item ? "/boards/{$item->board_id}/pulses/{$item->id}" : "/boards/{$board->id}",
                 board_item: $item,
+                allow_self: $is_button_press,
             );
             $names[] = $recipient->full_name;
         }
@@ -801,10 +807,12 @@ class BoardAutomationActionRunner
     }
 
     /**
-     * Everyone a notify or communication action should reach: a fixed `notify_user_id`, the person
-     * `recipient_source` stands for on this run (`actor`, `creator`, `owner`, `mentioned`, or every
-     * `subscribers` of the item), or every person `notify_from_people_column_id` currently holds.
-     * Deactivated accounts are skipped.
+     * Everyone a notify or communication action should reach, every source it names together:
+     * the fixed people `notify_user_id` and `notify_user_ids`, the members of the teams
+     * `notify_team_ids`, the person `recipient_source` stands for on this run (`actor`, `creator`,
+     * `owner`, `mentioned`, or every `subscribers` of the item), and every person
+     * `notify_from_people_column_id` currently holds. Deactivated accounts are skipped and nobody
+     * is reached twice.
      *
      * @param  array<string, mixed>  $params
      * @param  array<string, mixed>  $context
@@ -812,29 +820,34 @@ class BoardAutomationActionRunner
      */
     private function resolveRecipients(BoardAutomation $automation, array $params, ?BoardItem $item, ?User $actor = null, array $context = []): Collection
     {
-        if ($user_id = $params['notify_user_id'] ?? null) {
-            return User::whereKey($user_id)->where('is_active', true)->get();
+        $person_ids = array_map('intval', array_filter([$params['notify_user_id'] ?? null, ...array_values((array) ($params['notify_user_ids'] ?? []))]));
+        $recipients = new Collection;
+
+        $team_ids = array_map('intval', array_filter((array) ($params['notify_team_ids'] ?? [])));
+        if ($team_ids !== []) {
+            foreach (AccountTeam::whereIn('id', $team_ids)->get() as $team) {
+                $person_ids = [...$person_ids, ...$team->members()->pluck('users.id')->map(fn ($id) => (int) $id)->all()];
+            }
         }
 
         $source = $params['recipient_source'] ?? null;
         if ($source === 'subscribers') {
-            return $item ? $this->dynamic_values->subscribers($item) : new Collection;
-        }
-        if (is_string($source) && in_array($source, BoardAutomation::RECIPIENT_SOURCES, true)) {
-            $person_ids = $this->dynamic_values->personIds(['source' => $source], $item, $actor, $automation, $context);
-
-            return $person_ids ? User::whereIn('id', $person_ids)->where('is_active', true)->get() : new Collection;
+            $recipients = $recipients->merge($item ? $this->dynamic_values->subscribers($item) : []);
+        } elseif (is_string($source) && in_array($source, BoardAutomation::RECIPIENT_SOURCES, true)) {
+            $person_ids = [...$person_ids, ...$this->dynamic_values->personIds(['source' => $source], $item, $actor, $automation, $context)];
         }
 
         if ($item && ($people_column_id = $params['notify_from_people_column_id'] ?? null)) {
             $subject = $this->subjectForColumn($item, BoardColumn::find($people_column_id));
             $value = $subject ? BoardItemValue::where('item_id', $subject->id)->where('column_id', $people_column_id)->first() : null;
-            $person_ids = $this->peopleIds($value?->value);
-
-            return $person_ids ? User::whereIn('id', $person_ids)->where('is_active', true)->get() : new Collection;
+            $person_ids = [...$person_ids, ...$this->peopleIds($value?->value)];
         }
 
-        return new Collection;
+        if ($person_ids !== []) {
+            $recipients = $recipients->merge(User::whereIn('id', array_values(array_unique($person_ids)))->where('is_active', true)->get());
+        }
+
+        return $recipients->unique(fn (User $user) => $user->id)->values();
     }
 
     /**

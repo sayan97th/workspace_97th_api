@@ -186,7 +186,7 @@ class BoardAutomationHealthChecker
             $problems[] = $this->problem($path, 'The group this action moves items to was deleted.');
         }
 
-        $user_ids = array_filter([$params['notify_user_id'] ?? null, ($params['assign_mode'] ?? 'user') === 'user' && $type === BoardAutomation::ACTION_ASSIGN_PERSON ? ($params['user_id'] ?? null) : null]);
+        $user_ids = array_filter([$params['notify_user_id'] ?? null, ...array_values((array) ($params['notify_user_ids'] ?? [])), ($params['assign_mode'] ?? 'user') === 'user' && $type === BoardAutomation::ACTION_ASSIGN_PERSON ? ($params['user_id'] ?? null) : null]);
         foreach ($user_ids as $user_id) {
             if (! User::whereKey((int) $user_id)->where('is_active', true)->exists()) {
                 $problems[] = $this->problem($path, 'The person this action reaches was deactivated or removed.');

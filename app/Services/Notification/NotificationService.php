@@ -44,6 +44,9 @@ class NotificationService
      * `<type>_slack` preference and by whether they linked their Slack account, see
      * {@see SlackNotifier::deliverNotification()}.
      *
+     * `$allow_self` lets the actor be notified of their own action, for an explicit ask such
+     * as an automation button pressed to notify the presser. Otherwise self notifications are skipped.
+     *
      * `$actor` is nullable to support system-generated notifications (e.g.
      * the websocket test broadcast); those never send email, since there's
      * no one to attribute the email to and they're diagnostic, not activity.
@@ -68,8 +71,9 @@ class NotificationService
         ?string $link,
         ?BoardItem $board_item = null,
         BoardItemComment|BoardComment|null $comment = null,
+        bool $allow_self = false,
     ): ?Notification {
-        if ($actor !== null && $recipient->id === $actor->id) {
+        if (! $allow_self && $actor !== null && $recipient->id === $actor->id) {
             return null;
         }
 
