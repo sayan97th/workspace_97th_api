@@ -3,12 +3,15 @@
 namespace App\Http\Requests\Board;
 
 use App\Enums\BoardViewType;
+use App\Http\Requests\Board\Concerns\ValidatesGanttConfig;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class StoreBoardViewRequest extends FormRequest
 {
+    use ValidatesGanttConfig;
+
     /**
      * Get the validation rules that apply to the request.
      *
@@ -52,6 +55,8 @@ class StoreBoardViewRequest extends FormRequest
             'calendar_config.hidden_group_ids.*' => ['integer'],
             'calendar_config.show_people' => ['sometimes', 'boolean'],
             'calendar_config.week_starts_on' => ['sometimes', 'integer', Rule::in([0, 1])],
+            // Bar source/coloring/group filter/toggles/baseline, only meaningful for a `gantt`-type view.
+            ...$this->ganttConfigRules(),
         ];
     }
 }

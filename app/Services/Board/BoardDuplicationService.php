@@ -52,6 +52,7 @@ class BoardDuplicationService
                 // the copy gets its own link the first time it is shared.
                 'form_config' => $source->form_config,
                 'calendar_config' => $source->calendar_config,
+                'gantt_config' => $source->gantt_config,
                 'created_by_id' => $created_by_id,
             ], $overrides));
 

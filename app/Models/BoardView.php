@@ -28,6 +28,7 @@ use Illuminate\Support\Carbon;
  * @property array<string, mixed>|null $chart_config
  * @property array<string, mixed>|null $form_config
  * @property array<string, mixed>|null $calendar_config
+ * @property array<string, mixed>|null $gantt_config
  * @property string|null $form_token
  * @property string|null $emoji
  * @property string|null $description
@@ -60,6 +61,7 @@ use Illuminate\Support\Carbon;
     'chart_config',
     'form_config',
     'calendar_config',
+    'gantt_config',
     'form_token',
     'emoji',
     'description',
@@ -174,6 +176,7 @@ class BoardView extends Model
             'chart_config' => 'array',
             'form_config' => 'array',
             'calendar_config' => 'array',
+            'gantt_config' => 'array',
         ];
     }
 }

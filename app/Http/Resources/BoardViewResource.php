@@ -39,6 +39,8 @@ class BoardViewResource extends JsonResource
             'chart_config' => $this->chart_config,
             // Date columns/coloring/group filter/week start for a `calendar`-type view, null/unused for every other kind.
             'calendar_config' => $this->calendar_config,
+            // Bar source/coloring/group filter/toggles/baseline for a `gantt`-type view, null/unused for every other kind.
+            'gantt_config' => $this->gantt_config,
             'emoji' => $this->emoji,
             'description' => $this->description,
             'position' => $this->position,

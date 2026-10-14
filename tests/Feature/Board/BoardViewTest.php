@@ -467,3 +467,75 @@ test('a view description can be saved', function () {
         ->assertOk()
         ->assertJsonPath('view.description', 'Work grouped by owner');
 });
+
+test('a gantt view saves its settings and baseline and round-trips them', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false, 'view_type' => 'gantt']);
+
+    $gantt_config = [
+        'date_column_id' => '42',
+        'color_by' => 'group',
+        'hidden_group_ids' => [7],
+        'bar_label' => 'name',
+        'show_group_summary' => true,
+        'show_dependencies' => false,
+        'show_critical_path' => true,
+        'show_legend' => true,
+        'show_weekends' => false,
+        'show_baseline' => true,
+        'baseline' => [
+            'saved_at' => '2026-10-13T12:00:00.000Z',
+            'saved_by' => 'Tester',
+            'items' => [
+                '15' => ['start' => '2025-06-05', 'end' => '2025-06-12'],
+                '16' => ['start' => '2025-06-10', 'end' => null],
+            ],
+        ],
+    ];
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/views/{$view->id}", ['gantt_config' => $gantt_config])
+        ->assertOk()
+        ->assertJsonPath('view.gantt_config.color_by', 'group')
+        ->assertJsonPath('view.gantt_config.baseline.items.15.end', '2025-06-12');
+
+    $saved_view = collect($this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/views")->json('data'))
+        ->firstWhere('id', $view->id);
+
+    expect($saved_view['gantt_config']['show_critical_path'])->toBeTrue();
+    expect($saved_view['gantt_config']['hidden_group_ids'])->toBe([7]);
+    expect($saved_view['gantt_config']['baseline']['items']['16']['start'])->toBe('2025-06-10');
+});
+
+test('a gantt view rejects an unknown bar label and malformed baseline dates', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false, 'view_type' => 'gantt']);
+
+    $this->actingAs($user, 'api')
+        ->patchJson("/api/boards/{$board->id}/views/{$view->id}", [
+            'gantt_config' => [
+                'bar_label' => 'everything',
+                'baseline' => ['saved_at' => '2026-10-13', 'items' => ['15' => ['start' => 'June 5']]],
+            ],
+        ])
+        ->assertInvalid(['gantt_config.bar_label', 'gantt_config.baseline.items.15.start']);
+});
+
+test('duplicating a gantt view copies its settings', function () {
+    $user = User::factory()->create();
+    $board = createViewTestBoard();
+    $view = BoardView::factory()->create([
+        'board_id' => $board->id,
+        'is_primary' => false,
+        'view_type' => 'gantt',
+        'gantt_config' => ['color_by' => 'none', 'show_legend' => false],
+    ]);
+
+    $this->actingAs($user, 'api')
+        ->postJson("/api/boards/{$board->id}/views/{$view->id}/duplicate")
+        ->assertCreated()
+        ->assertJsonPath('view.gantt_config.color_by', 'none')
+        ->assertJsonPath('view.gantt_config.show_legend', false);
+});
