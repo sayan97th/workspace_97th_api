@@ -195,7 +195,10 @@ class BoardColumn extends Model
     /** A time of day, stored as `H:i` (24 hour, e.g. "14:30"). */
     public const TYPE_HOUR = 'hour';
 
-    /** Read only, the share of the board's Status columns marked "Done" on the item, drawn as a battery. Never stores a value. */
+    /**
+     * Read only, the share of the item's Status columns marked "Done", drawn as a battery. Never stores a value.
+     * `config.progress_columns` may pick some Status columns and weigh each one (`column_id`, `weight` in percent).
+     */
     public const TYPE_PROGRESS_TRACKING = 'progress_tracking';
 
     /**

@@ -46,6 +46,15 @@ class UpdateBoardViewRequest extends FormRequest
             'chart_config.aggregate_fn' => ['sometimes', 'nullable', 'string', Rule::in(['count', 'sum', 'average'])],
             'chart_config.value_column_id' => ['sometimes', 'nullable', 'string'],
             'chart_config.date_bucket' => ['sometimes', 'nullable', 'string', Rule::in(['day', 'week', 'month'])],
+            // Date columns/coloring/group filter/week start, only meaningful for a `calendar`-type view.
+            'calendar_config' => ['sometimes', 'nullable', 'array'],
+            'calendar_config.date_column_ids' => ['sometimes', 'nullable', 'array'],
+            'calendar_config.date_column_ids.*' => ['string', 'max:64'],
+            'calendar_config.color_by' => ['sometimes', 'nullable', 'string', 'max:64'],
+            'calendar_config.hidden_group_ids' => ['sometimes', 'nullable', 'array'],
+            'calendar_config.hidden_group_ids.*' => ['integer'],
+            'calendar_config.show_people' => ['sometimes', 'boolean'],
+            'calendar_config.week_starts_on' => ['sometimes', 'integer', Rule::in([0, 1])],
         ];
     }
 }

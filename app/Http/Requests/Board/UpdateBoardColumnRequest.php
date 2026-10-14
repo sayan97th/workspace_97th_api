@@ -12,6 +12,34 @@ use Illuminate\Validation\Rule;
 class UpdateBoardColumnRequest extends FormRequest
 {
     /**
+     * A Progress tracking column keeps the Status columns it tracks in its config, and the
+     * frontend sends the whole config back on every settings save. Entries whose Status
+     * column was deleted since are dropped here, so they never fail an unrelated save.
+     */
+    protected function prepareForValidation(): void
+    {
+        $column = $this->route('column');
+        $config = $this->input('config');
+        if (! $column instanceof BoardColumn || ! is_array($config) || ! is_array($config['progress_columns'] ?? null)) {
+            return;
+        }
+
+        $status_column_ids = BoardColumn::query()
+            ->where('board_view_id', $column->board_view_id)
+            ->where('scope', $column->scope)
+            ->where('type', BoardColumn::TYPE_STATUS)
+            ->pluck('id')
+            ->all();
+
+        $config['progress_columns'] = array_values(array_filter(
+            $config['progress_columns'],
+            fn ($entry) => is_array($entry) && in_array((int) ($entry['column_id'] ?? 0), $status_column_ids, true),
+        ));
+
+        $this->merge(['config' => $config]);
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array<string, ValidationRule|array<mixed>|string>
@@ -86,6 +114,13 @@ class UpdateBoardColumnRequest extends FormRequest
                 ->when($column instanceof BoardColumn, fn ($same_table) => $same_table->where('board_view_id', $column->board_view_id)->where('scope', $column->scope)))],
             'config.dependency_mode' => ['sometimes', 'string', Rule::in(BoardColumn::DEPENDENCY_MODES)],
             'config.use_working_days' => ['sometimes', 'boolean'],
+            // Progress tracking columns only: the Status columns of the same table it tracks and each one's weight in percent.
+            // Null (or unset) tracks every Status column with the same weight.
+            'config.progress_columns' => ['sometimes', 'nullable', 'array', 'max:50'],
+            'config.progress_columns.*.column_id' => ['required', 'integer', 'distinct', Rule::exists('board_columns', 'id')->where(fn ($query) => $query
+                ->where('type', BoardColumn::TYPE_STATUS)
+                ->when($column instanceof BoardColumn, fn ($same_table) => $same_table->where('board_view_id', $column->board_view_id)->where('scope', $column->scope)))],
+            'config.progress_columns.*.weight' => ['required', 'integer', 'min:0', 'max:100'],
             'config.reminder' => ['sometimes', 'nullable', 'array'],
             'config.reminder.enabled' => ['sometimes', 'boolean'],
             'config.reminder.days_before' => ['sometimes', 'integer', 'min:0', 'max:365'],
