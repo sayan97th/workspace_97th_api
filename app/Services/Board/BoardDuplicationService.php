@@ -47,6 +47,7 @@ class BoardDuplicationService
                 'is_locked' => false,
                 'locked_by_id' => null,
                 'row_height' => $source->row_height,
+                'header_height' => $source->header_height ?? 'single',
                 'doc_content' => $source->doc_content,
                 // The builder settings are copied, the public token is not:
                 // the copy gets its own link the first time it is shared.
@@ -115,6 +116,9 @@ class BoardDuplicationService
             $state_source->forceFill($state_overrides);
             if (array_key_exists('row_height', $state_overrides)) {
                 $view_copy->row_height = $state_overrides['row_height'];
+            }
+            if (array_key_exists('header_height', $state_overrides)) {
+                $view_copy->header_height = $state_overrides['header_height'];
             }
 
             $view_copy->fill($this->remapColumnReferences($state_source, $column_id_map, $group_id_map))->save();

@@ -54,6 +54,7 @@ class BoardViewResource extends JsonResource
             'hidden_column_ids' => $this->hidden_column_ids,
             'pinned_column_ids' => $this->pinned_column_ids,
             'row_height' => $this->row_height,
+            'header_height' => $this->header_height ?? 'single',
             'conditional_color_rules' => $this->conditional_color_rules,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,

@@ -28,6 +28,7 @@ class DuplicateBoardViewRequest extends FormRequest
         'hidden_column_ids',
         'pinned_column_ids',
         'row_height',
+        'header_height',
         'conditional_color_rules',
     ];
 
@@ -44,6 +45,7 @@ class DuplicateBoardViewRequest extends FormRequest
             'hidden_column_ids' => ['sometimes', 'nullable', 'array'],
             'pinned_column_ids' => ['sometimes', 'nullable', 'array'],
             'row_height' => ['sometimes', 'string', Rule::in(['single', 'double', 'triple', 'quad'])],
+            'header_height' => ['sometimes', 'string', Rule::in(['single', 'double', 'triple'])],
             'conditional_color_rules' => ['sometimes', 'nullable', 'array'],
         ];
     }

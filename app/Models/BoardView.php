@@ -43,6 +43,7 @@ use Illuminate\Support\Carbon;
  * @property array<int, string>|null $hidden_column_ids
  * @property array<int, string>|null $pinned_column_ids
  * @property string $row_height
+ * @property string $header_height
  * @property array<int, mixed>|null $conditional_color_rules
  * @property int|null $created_by_id
  * @property Carbon|null $created_at
@@ -76,6 +77,7 @@ use Illuminate\Support\Carbon;
     'hidden_column_ids',
     'pinned_column_ids',
     'row_height',
+    'header_height',
     'conditional_color_rules',
     'created_by_id',
 ])]
