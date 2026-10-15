@@ -221,8 +221,14 @@ class BoardItemController extends Controller
             $position = $validated['position'] ?? $this->nextPosition($item, $group_id);
         }
 
-        $board_item = DB::transaction(function () use ($item, $request, $validated, $after_item, $group_id, $parent_id, $position) {
-            if ($after_item !== null) {
+        // "Create below" and an explicit `position` (the toolbar's "New item",
+        // which lands the row at the top of the first table) both insert in
+        // the middle of the sequence, so every sibling at or past that slot
+        // shifts down first, like `BoardGroupController::store()` does.
+        $should_shift = $after_item !== null || array_key_exists('position', $validated);
+
+        $board_item = DB::transaction(function () use ($item, $request, $validated, $should_shift, $group_id, $parent_id, $position) {
+            if ($should_shift) {
                 $item->items()
                     ->where('group_id', $group_id)
                     ->where('parent_id', $parent_id)
