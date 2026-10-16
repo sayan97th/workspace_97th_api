@@ -13,6 +13,7 @@ use App\Models\BoardComment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\CommentAttachmentService;
 use App\Services\Board\CommentThreadActionsService;
 use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
@@ -21,7 +22,6 @@ use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
 
 /**
  * The board-wide discussion feed shown by `BoardDiscussionDrawer` on the
@@ -36,6 +36,7 @@ class BoardCommentController extends Controller
         private readonly FeedService $feed_service,
         private readonly CommentThreadActionsService $comment_actions,
         private readonly ScheduledCommentService $scheduled_comments,
+        private readonly CommentAttachmentService $comment_attachments,
     ) {}
 
     /**
@@ -128,23 +129,12 @@ class BoardCommentController extends Controller
             );
         }
 
-        foreach ($request->file('attachments', []) as $file) {
-            $extension = $file->getClientOriginalExtension();
-            $path = $file->storeAs(
-                "board-discussion-attachments/{$item->id}",
-                Str::uuid().'.'.$extension,
-                config('filesystems.app_disk')
-            );
-
-            $comment->attachments()->create([
-                'uploaded_by_id' => $request->user()?->id,
-                'file_name' => $file->getClientOriginalName(),
-                'file_path' => $path,
-                'extension' => $extension,
-                'mime_type' => $file->getMimeType() ?? 'application/octet-stream',
-                'size_bytes' => $file->getSize() ?? 0,
-            ]);
-        }
+        $this->comment_attachments->storeFiles(
+            $comment,
+            $request->file('attachments', []),
+            "board-discussion-attachments/{$item->id}",
+            $request->user(),
+        );
 
         return response()->json([
             'message' => 'Update posted successfully.',
@@ -155,14 +145,24 @@ class BoardCommentController extends Controller
     /**
      * PATCH /api/boards/{item}/comments/{comment}
      *
-     * Edits a comment or reply's body — author-only, same as {@see destroy()}.
+     * Edits a comment or reply, author-only, same as {@see destroy()}: its
+     * body plus, sent as multipart (POST with `_method=PATCH`), the files
+     * added (`attachments[]`) and taken off (`removed_attachment_ids[]`).
      */
     public function update(UpdateBoardCommentRequest $request, WorkspaceNavigationItem $item, BoardComment $comment): JsonResponse
     {
         $this->ensureCommentBelongsToBoard($item, $comment);
         abort_if($comment->user_id !== $request->user()?->id, 403);
 
-        $this->comment_actions->editBody($comment, trim($request->validated('body')), $request->user());
+        $validated = $request->validated();
+        $this->comment_attachments->editComment(
+            comment: $comment,
+            body: trim($validated['body'] ?? ''),
+            new_files: $request->file('attachments', []),
+            removed_attachment_ids: collect($validated['removed_attachment_ids'] ?? []),
+            directory: "board-discussion-attachments/{$item->id}",
+            editor: $request->user(),
+        );
 
         return response()->json([
             'message' => 'Update edited successfully.',

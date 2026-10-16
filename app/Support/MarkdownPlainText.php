@@ -9,7 +9,7 @@ namespace App\Support;
 class MarkdownPlainText
 {
     /**
-     * Strips images, links, emphasis, headings, quotes, list markers and code
+     * Strips images, links, emphasis, underline, headings, quotes, list markers and code
      * ticks down to the words.
      */
     public static function convert(string $markdown): string
@@ -18,6 +18,7 @@ class MarkdownPlainText
         $text = preg_replace('/\[([^\]]*)\]\(([^)]*)\)/', '$1 ($2)', $text);
         $text = preg_replace('/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/m', '', $text);
         $text = preg_replace('/(\*\*|__|~~|`)/', '', $text);
+        $text = preg_replace('/\+\+(?=[^\s+])(.*?[^\s+])\+\+(?!\+)/', '$1', $text);
         $text = preg_replace('/(?<![\w*])[*_]([^*_\n]+)[*_](?![\w*])/', '$1', $text);
 
         return trim($text);

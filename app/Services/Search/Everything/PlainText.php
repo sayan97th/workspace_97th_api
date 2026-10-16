@@ -21,6 +21,7 @@ final class PlainText
         $text = strip_tags($text);
         $text = preg_replace('/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/mu', '', $text) ?? $text;
         $text = str_replace(['**', '__', '~~', '`'], '', $text);
+        $text = preg_replace('/\+\+(?=[^\s+])(.*?[^\s+])\+\+(?!\+)/u', '$1', $text) ?? $text;
 
         return self::squash(html_entity_decode($text, ENT_QUOTES | ENT_HTML5));
     }

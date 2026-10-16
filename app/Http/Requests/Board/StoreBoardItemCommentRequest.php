@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Board;
 
+use App\Http\Requests\Concerns\NormalizesCommentBody;
 use App\Models\BoardItem;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
@@ -9,6 +10,8 @@ use Illuminate\Validation\Rule;
 
 class StoreBoardItemCommentRequest extends FormRequest
 {
+    use NormalizesCommentBody;
+
     /**
      * Get the validation rules that apply to the request.
      *
