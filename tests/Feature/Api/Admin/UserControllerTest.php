@@ -414,3 +414,72 @@ test('inviting the email of a deleted account explains that it can be restored',
         ->assertStatus(422)
         ->assertJsonValidationErrors(['email']);
 });
+
+test('staff cannot open a single account for editing', function () {
+    $staff = User::factory()->create();
+    $staff->assignRole('staff');
+
+    $target = User::factory()->create();
+    $target->assignRole('client');
+
+    $this->actingAs($staff, 'api')
+        ->getJson("/api/admin/users/{$target->id}")
+        ->assertForbidden();
+});
+
+test('an admin cannot edit another admin or super admin account', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $other_admin = User::factory()->create(['first_name' => 'Original']);
+    $other_admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$other_admin->id}", ['first_name' => 'Changed'])
+        ->assertForbidden();
+
+    expect($other_admin->fresh()->first_name)->toBe('Original');
+});
+
+test('a super admin can edit an admin account', function () {
+    $super_admin = User::factory()->create();
+    $super_admin->assignRole('super_admin');
+
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $this->actingAs($super_admin, 'api')
+        ->patchJson("/api/admin/users/{$admin->id}", ['phone' => '+1 555-0199'])
+        ->assertOk()
+        ->assertJsonPath('user.phone', '+1 555-0199');
+});
+
+test('an admin can still update their own account details', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $this->actingAs($admin, 'api')
+        ->patchJson("/api/admin/users/{$admin->id}", ['phone' => '+1 555-0142'])
+        ->assertOk();
+});
+
+test('the user list returns status counts when asked', function () {
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    User::factory()->count(2)->create()->each(fn (User $u) => $u->assignRole('client'));
+    $disabled = User::factory()->create(['is_active' => false]);
+    $disabled->assignRole('client');
+    $deleted = User::factory()->create();
+    $deleted->assignRole('client');
+    $deleted->delete();
+
+    $response = $this->actingAs($admin, 'api')->getJson('/api/admin/users?with_counts=1&role=client&account_status=disabled');
+
+    $response->assertOk()
+        ->assertJsonPath('total', 1)
+        ->assertJsonPath('counts.active', 2)
+        ->assertJsonPath('counts.disabled', 1)
+        ->assertJsonPath('counts.deleted', 1)
+        ->assertJsonPath('counts.all', 3);
+});

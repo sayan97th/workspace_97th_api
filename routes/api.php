@@ -780,7 +780,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         // Literal segments ahead of `users/{user}` so they are not swallowed by model binding.
         Route::get('users/export', UserExportController::class)->middleware('role:super_admin,admin');
         Route::post('users/bulk', UserBulkActionController::class)->middleware('role:super_admin,admin');
-        Route::get('users/{user}', [AdminUserController::class, 'show'])->withTrashed();
+        // Opening one account is the Manage users edit page, admins only like every change to it.
+        Route::get('users/{user}', [AdminUserController::class, 'show'])->withTrashed()->middleware('role:super_admin,admin');
         Route::get('users/{user}/details', UserDetailsController::class)->withTrashed();
 
         // Account invitations sent from Administration > Users, with resend and cancel.

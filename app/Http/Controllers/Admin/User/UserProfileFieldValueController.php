@@ -7,6 +7,7 @@ use App\Http\Requests\Admin\User\UpdateUserProfileFieldValuesRequest;
 use App\Http\Resources\UserWithRolesResource;
 use App\Models\User;
 use App\Models\UserProfileFieldValue;
+use App\Support\Admin\UserManagementGate;
 use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,13 @@ class UserProfileFieldValueController extends Controller
 {
     public function __invoke(UpdateUserProfileFieldValuesRequest $request, User $user): JsonResponse
     {
+        /** @var User $actor */
+        $actor = $request->user();
+
+        if ($actor->id !== $user->id && ! UserManagementGate::canManage($actor, $user)) {
+            return response()->json(['message' => 'You do not have permission to edit this account.'], 403);
+        }
+
         $values = $request->validated('values');
 
         DB::transaction(function () use ($user, $values) {

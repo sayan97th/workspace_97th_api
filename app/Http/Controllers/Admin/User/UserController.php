@@ -30,6 +30,9 @@ class UserController extends Controller
      *
      * Filters are documented on {@see AdminUserQuery}, which the CSV export and the bulk
      * actions share so every one of them agrees on which users a filter matches.
+     *
+     * `with_counts=1` adds `counts` (all, active, disabled, deleted) for the same filters minus
+     * the account status, which the Manage users summary cards show and filter by.
      */
     public function index(Request $request): JsonResponse
     {
@@ -63,12 +66,18 @@ class UserController extends Controller
         $per_page = max(1, min((int) $request->query('per_page', self::DEFAULT_PER_PAGE), self::MAX_PER_PAGE));
         $users = $query->paginate($per_page);
 
-        return response()->json([
+        $payload = [
             'data' => UserWithRolesResource::collection($users->items()),
             'current_page' => $users->currentPage(),
             'last_page' => $users->lastPage(),
             'total' => $users->total(),
-        ]);
+        ];
+
+        if ($request->boolean('with_counts')) {
+            $payload['counts'] = $this->statusCounts($request);
+        }
+
+        return response()->json($payload);
     }
 
     /**
@@ -86,6 +95,14 @@ class UserController extends Controller
      */
     public function update(UpdateUserRequest $request, User $user): JsonResponse
     {
+        /** @var User $actor */
+        $actor = $request->user();
+
+        // Your own department or phone may still be set from here, anyone else needs the gate.
+        if ($actor->id !== $user->id && ! $this->actorCanManage($actor, $user)) {
+            return response()->json(['message' => 'You do not have permission to edit this account.'], 403);
+        }
+
         $user->update($request->validated());
 
         return response()->json([
@@ -324,6 +341,31 @@ class UserController extends Controller
         }
 
         return ! in_array($role, ['super_admin', 'admin'], true);
+    }
+
+    /**
+     * How many users match the request's filters in each account status, ignoring the status
+     * filter itself so every summary card keeps its count while one of them is selected.
+     *
+     * @return array{all: int, active: int, disabled: int, deleted: int}
+     */
+    private function statusCounts(Request $request): array
+    {
+        $count = function (string $status) use ($request): int {
+            $scoped = $request->duplicate(array_merge($request->query(), ['account_status' => $status]));
+
+            return AdminUserQuery::fromRequest($scoped)->count();
+        };
+
+        $active = $count('active');
+        $disabled = $count('disabled');
+
+        return [
+            'all' => $active + $disabled,
+            'active' => $active,
+            'disabled' => $disabled,
+            'deleted' => $count('deleted'),
+        ];
     }
 
     private function actorCanManage(User $actor, User $target): bool
