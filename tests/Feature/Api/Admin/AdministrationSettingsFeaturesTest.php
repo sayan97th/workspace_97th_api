@@ -30,8 +30,7 @@ test('invitations are listed by status and can be resent or canceled', function 
         ->assertOk()
         ->assertJsonPath('data.0.email', 'pending@example.com')
         ->assertJsonPath('data.0.status', 'pending')
-        ->assertJsonPath('counts.pending', 1)
-        ->assertJsonPath('counts.expired', 1);
+        ->assertJsonPath('counts', ['all' => 2, 'pending' => 1, 'expired' => 1, 'accepted' => 0]);
 
     $this->actingAs($this->admin, 'api')
         ->postJson("/api/admin/invitations/{$expired->id}/resend")
@@ -41,6 +40,32 @@ test('invitations are listed by status and can be resent or canceled', function 
 
     $this->actingAs($this->admin, 'api')->deleteJson("/api/admin/invitations/{$pending->id}")->assertOk();
     expect(StaffInvitation::find($pending->id))->toBeNull();
+});
+
+test('invitations can be filtered by role, sorted and searched by inviter name', function () {
+    $this->admin->update(['first_name' => 'Amanda', 'last_name' => 'Reyes']);
+
+    StaffInvitation::create(['email' => 'zed@example.com', 'role' => 'staff', 'invited_by' => $this->admin->id, 'expires_at' => now()->addDays(6)]);
+    StaffInvitation::create(['email' => 'abby@example.com', 'role' => 'client', 'invited_by' => $this->admin->id, 'expires_at' => now()->addDay()]);
+
+    $this->actingAs($this->admin, 'api')
+        ->getJson('/api/admin/invitations?status=all&role=client')
+        ->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.email', 'abby@example.com');
+
+    $this->actingAs($this->admin, 'api')
+        ->getJson('/api/admin/invitations?status=all&sort=email')
+        ->assertJsonPath('data.0.email', 'abby@example.com')
+        ->assertJsonPath('data.1.email', 'zed@example.com');
+
+    $this->actingAs($this->admin, 'api')
+        ->getJson('/api/admin/invitations?status=all&sort=expires')
+        ->assertJsonPath('data.0.email', 'abby@example.com');
+
+    $this->actingAs($this->admin, 'api')
+        ->getJson('/api/admin/invitations?status=all&search=Reyes')
+        ->assertJsonCount(2, 'data');
 });
 
 test('admins manage profile fields and removing a dropdown option clears its values', function () {

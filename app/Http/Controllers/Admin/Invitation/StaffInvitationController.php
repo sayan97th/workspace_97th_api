@@ -20,25 +20,39 @@ class StaffInvitationController extends Controller
 {
     private const STATUSES = ['pending', 'expired', 'accepted', 'all'];
 
+    private const ROLES = ['super_admin', 'admin', 'staff', 'client'];
+
+    private const SORTS = ['newest', 'oldest', 'email', 'expires'];
+
     private const EXPIRY_DAYS = 7;
 
     /**
-     * GET /api/admin/invitations?status=pending|expired|accepted|all&search=
+     * GET /api/admin/invitations?status=pending|expired|accepted|all&search=&role=&sort=newest|oldest|email|expires
      *
-     * Also returns `counts` per status, so the tab badges stay right whichever tab is open.
+     * Also returns `counts` per status (all, pending, expired, accepted), so the summary cards
+     * stay right whichever status is open. Search matches the invited email or the inviter's name.
      */
     public function index(Request $request): JsonResponse
     {
         $status = in_array($request->query('status'), self::STATUSES, true) ? $request->query('status') : 'pending';
+        $role = in_array($request->query('role'), self::ROLES, true) ? $request->query('role') : null;
+        $sort = in_array($request->query('sort'), self::SORTS, true) ? $request->query('sort') : 'newest';
         $search = trim((string) $request->query('search', ''));
 
-        $query = StaffInvitation::with(['inviter:id,first_name,last_name,profile_photo_path', 'department:id,name'])
-            ->orderByDesc('updated_at');
+        $query = StaffInvitation::with(['inviter:id,first_name,last_name,profile_photo_path', 'department:id,name']);
 
         $this->applyStatus($query, $status);
+        $this->applySort($query, $sort);
+
+        if ($role !== null) {
+            $query->where('role', $role);
+        }
 
         if ($search !== '') {
-            $query->where('email', 'LIKE', "%{$search}%");
+            $query->where(fn (Builder $q) => $q->where('email', 'LIKE', "%{$search}%")
+                ->orWhereHas('inviter', fn (Builder $inviter) => $inviter
+                    ->where('first_name', 'LIKE', "%{$search}%")
+                    ->orWhere('last_name', 'LIKE', "%{$search}%")));
         }
 
         $per_page = max(1, min((int) $request->query('per_page', 20), 100));
@@ -50,8 +64,10 @@ class StaffInvitationController extends Controller
             'last_page' => $invitations->lastPage(),
             'total' => $invitations->total(),
             'counts' => [
+                'all' => StaffInvitation::query()->count(),
                 'pending' => $this->applyStatus(StaffInvitation::query(), 'pending')->count(),
                 'expired' => $this->applyStatus(StaffInvitation::query(), 'expired')->count(),
+                'accepted' => $this->applyStatus(StaffInvitation::query(), 'accepted')->count(),
             ],
         ]);
     }
@@ -112,5 +128,23 @@ class StaffInvitationController extends Controller
             'accepted' => $query->whereNotNull('accepted_at'),
             default => $query,
         };
+    }
+
+    /**
+     * Newest first by default (by `updated_at`, so a resend moves it to the top), the soonest
+     * expiry first for `expires` with open ended rows last.
+     *
+     * @param  Builder<StaffInvitation>  $query
+     */
+    private function applySort(Builder $query, string $sort): void
+    {
+        match ($sort) {
+            'oldest' => $query->orderBy('updated_at'),
+            'email' => $query->orderBy('email'),
+            'expires' => $query->orderByRaw('expires_at IS NULL')->orderBy('expires_at'),
+            default => $query->orderByDesc('updated_at'),
+        };
+
+        $query->orderByDesc('id');
     }
 }

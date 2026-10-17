@@ -334,6 +334,9 @@ test('sent invitations can be searched by email and filtered by status/role', fu
         ->assertJsonPath('data.0.id', $pending->id)
         ->assertJsonPath('data.0.status', 'pending');
 
+    // The summary counts ignore the filters, so every card keeps its workspace wide total.
+    $search->assertJsonPath('meta.counts', ['all' => 3, 'pending' => 1, 'expired' => 1, 'accepted' => 1]);
+
     $status_filter = $this->actingAs($owner, 'api')
         ->getJson("/api/workspaces/{$workspace->slug}/invitations?status=expired");
     $status_filter->assertOk()

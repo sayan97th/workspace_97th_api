@@ -16,6 +16,7 @@ use App\Models\WorkspaceInvitation;
 use App\Services\Slack\SlackNotifier;
 use App\Support\WorkspacePermissionCatalog;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -32,6 +33,8 @@ class WorkspaceInvitationController extends Controller
 
     private const SORTABLE_FIELDS = ['email', 'role', 'status', 'expires_at', 'created_at'];
 
+    private const STATUSES = ['pending', 'expired', 'accepted'];
+
     private const CANDIDATE_MIN_SEARCH_LENGTH = 2;
 
     private const CANDIDATE_MAX_RESULTS = 8;
@@ -45,7 +48,8 @@ class WorkspaceInvitationController extends Controller
      * accepted) — the "Sent invitations" view's table. Server-searched by
      * email, filterable by `status`/`role`, sortable by `sort_field`/
      * `sort_direction`, narrowable to a `date_from`/`date_to` "invited at"
-     * range, and paginated. Restricted to owners and privileged staff, like
+     * range, and paginated. `meta.counts` holds the workspace wide total per
+     * status (ignoring the filters) for the view's summary cards. Restricted to owners and privileged staff, like
      * `store()` and `destroy()`.
      */
     public function index(Request $request, Workspace $workspace): JsonResponse
@@ -65,13 +69,8 @@ class WorkspaceInvitationController extends Controller
         }
 
         $status = (string) $request->query('status', '');
-        if (in_array($status, ['pending', 'expired', 'accepted'], true)) {
-            match ($status) {
-                'accepted' => $query->whereNotNull('accepted_at'),
-                'expired' => $query->whereNull('accepted_at')->where('expires_at', '<=', now()),
-                'pending' => $query->whereNull('accepted_at')
-                    ->where(fn (Builder $q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now())),
-            };
+        if (in_array($status, self::STATUSES, true)) {
+            $this->applyStatus($query, $status);
         }
 
         $role = (string) $request->query('role', '');
@@ -114,6 +113,7 @@ class WorkspaceInvitationController extends Controller
                 'last_page' => $paginator->lastPage(),
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
+                'counts' => $this->statusCounts($workspace),
             ],
         ]);
     }
@@ -277,5 +277,38 @@ class WorkspaceInvitationController extends Controller
         return response()->json([
             'message' => 'Invitation revoked.',
         ]);
+    }
+
+    /**
+     * Narrows a query to one computed invitation status.
+     *
+     * @param  Builder<WorkspaceInvitation>|HasMany<WorkspaceInvitation, Workspace>  $query
+     */
+    private function applyStatus(Builder|HasMany $query, string $status): void
+    {
+        match ($status) {
+            'accepted' => $query->whereNotNull('accepted_at'),
+            'expired' => $query->whereNull('accepted_at')->where('expires_at', '<=', now()),
+            'pending' => $query->whereNull('accepted_at')
+                ->where(fn (Builder $q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now())),
+        };
+    }
+
+    /**
+     * How many invitations the workspace has in each status, for the summary cards.
+     *
+     * @return array{all: int, pending: int, expired: int, accepted: int}
+     */
+    private function statusCounts(Workspace $workspace): array
+    {
+        $counts = ['all' => $workspace->invitations()->count()];
+
+        foreach (self::STATUSES as $status) {
+            $query = $workspace->invitations();
+            $this->applyStatus($query, $status);
+            $counts[$status] = $query->count();
+        }
+
+        return $counts;
     }
 }
