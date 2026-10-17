@@ -339,6 +339,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::delete('/', [SlackWorkspaceController::class, 'destroyActive']);
             Route::get('workspaces', [SlackWorkspaceController::class, 'index']);
             Route::post('workspaces/{installation}/activate', [SlackWorkspaceController::class, 'activate']);
+            Route::patch('workspaces/{installation}', [SlackWorkspaceController::class, 'update'])->middleware('throttle:30,1');
             Route::delete('workspaces/{installation}', [SlackWorkspaceController::class, 'destroy']);
             Route::post('match-members', [SlackWorkspaceController::class, 'matchMembers'])->middleware('throttle:6,1');
             Route::get('diagnostics', [SlackIntegrationController::class, 'diagnostics'])->middleware('throttle:10,1');

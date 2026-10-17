@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Slack\SlackNotifier;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Collection;
@@ -18,11 +19,15 @@ use Illuminate\Support\Carbon;
  * Several workspaces can stay connected, like on monday.com, but exactly one is active at a
  * time: notifications, automations and "Connect my Slack" all use the active one.
  *
+ * `notify_invitations` sends workspace and board invitations as a Slack direct message too, to
+ * whoever uses the invited email in this Slack workspace, see {@see SlackNotifier::notifyInvitee()}.
+ *
  * @property int $id
  * @property string $team_id
  * @property string $team_name
  * @property string|null $team_url
  * @property bool $is_active
+ * @property bool $notify_invitations
  * @property string|null $bot_user_id
  * @property string|null $app_id
  * @property string $bot_token
@@ -34,10 +39,19 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, SlackUserLink> $userLinks
  * @property-read Collection<int, SlackConnection> $connections
  */
-#[Fillable(['team_id', 'team_name', 'team_url', 'is_active', 'bot_user_id', 'app_id', 'bot_token', 'scopes', 'installed_by_id'])]
+#[Fillable(['team_id', 'team_name', 'team_url', 'is_active', 'notify_invitations', 'bot_user_id', 'app_id', 'bot_token', 'scopes', 'installed_by_id'])]
 #[Hidden(['bot_token'])]
 class SlackInstallation extends Model
 {
+    /**
+     * Matches the column default, so a workspace connected in this request already sends invitations.
+     *
+     * @var array<string, mixed>
+     */
+    protected $attributes = [
+        'notify_invitations' => true,
+    ];
+
     /**
      * The active workspace, or null when Slack is not connected.
      */
@@ -101,6 +115,7 @@ class SlackInstallation extends Model
         return [
             'bot_token' => 'encrypted',
             'is_active' => 'boolean',
+            'notify_invitations' => 'boolean',
         ];
     }
 }

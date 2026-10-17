@@ -10,6 +10,7 @@ use App\Mail\BoardInvitationMail;
 use App\Models\BoardInvitation;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Slack\SlackNotifier;
 use App\Support\BoardEditGate;
 use App\Support\BoardManagementGate;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +26,8 @@ use Illuminate\Validation\ValidationException;
  */
 class BoardInvitationController extends Controller
 {
+    public function __construct(private readonly SlackNotifier $slack_notifier) {}
+
     /**
      * GET /api/boards/{item}/invitations
      *
@@ -85,6 +88,8 @@ class BoardInvitationController extends Controller
      * an address. Skips anyone who already has access, whether as a
      * workspace owner, an existing collaborator, or (for a "main" board
      * visible to the whole workspace) any existing workspace member.
+     * Each invitation also goes out as a Slack direct message when the
+     * invited email belongs to someone in the connected Slack workspace.
      */
     public function store(StoreBoardInvitationRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -144,6 +149,7 @@ class BoardInvitationController extends Controller
             });
 
             SendEmailJob::dispatchWithThrottle(new BoardInvitationMail($invitation), $invitation->email, $index);
+            $this->slack_notifier->notifyBoardInvitation($invitation);
             $invitations->push($invitation);
         }
 
@@ -165,7 +171,8 @@ class BoardInvitationController extends Controller
      * trip: the Share dialog's search picks a person, or every member of a
      * team. Their workspace role is untouched, so what they may edit still
      * follows the board's permission ({@see BoardEditGate}).
-     * Anyone who already has access is skipped.
+     * Anyone who already has access is skipped. Everyone added is told on
+     * Slack, since no email goes out for this.
      */
     public function storeCollaborators(StoreBoardCollaboratorsRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -196,6 +203,10 @@ class BoardInvitationController extends Controller
         $item->collaborators()->syncWithoutDetaching(
             $new_members->mapWithKeys(fn (User $member) => [$member->id => ['invited_by' => $user->id]])->all()
         );
+
+        foreach ($new_members as $member) {
+            $this->slack_notifier->notifyBoardAccessGranted($item, $member, $user);
+        }
 
         return response()->json([
             'message' => $new_members->isEmpty() ? 'Everyone already has access.' : 'Access granted.',

@@ -2,12 +2,17 @@
 
 namespace App\Services\Slack;
 
+use App\Jobs\SendSlackInvitationJob;
 use App\Jobs\SendSlackMessageJob;
+use App\Models\BoardInvitation;
 use App\Models\Notification;
 use App\Models\SlackInstallation;
 use App\Models\SlackUserLink;
 use App\Models\User;
+use App\Models\WorkspaceInvitation;
+use App\Models\WorkspaceNavigationItem;
 use App\Services\Notification\NotificationService;
+use DateTimeInterface;
 
 /**
  * Turns notifications and automation messages into Slack messages and queues them.
@@ -126,6 +131,92 @@ class SlackNotifier
     }
 
     /**
+     * Sends a workspace invitation to whoever uses the invited email in the active Slack
+     * workspace, with an "Accept invitation" button. The email invitation is sent either way.
+     */
+    public function notifyWorkspaceInvitation(WorkspaceInvitation $invitation): bool
+    {
+        $invitation->loadMissing(['inviter', 'workspace']);
+        $inviter_name = $invitation->inviter?->full_name ?: 'Someone';
+        $workspace_name = $invitation->workspace->name;
+
+        return $this->notifyInvitee(
+            email: $invitation->email,
+            mrkdwn: sprintf('*%s* invited you to join the *%s* workspace', $this->escape($inviter_name), $this->escape($workspace_name)).$this->quote($invitation->message),
+            fallback_text: "{$inviter_name} invited you to join the {$workspace_name} workspace",
+            link: "/invitations/{$invitation->code}",
+            context: $this->expiryContext($invitation->expires_at),
+            button_label: 'Accept invitation',
+        );
+    }
+
+    /**
+     * Sends a board invitation (sharing one board or view by email) to whoever uses the invited
+     * email in the active Slack workspace, with a "View invitation" button.
+     */
+    public function notifyBoardInvitation(BoardInvitation $invitation): bool
+    {
+        $invitation->loadMissing(['inviter', 'board']);
+        $inviter_name = $invitation->inviter?->full_name ?: 'Someone';
+        $board_name = $invitation->board->label;
+
+        return $this->notifyInvitee(
+            email: $invitation->email,
+            mrkdwn: sprintf('*%s* invited you to the *%s* board', $this->escape($inviter_name), $this->escape($board_name)).$this->quote($invitation->message),
+            fallback_text: "{$inviter_name} invited you to the {$board_name} board",
+            link: "/board-invitations/{$invitation->code}",
+            context: $this->expiryContext($invitation->expires_at),
+            button_label: 'View invitation',
+        );
+    }
+
+    /**
+     * Tells an existing member they were added to a board from the Share dialog, which grants
+     * access right away and sends no email.
+     */
+    public function notifyBoardAccessGranted(WorkspaceNavigationItem $board, User $member, User $actor): bool
+    {
+        if ($member->id === $actor->id) {
+            return false;
+        }
+
+        $actor_name = $actor->full_name ?: 'Someone';
+
+        return $this->notifyInvitee(
+            email: $member->email,
+            mrkdwn: sprintf('*%s* gave you access to the *%s* board', $this->escape($actor_name), $this->escape($board->label)),
+            fallback_text: "{$actor_name} gave you access to the {$board->label} board",
+            link: "/boards/{$board->id}",
+            context: null,
+            button_label: 'Open board',
+        );
+    }
+
+    /**
+     * Queues a direct message for whoever uses `$email` in the active Slack workspace, an account
+     * or not. Returns false when nothing was queued: Slack is not connected, or an administrator
+     * switched invitations off for that workspace. Who `$email` is gets resolved in the queue,
+     * see {@see SendSlackInvitationJob}.
+     */
+    public function notifyInvitee(string $email, string $mrkdwn, string $fallback_text, string $link, ?string $context, string $button_label): bool
+    {
+        $installation = $this->slack_service->installation();
+
+        if (! $installation || ! $installation->notify_invitations) {
+            return false;
+        }
+
+        SendSlackInvitationJob::dispatch(
+            $installation->id,
+            $email,
+            mb_substr($fallback_text, 0, 3000),
+            $this->buildBlocks($mrkdwn, $context, $link, $button_label),
+        );
+
+        return true;
+    }
+
+    /**
      * Sends a message straight away instead of through the queue, so a "send me a test
      * message" button can show the real Slack error to the person who clicked it.
      *
@@ -175,6 +266,21 @@ class SlackNotifier
         return str_replace(['&', '<', '>'], ['&amp;', '&lt;', '&gt;'], $text);
     }
 
+    /**
+     * The personal note an inviter added, as a Slack quote under the message. Empty when there is none.
+     */
+    private function quote(?string $message): string
+    {
+        $message = trim((string) $message);
+
+        return $message === '' ? '' : "\n>".str_replace("\n", "\n>", $this->escape($message));
+    }
+
+    private function expiryContext(?DateTimeInterface $expires_at): ?string
+    {
+        return $expires_at ? 'This invitation expires on '.$expires_at->format('M j, Y') : null;
+    }
+
     private function sendToUser(User $user, string $mrkdwn, string $fallback_text, ?string $link, ?string $context): bool
     {
         $slack_link = $user->slackLink()->with('installation')->first();
@@ -200,11 +306,11 @@ class SlackNotifier
 
     /**
      * The block layout every notification uses: the message, an optional context line and an
-     * optional "Open in workspace" button pointing at `$link` (an in-app path).
+     * optional button (`$button_label`, "Open in workspace" by default) pointing at `$link` (an in-app path).
      *
      * @return array<int, array<string, mixed>>
      */
-    public function buildBlocks(string $mrkdwn, ?string $context, ?string $link): array
+    public function buildBlocks(string $mrkdwn, ?string $context, ?string $link, string $button_label = 'Open in workspace'): array
     {
         $blocks = [
             ['type' => 'section', 'text' => ['type' => 'mrkdwn', 'text' => mb_substr($mrkdwn, 0, 3000)]],
@@ -219,7 +325,7 @@ class SlackNotifier
                 'type' => 'actions',
                 'elements' => [[
                     'type' => 'button',
-                    'text' => ['type' => 'plain_text', 'text' => 'Open in workspace'],
+                    'text' => ['type' => 'plain_text', 'text' => $button_label],
                     'url' => rtrim((string) config('app.frontend_url'), '/').$link,
                 ]],
             ];

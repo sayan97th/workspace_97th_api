@@ -13,6 +13,7 @@ use App\Models\AccountSetting;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceInvitation;
+use App\Services\Slack\SlackNotifier;
 use App\Support\WorkspacePermissionCatalog;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -34,6 +35,8 @@ class WorkspaceInvitationController extends Controller
     private const CANDIDATE_MIN_SEARCH_LENGTH = 2;
 
     private const CANDIDATE_MAX_RESULTS = 8;
+
+    public function __construct(private readonly SlackNotifier $slack_notifier) {}
 
     /**
      * GET /api/workspaces/{workspace}/invitations
@@ -161,6 +164,8 @@ class WorkspaceInvitationController extends Controller
      * Bulk-invites one or more email addresses to join the workspace with a
      * single role, resending (rather than duplicating) any invitation still
      * pending for an address. Restricted to owners and privileged staff.
+     * Each invitation also goes out as a Slack direct message when the
+     * invited email belongs to someone in the connected Slack workspace.
      */
     public function store(StoreWorkspaceInvitationRequest $request, Workspace $workspace): JsonResponse
     {
@@ -231,6 +236,7 @@ class WorkspaceInvitationController extends Controller
             });
 
             SendEmailJob::dispatchWithThrottle(new WorkspaceInvitationMail($invitation), $invitation->email, $index);
+            $this->slack_notifier->notifyWorkspaceInvitation($invitation);
             $invitations->push($invitation);
         }
 
@@ -272,5 +278,4 @@ class WorkspaceInvitationController extends Controller
             'message' => 'Invitation revoked.',
         ]);
     }
-
 }

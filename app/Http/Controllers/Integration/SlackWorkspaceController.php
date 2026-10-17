@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Integration;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Integration\Concerns\RespondsWithSlackErrors;
+use App\Http\Requests\Integration\SlackWorkspaceSettingsRequest;
 use App\Models\BoardAutomation;
 use App\Models\SlackInstallation;
 use App\Services\Slack\SlackAppCredentials;
@@ -17,7 +18,7 @@ use Illuminate\Http\Request;
 /**
  * Administration > Integrations > Slack workspaces (admin, super_admin), the counterpart of
  * monday.com's Connections page. Lists every connected Slack workspace, switches the active
- * one, disconnects one, and matches members to their Slack account by email.
+ * one, disconnects one, changes its settings, and matches members to their Slack account by email.
  *
  * Adding or reconnecting a workspace goes through "Add to Slack", see
  * {@see SlackIntegrationController::installUrl()}.
@@ -57,6 +58,34 @@ class SlackWorkspaceController extends Controller
 
         return response()->json([
             'message' => "{$installation->team_name} is now the active Slack workspace.",
+            ...$this->payload($request),
+        ]);
+    }
+
+    /**
+     * PATCH /api/integrations/slack/workspaces/{installation}
+     *
+     * Per workspace settings. `notify_invitations` decides whether people invited to a workspace
+     * or a board also get the invitation as a Slack direct message.
+     */
+    public function update(SlackWorkspaceSettingsRequest $request, SlackInstallation $installation): JsonResponse
+    {
+        $notify_invitations = $request->boolean('notify_invitations');
+
+        if ($installation->notify_invitations !== $notify_invitations) {
+            $installation->update(['notify_invitations' => $notify_invitations]);
+            AuditLogger::log(
+                'slack.invitations_toggled',
+                ($notify_invitations ? 'Turned on' : 'Turned off')." Slack invitations for the \"{$installation->team_name}\" workspace.",
+                $request->user(),
+                ['team_id' => $installation->team_id],
+            );
+        }
+
+        return response()->json([
+            'message' => $notify_invitations
+                ? "Invitations are now also sent on Slack in {$installation->team_name}."
+                : "Invitations are no longer sent on Slack in {$installation->team_name}.",
             ...$this->payload($request),
         ]);
     }
@@ -162,6 +191,9 @@ class SlackWorkspaceController extends Controller
                 'team_name' => $installation->team_name,
                 'team_url' => $installation->team_url,
                 'is_active' => $installation->is_active,
+                'notify_invitations' => $installation->notify_invitations,
+                // Without it invitations only reach people who already linked their Slack account.
+                'can_lookup_by_email' => $installation->hasScope('users:read.email'),
                 // Which Slack app installed it, `environment` or a saved app's id, with its name.
                 'app' => $this->credentials->appForAppId($installation->app_id),
                 'connected_at' => $installation->created_at,
