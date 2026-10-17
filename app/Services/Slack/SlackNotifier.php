@@ -224,7 +224,7 @@ class SlackNotifier
      */
     public function sendTestToUser(User $user, SlackClient $client): void
     {
-        $link = $user->slackLink;
+        $link = $this->slack_service->notificationLinkFor($user);
 
         if (! $link) {
             throw new SlackException('not_linked', 'Connect your Slack account first.');
@@ -283,7 +283,7 @@ class SlackNotifier
 
     private function sendToUser(User $user, string $mrkdwn, string $fallback_text, ?string $link, ?string $context): bool
     {
-        $slack_link = $user->slackLink()->with('installation')->first();
+        $slack_link = $this->slack_service->notificationLinkFor($user);
 
         if (! $slack_link) {
             return false;

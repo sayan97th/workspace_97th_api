@@ -20,6 +20,7 @@ class UpdateProfileRequest extends FormRequest
         return [
             ...$this->profileRules($this->user()->id),
             'phone' => ['nullable', 'string', 'max:30'],
+            'job_title' => ['sometimes', 'nullable', 'string', 'max:255'],
             'timezone' => ['nullable', 'string', 'timezone:all'],
         ];
     }

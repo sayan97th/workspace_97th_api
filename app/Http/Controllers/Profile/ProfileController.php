@@ -33,6 +33,8 @@ class ProfileController extends Controller
             'email' => $validated['email'],
             'phone' => $validated['phone'] ?? null,
             'timezone' => $validated['timezone'] ?? null,
+            // Older clients send PUT without a title, so it only changes when the field is present.
+            ...(array_key_exists('job_title', $validated) ? ['job_title' => $validated['job_title']] : []),
         ]);
 
         return response()->json([

@@ -95,6 +95,7 @@ use App\Http\Controllers\Profile\LocalePreferenceController;
 use App\Http\Controllers\Profile\NotificationPreferenceController;
 use App\Http\Controllers\Profile\PasswordController;
 use App\Http\Controllers\Profile\ProfileController;
+use App\Http\Controllers\Profile\ProfileOverviewController;
 use App\Http\Controllers\Profile\ProfilePhotoController;
 use App\Http\Controllers\Profile\SidebarPreferenceController;
 use App\Http\Controllers\Profile\UserSessionController;
@@ -377,6 +378,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('/', [ProfileController::class, 'show']);
         Route::put('/', [ProfileController::class, 'update']);
         Route::patch('/', [ProfileController::class, 'partialUpdate']);
+        Route::get('overview', ProfileOverviewController::class);
         Route::put('password', [PasswordController::class, 'update']);
         Route::post('photo', [ProfilePhotoController::class, 'store']);
         Route::delete('photo', [ProfilePhotoController::class, 'destroy']);

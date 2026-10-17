@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\AccountTeam;
+use App\Models\Department;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
@@ -106,4 +108,57 @@ test('a user can upload and remove a profile photo', function () {
 
     $destroy->assertOk()->assertJsonPath('profile_photo_url', null);
     expect($user->fresh()->profile_photo_path)->toBeNull();
+});
+
+test('an authenticated user can set and clear their job title', function () {
+    $user = User::factory()->create(['job_title' => null]);
+
+    $this->actingAs($user, 'api')
+        ->patchJson('/api/profile', ['job_title' => 'Product Designer'])
+        ->assertOk()
+        ->assertJsonPath('user.job_title', 'Product Designer');
+
+    $this->actingAs($user, 'api')
+        ->patchJson('/api/profile', ['job_title' => null])
+        ->assertOk()
+        ->assertJsonPath('user.job_title', null);
+});
+
+test('a full profile update without a job title keeps the saved one', function () {
+    $user = User::factory()->create(['job_title' => 'Engineer']);
+
+    $this->actingAs($user, 'api')->putJson('/api/profile', [
+        'first_name' => 'Updated',
+        'last_name' => 'Name',
+        'email' => 'kept-title@example.com',
+    ])->assertOk();
+
+    expect($user->refresh()->job_title)->toBe('Engineer');
+});
+
+test('the profile overview lists the department and teams of the user', function () {
+    $department = Department::factory()->create(['name' => 'Marketing']);
+    $user = User::factory()->create(['department_id' => $department->id]);
+    $other = User::factory()->create();
+    $design = AccountTeam::factory()->create(['name' => 'Design']);
+    $design->members()->attach([$user->id, $other->id]);
+    AccountTeam::factory()->create(['name' => 'Not mine']);
+
+    $this->actingAs($user, 'api')
+        ->getJson('/api/profile/overview')
+        ->assertOk()
+        ->assertJsonPath('data.department.name', 'Marketing')
+        ->assertJsonCount(1, 'data.teams')
+        ->assertJsonPath('data.teams.0.name', 'Design')
+        ->assertJsonPath('data.teams.0.members_count', 2);
+});
+
+test('the profile overview returns no department when none is assigned', function () {
+    $user = User::factory()->create(['department_id' => null]);
+
+    $this->actingAs($user, 'api')
+        ->getJson('/api/profile/overview')
+        ->assertOk()
+        ->assertJsonPath('data.department', null)
+        ->assertJsonCount(0, 'data.teams');
 });

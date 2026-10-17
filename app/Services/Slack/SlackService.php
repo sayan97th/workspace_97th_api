@@ -297,7 +297,41 @@ class SlackService
      */
     public function disconnectConnection(SlackConnection $connection): void
     {
-        $connection->delete();
+        DB::transaction(function () use ($connection) {
+            // The link the connection made, same Slack account in the same workspace, goes with it,
+            // so "Disconnect" also stops the member's direct messages from that workspace.
+            if ($connection->slack_user_id) {
+                SlackUserLink::query()
+                    ->where('user_id', $connection->user_id)
+                    ->where('slack_installation_id', $connection->slack_installation_id)
+                    ->where('slack_user_id', $connection->slack_user_id)
+                    ->delete();
+            }
+
+            $connection->delete();
+        });
+    }
+
+    /**
+     * The Slack account `$user`'s direct messages go to. The link in the account's active workspace
+     * wins, like before. A member whose own Slack workspace is not the active one, because they set
+     * up Slack for themselves from My Profile > Integrations, still gets their messages there: the
+     * newest link in a workspace they connected personally is used instead.
+     */
+    public function notificationLinkFor(User $user): ?SlackUserLink
+    {
+        $active_link = $user->slackLink()->with('installation')->first();
+
+        if ($active_link) {
+            return $active_link;
+        }
+
+        return $user->slackLinks()
+            ->with('installation')
+            ->whereIn('slack_installation_id', $user->slackConnections()->select('slack_installation_id'))
+            ->latest('linked_at')
+            ->latest('id')
+            ->first();
     }
 
     /**
@@ -584,16 +618,12 @@ class SlackService
     }
 
     /**
-     * Removes `$user`'s Slack account from the active workspace only, links to other
-     * workspaces stay for when an administrator switches back.
+     * Removes the Slack account `$user`'s direct messages go to, see {@see notificationLinkFor()}.
+     * Links to other workspaces stay for when an administrator switches back.
      */
     public function unlinkUser(User $user): void
     {
-        $installation = $this->installation();
-
-        if ($installation) {
-            SlackUserLink::where('user_id', $user->id)->where('slack_installation_id', $installation->id)->delete();
-        }
+        $this->notificationLinkFor($user)?->delete();
     }
 
     /**

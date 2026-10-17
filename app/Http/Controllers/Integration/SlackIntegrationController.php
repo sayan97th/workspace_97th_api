@@ -118,7 +118,7 @@ class SlackIntegrationController extends Controller
     public function sendTest(Request $request, SlackNotifier $slack_notifier, SlackClient $slack_client): JsonResponse
     {
         try {
-            $slack_notifier->sendTestToUser($request->user()->load('slackLink.installation'), $slack_client);
+            $slack_notifier->sendTestToUser($request->user(), $slack_client);
         } catch (SlackException $exception) {
             return $this->errorResponse($exception);
         }

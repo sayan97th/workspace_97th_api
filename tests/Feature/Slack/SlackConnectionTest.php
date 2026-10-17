@@ -12,6 +12,7 @@ use App\Models\SlackUserLink;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Slack\SlackNotifier;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -240,4 +241,101 @@ test('a connection automation posts through its own workspace while another one 
 
     Queue::assertPushed(SendSlackMessageJob::class, 1);
     $this->assertDatabaseHas('board_automation_run_logs', ['status' => 'failed']);
+});
+
+test('a member can set up slack for their own account while no workspace is connected yet', function () {
+    $this->actingAs(connectionMember(), 'api')->getJson('/api/integrations/slack')
+        ->assertOk()
+        ->assertJsonPath('needs_setup', true)
+        ->assertJsonPath('needs_app_setup', false)
+        ->assertJsonPath('can_connect_account', true)
+        ->assertJsonPath('can_manage', false)
+        ->assertJsonPath('can_configure_app', false)
+        ->assertJsonPath('personal_setup_path', '/profile?section=integrations')
+        ->assertJsonPath('connections_count', 0);
+});
+
+test('only a missing slack app or the integrations permission blocks the personal setup', function () {
+    AccountSetting::current()->update(['account_permissions' => ['client' => ['use_integrations' => false]]]);
+    $member = connectionMember();
+
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack')->assertJsonPath('can_connect_account', false);
+
+    AccountSetting::current()->update(['account_permissions' => []]);
+    SlackAppSetting::query()->delete();
+
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack')
+        ->assertJsonPath('needs_app_setup', true)
+        ->assertJsonPath('can_connect_account', false);
+});
+
+test('a member never reads or changes the slack app from the personal setup', function () {
+    $member = connectionMember();
+
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack/app')->assertForbidden();
+    $this->actingAs($member, 'api')->postJson('/api/integrations/slack/app', ['label' => 'Mine', 'client_id' => 'x', 'client_secret' => 'y', 'signing_secret' => 'z'])->assertForbidden();
+    $this->actingAs($member, 'api')->putJson('/api/integrations/slack/app/active', ['app' => 'environment'])->assertForbidden();
+    $this->actingAs($member, 'api')->postJson('/api/integrations/slack/install-url')->assertForbidden();
+});
+
+test('direct messages reach a member in the workspace they connected themselves when it is not the active one', function () {
+    Queue::fake();
+    connectionInstallation();
+    $own = connectionInstallation(['team_id' => 'T200', 'team_name' => '97th Floor', 'bot_token' => 'xoxb-97th', 'is_active' => false]);
+    $member = connectionMember();
+    SlackConnection::create(['user_id' => $member->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U900', 'connected_at' => now()]);
+    SlackUserLink::create(['user_id' => $member->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U900', 'slack_display_name' => 'Amanda', 'linked_at' => now()]);
+
+    expect(app(SlackNotifier::class)->notifyUser($member, 'Hello'))->toBeTrue();
+    Queue::assertPushed(SendSlackMessageJob::class, fn (SendSlackMessageJob $job) => $job->installation_id === $own->id && $job->channel === 'U900');
+
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack')
+        ->assertJsonPath('current_user_link.slack_user_id', 'U900')
+        ->assertJsonPath('current_user_link.team_name', '97th Floor')
+        ->assertJsonPath('current_user_link.is_active_workspace', false)
+        ->assertJsonPath('connections_count', 1);
+});
+
+test('the link in the active workspace wins, and a link the member did not connect is never used outside it', function () {
+    Queue::fake();
+    $active = connectionInstallation();
+    $other = connectionInstallation(['team_id' => 'T200', 'team_name' => '97th Floor', 'is_active' => false]);
+    $member = connectionMember();
+
+    // Matched by email in a workspace that is no longer active, without a personal connection.
+    SlackUserLink::create(['user_id' => $member->id, 'slack_installation_id' => $other->id, 'slack_user_id' => 'U200', 'linked_at' => now()]);
+    expect(app(SlackNotifier::class)->notifyUser($member, 'Hello'))->toBeFalse();
+
+    SlackUserLink::create(['user_id' => $member->id, 'slack_installation_id' => $active->id, 'slack_user_id' => 'U100', 'linked_at' => now()]);
+    SlackConnection::create(['user_id' => $member->id, 'slack_installation_id' => $other->id, 'slack_user_id' => 'U200', 'connected_at' => now()]);
+
+    expect(app(SlackNotifier::class)->notifyUser($member, 'Hello'))->toBeTrue();
+    Queue::assertPushed(SendSlackMessageJob::class, fn (SendSlackMessageJob $job) => $job->installation_id === $active->id && $job->channel === 'U100');
+});
+
+test('disconnecting a personal connection also stops the direct messages from that workspace', function () {
+    $own = connectionInstallation();
+    $member = connectionMember();
+    $connection = SlackConnection::create(['user_id' => $member->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U900', 'connected_at' => now()]);
+    SlackUserLink::create(['user_id' => $member->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U900', 'linked_at' => now()]);
+    $someone_else = connectionMember();
+    SlackUserLink::create(['user_id' => $someone_else->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U901', 'linked_at' => now()]);
+
+    $this->actingAs($member, 'api')->deleteJson("/api/integrations/slack/connections/{$connection->id}")->assertOk();
+
+    expect(SlackUserLink::query()->where('user_id', $member->id)->exists())->toBeFalse()
+        ->and(SlackUserLink::query()->where('user_id', $someone_else->id)->exists())->toBeTrue();
+    $this->actingAs($member, 'api')->getJson('/api/integrations/slack')->assertJsonPath('current_user_link', null);
+});
+
+test('disconnect my slack removes the link in the member own workspace when it is not the active one', function () {
+    connectionInstallation();
+    $own = connectionInstallation(['team_id' => 'T200', 'team_name' => '97th Floor', 'is_active' => false]);
+    $member = connectionMember();
+    SlackConnection::create(['user_id' => $member->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U900', 'connected_at' => now()]);
+    SlackUserLink::create(['user_id' => $member->id, 'slack_installation_id' => $own->id, 'slack_user_id' => 'U900', 'linked_at' => now()]);
+
+    $this->actingAs($member, 'api')->deleteJson('/api/integrations/slack/link')
+        ->assertOk()
+        ->assertJsonPath('current_user_link', null);
 });
