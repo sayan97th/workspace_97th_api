@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
@@ -28,6 +29,7 @@ use Illuminate\Support\Str;
  * @property Carbon|null $updated_at
  * @property-read User $inviter
  * @property-read Department|null $department
+ * @property-read User|null $account
  */
 #[Fillable(['email', 'role', 'department_id', 'message', 'invited_by', 'expires_at', 'accepted_at'])]
 class StaffInvitation extends Model
@@ -64,6 +66,17 @@ class StaffInvitation extends Model
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
+    }
+
+    /**
+     * The account registered with the invited email, matched by address since accepting an
+     * invitation creates the user with that same email.
+     *
+     * @return HasOne<User, $this>
+     */
+    public function account(): HasOne
+    {
+        return $this->hasOne(User::class, 'email', 'email');
     }
 
     /**

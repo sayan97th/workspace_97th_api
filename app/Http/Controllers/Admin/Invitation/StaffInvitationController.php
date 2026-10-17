@@ -30,7 +30,8 @@ class StaffInvitationController extends Controller
      * GET /api/admin/invitations?status=pending|expired|accepted|all&search=&role=&sort=newest|oldest|email|expires
      *
      * Also returns `counts` per status (all, pending, expired, accepted), so the summary cards
-     * stay right whichever status is open. Search matches the invited email or the inviter's name.
+     * stay right whichever status is open. Search matches the invited email, the inviter's name
+     * or the name of the account that joined through the invitation.
      */
     public function index(Request $request): JsonResponse
     {
@@ -39,7 +40,13 @@ class StaffInvitationController extends Controller
         $sort = in_array($request->query('sort'), self::SORTS, true) ? $request->query('sort') : 'newest';
         $search = trim((string) $request->query('search', ''));
 
-        $query = StaffInvitation::with(['inviter:id,first_name,last_name,profile_photo_path', 'department:id,name']);
+        $query = StaffInvitation::with([
+            'inviter:id,first_name,last_name,profile_photo_path',
+            'department:id,name',
+            // Deactivated accounts are soft deleted, they still joined so the row keeps showing them.
+            'account' => fn ($account) => $account->withTrashed()
+                ->select(['id', 'email', 'first_name', 'last_name', 'job_title', 'profile_photo_path', 'deleted_at']),
+        ]);
 
         $this->applyStatus($query, $status);
         $this->applySort($query, $sort);
@@ -51,6 +58,9 @@ class StaffInvitationController extends Controller
         if ($search !== '') {
             $query->where(fn (Builder $q) => $q->where('email', 'LIKE', "%{$search}%")
                 ->orWhereHas('inviter', fn (Builder $inviter) => $inviter
+                    ->where('first_name', 'LIKE', "%{$search}%")
+                    ->orWhere('last_name', 'LIKE', "%{$search}%"))
+                ->orWhereHas('account', fn (Builder $account) => $account
                     ->where('first_name', 'LIKE', "%{$search}%")
                     ->orWhere('last_name', 'LIKE', "%{$search}%")));
         }

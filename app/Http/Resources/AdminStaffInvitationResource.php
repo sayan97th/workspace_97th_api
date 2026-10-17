@@ -8,7 +8,8 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
  * Administration > Users > Invitations row. Extends {@see StaffInvitationResource} with who
- * sent it, the department and a computed `status` (pending, expired or accepted).
+ * sent it, the department, a computed `status` (pending, expired or accepted) and, once
+ * accepted, the `account` that joined through it.
  *
  * @mixin StaffInvitation
  */
@@ -37,6 +38,13 @@ class AdminStaffInvitationResource extends JsonResource
                 'id' => $this->inviter->id,
                 'full_name' => $this->inviter->full_name,
                 'profile_photo_url' => $this->inviter->profile_photo_url,
+            ] : null),
+            'account' => $this->whenLoaded('account', fn () => $this->isAccepted() && $this->account ? [
+                'id' => $this->account->id,
+                'full_name' => $this->account->full_name,
+                'job_title' => $this->account->job_title,
+                'profile_photo_url' => $this->account->profile_photo_url,
+                'is_deactivated' => $this->account->trashed(),
             ] : null),
         ];
     }
