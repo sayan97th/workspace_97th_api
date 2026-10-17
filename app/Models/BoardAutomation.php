@@ -392,6 +392,11 @@ class BoardAutomation extends Model
     /** The people a recipient token can stand for, besides fixed people and people columns. */
     public const RECIPIENT_SOURCES = ['actor', 'creator', 'owner', 'mentioned', 'subscribers'];
 
+    /** The Automations dialog lists `board` automations, the Integrations dialog `integrations` ones, see {@see self::isIntegration()}. */
+    public const SOURCE_BOARD = 'board';
+
+    public const SOURCE_INTEGRATIONS = 'integrations';
+
     public const FAILURE_ALERT_APP = 'app';
 
     public const FAILURE_ALERT_APP_AND_EMAIL = 'app_and_email';
@@ -599,6 +604,50 @@ class BoardAutomation extends Model
     public static function communicationActions(): array
     {
         return [self::ACTION_SEND_EMAIL, self::ACTION_SLACK_NOTIFY_CHANNEL, self::ACTION_SLACK_NOTIFY_PERSON];
+    }
+
+    /**
+     * Actions that reach an outside app (email, Slack, Google Calendar). An automation with one of
+     * them, or with an {@see self::integrationTriggers()} trigger, belongs to the board's
+     * Integrations dialog, every other automation to the Automations dialog.
+     *
+     * @return array<int, string>
+     */
+    public static function integrationActions(): array
+    {
+        return [...self::communicationActions(), self::ACTION_SEND_DIGEST, self::ACTION_GOOGLE_CALENDAR_SYNC];
+    }
+
+    /**
+     * Triggers fired by an outside app.
+     *
+     * @return array<int, string>
+     */
+    public static function integrationTriggers(): array
+    {
+        return [self::TRIGGER_EMAIL_RECEIVED];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function sources(): array
+    {
+        return [self::SOURCE_BOARD, self::SOURCE_INTEGRATIONS];
+    }
+
+    /**
+     * Whether the automation is triggered by or reaches an outside app, from either branch.
+     */
+    public function isIntegration(): bool
+    {
+        if (in_array($this->trigger_type, self::integrationTriggers(), true)) {
+            return true;
+        }
+
+        $types = array_column([...$this->resolvedActions(), ...$this->resolvedElseActions()], 'type');
+
+        return array_intersect($types, self::integrationActions()) !== [];
     }
 
     /**

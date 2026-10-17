@@ -218,3 +218,31 @@ test('the prune command deletes only run history older than the retention window
 
     expect(BoardAutomationRunLog::count())->toBe(1);
 });
+
+test('the run history and the usage split board automations from integrations', function () {
+    [$board, $view] = createManageTestBoard();
+    $board_automation = createManageAutomation($board, $view, ['name' => 'Notify']);
+    $email = createManageAutomation($board, $view, ['name' => 'Email', 'action_type' => BoardAutomation::ACTION_SEND_EMAIL]);
+    $mixed = createManageAutomation($board, $view, [
+        'name' => 'Create then post',
+        'action_type' => BoardAutomation::ACTION_NOTIFY_PERSON,
+        'actions' => [['type' => BoardAutomation::ACTION_NOTIFY_PERSON, 'params' => []], ['type' => BoardAutomation::ACTION_SLACK_NOTIFY_CHANNEL, 'params' => []]],
+    ]);
+    $deleted_slack = createManageAutomation($board, $view, ['name' => 'Gone', 'action_type' => BoardAutomation::ACTION_SLACK_NOTIFY_PERSON]);
+    createRunLog($board_automation);
+    createRunLog($email);
+    createRunLog($mixed);
+    createRunLog($deleted_slack);
+    $deleted_slack->delete();
+    $user = User::factory()->create();
+    $runs = fn (string $source) => $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/automations/runs?view_id={$view->id}&source={$source}")->assertOk()->json('data.*.automation_name');
+
+    expect($runs('board'))->toBe(['Notify'])
+        ->and($runs('integrations'))->toEqualCanonicalizing(['Email', 'Create then post', 'Gone']);
+
+    $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/automations/usage?view_id={$view->id}&source=integrations")
+        ->assertOk()
+        ->assertJsonPath('data.runs', 3)
+        ->assertJsonPath('data.automations', 2);
+    $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/automations/runs?view_id={$view->id}&source=bogus")->assertUnprocessable();
+});

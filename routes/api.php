@@ -79,6 +79,7 @@ use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\ExternalAccountController;
 use App\Http\Controllers\Integration\ExternalOAuthCallbackController;
 use App\Http\Controllers\Integration\IntegrationAppCredentialsController;
+use App\Http\Controllers\Integration\IntegrationOverviewController;
 use App\Http\Controllers\Integration\SlackAppCredentialsController;
 use App\Http\Controllers\Integration\SlackConnectionController;
 use App\Http\Controllers\Integration\SlackEventController;
@@ -305,6 +306,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // notifications as direct messages.
     // A member's own Gmail, Outlook and Google Calendar accounts for automations, and the Google
     // and Microsoft OAuth apps an administrator sets up once in Administration > Integrations.
+    // Every app of the Automations center's Integrations section with the caller's connection status.
+    Route::get('integrations/overview', IntegrationOverviewController::class)->middleware('throttle:60,1');
     Route::prefix('integrations/accounts')->group(function () {
         Route::get('/', [ExternalAccountController::class, 'index']);
         Route::post('url', [ExternalAccountController::class, 'url'])->middleware(['account.permission:use_integrations', 'throttle:20,1']);

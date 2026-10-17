@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Services\Board\BoardAutomationService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
@@ -63,6 +64,40 @@ class BoardAutomationRunLog extends Model
     public static function statuses(): array
     {
         return [self::STATUS_SUCCESS, self::STATUS_FAILED, self::STATUS_SKIPPED];
+    }
+
+    /**
+     * Narrows the runs of one tab to the automations of the Automations dialog (`board`) or of the
+     * Integrations dialog (`integrations`), see {@see BoardAutomation::isIntegration()}. Runs of a
+     * deleted automation are classified by the trigger and action the log recorded.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeForSource(Builder $query, int $view_id, ?string $source): Builder
+    {
+        if ($source === null) {
+            return $query;
+        }
+
+        $automations = BoardAutomation::query()
+            ->where('board_view_id', $view_id)
+            ->get(['id', 'trigger_type', 'action_type', 'action_params', 'actions', 'else_actions']);
+        $wanted_ids = $automations
+            ->filter(fn (BoardAutomation $automation) => $automation->isIntegration() === ($source === BoardAutomation::SOURCE_INTEGRATIONS))
+            ->modelKeys();
+
+        return $query->where(function (Builder $query) use ($automations, $wanted_ids, $source) {
+            $query->whereIn('automation_id', $wanted_ids)->orWhere(function (Builder $query) use ($automations, $source) {
+                $query->where(fn (Builder $query) => $query->whereNull('automation_id')->orWhereNotIn('automation_id', $automations->modelKeys()));
+
+                if ($source === BoardAutomation::SOURCE_INTEGRATIONS) {
+                    $query->where(fn (Builder $query) => $query->whereIn('trigger_type', BoardAutomation::integrationTriggers())->orWhereIn('action_type', BoardAutomation::integrationActions()));
+                } else {
+                    $query->whereNotIn('trigger_type', BoardAutomation::integrationTriggers())->whereNotIn('action_type', BoardAutomation::integrationActions());
+                }
+            });
+        });
     }
 
     /**

@@ -280,7 +280,8 @@ class BoardAutomationController extends Controller
      * GET /api/boards/{item}/automations/runs
      *
      * The Manage tab's "Run history", newest first. Scoped to one tab like `index()`, and
-     * narrowed by `status`, `automation_id`, `item_id` and a `from`/`to` date range.
+     * narrowed by `status`, `automation_id`, `item_id`, a `from`/`to` date range and `source`
+     * (`board` for the Automations dialog, `integrations` for the Integrations dialog).
      */
     public function runs(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -292,6 +293,7 @@ class BoardAutomationController extends Controller
             'from' => ['sometimes', 'nullable', 'date'],
             'to' => ['sometimes', 'nullable', 'date', 'after_or_equal:from'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:'.self::RUNS_MAX_PER_PAGE],
+            'source' => ['sometimes', 'nullable', Rule::in(BoardAutomation::sources())],
         ]);
 
         $view = $this->view_resolver->resolveForRead($item, isset($filters['view_id']) ? (int) $filters['view_id'] : null);
@@ -304,6 +306,7 @@ class BoardAutomationController extends Controller
 
         $page = BoardAutomationRunLog::query()
             ->where('board_view_id', $view->id)
+            ->forSource($view->id, $filters['source'] ?? null)
             ->with('actor')
             ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
             ->when($filters['automation_id'] ?? null, fn ($query, $automation_id) => $query->where('automation_id', $automation_id))
@@ -333,9 +336,11 @@ class BoardAutomationController extends Controller
      *
      * The Manage tab's usage numbers for one tab: how many times its automations ran over the
      * last {@see self::USAGE_DAYS} days, split by outcome, by day, by automation and by action.
+     * `source` narrows it to the Automations dialog (`board`) or the Integrations dialog (`integrations`).
      */
     public function usage(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        $source = $request->validate(['source' => ['sometimes', 'nullable', Rule::in(BoardAutomation::sources())]])['source'] ?? null;
         $view_id = $request->filled('view_id') ? (int) $request->query('view_id') : null;
         $view = $this->view_resolver->resolveForRead($item, $view_id);
 
@@ -347,7 +352,7 @@ class BoardAutomationController extends Controller
             return response()->json(['data' => $this->usagePayload(0, 0, 0, 0, 0, 0, $empty_days->all(), [], [])]);
         }
 
-        $window = BoardAutomationRunLog::query()->where('board_view_id', $view->id)->where('created_at', '>=', $since);
+        $window = BoardAutomationRunLog::query()->where('board_view_id', $view->id)->forSource($view->id, $source)->where('created_at', '>=', $since);
 
         $by_status = (clone $window)->selectRaw('status, count(*) as total')->groupBy('status')->pluck('total', 'status');
 
@@ -377,15 +382,17 @@ class BoardAutomationController extends Controller
             ->map(fn ($row) => ['action_type' => $row->action_type, 'runs' => (int) $row->total])
             ->all();
 
-        $automations = BoardAutomation::where('board_view_id', $view->id);
+        $automations = BoardAutomation::where('board_view_id', $view->id)
+            ->get(['id', 'is_enabled', 'trigger_type', 'action_type', 'action_params', 'actions', 'else_actions'])
+            ->when($source !== null, fn ($automations) => $automations->filter(fn (BoardAutomation $automation) => $automation->isIntegration() === ($source === BoardAutomation::SOURCE_INTEGRATIONS)));
 
         return response()->json(['data' => $this->usagePayload(
             (int) $by_status->sum(),
             (int) ($by_status[BoardAutomationRunLog::STATUS_SUCCESS] ?? 0),
             (int) ($by_status[BoardAutomationRunLog::STATUS_FAILED] ?? 0),
             (int) ($by_status[BoardAutomationRunLog::STATUS_SKIPPED] ?? 0),
-            (clone $automations)->count(),
-            (clone $automations)->where('is_enabled', true)->count(),
+            $automations->count(),
+            $automations->where('is_enabled', true)->count(),
             $daily,
             $top_automations,
             $by_action,
