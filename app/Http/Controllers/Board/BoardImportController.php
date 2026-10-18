@@ -46,7 +46,10 @@ class BoardImportController extends Controller
      * values/guessed type (plus every type its values fit, and which source
      * columns a merged Timeline/checklist column was built from), a
      * pre-filled best-guess mapping, and the target tab's own existing
-     * columns + tables (for the "Add items to" picker).
+     * columns + tables (for the "Add items to" picker). A monday.com export
+     * also reports the groups its rows sat under (`file_groups`) and how many
+     * subitem rows it lists (`subitem_count`), so the wizard can offer to keep
+     * both.
      */
     public function analyze(AnalyzeBoardImportRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -57,7 +60,7 @@ class BoardImportController extends Controller
 
         if (count($parsed['rows']) === 0) {
             return response()->json([
-                'message' => 'No rows were found in this file — make sure it has a header row and at least one data row.',
+                'message' => 'No rows were found in this file. Make sure it has a header row and at least one data row.',
             ], 422);
         }
 
@@ -67,7 +70,7 @@ class BoardImportController extends Controller
             ], 422);
         }
 
-        $import_token = $this->importer->storeParsedImport($file->getClientOriginalName(), $parsed['headers'], $parsed['rows']);
+        $import_token = $this->importer->storeParsedImport($file->getClientOriginalName(), $parsed);
 
         $existing_columns = $view->columns()->where('scope', BoardColumn::SCOPE_ITEM)->orderBy('position')->get();
         $groups = $view->groups()->orderBy('position')->get();
@@ -82,6 +85,8 @@ class BoardImportController extends Controller
             'board_columns' => BoardColumnResource::collection($existing_columns),
             'groups' => BoardGroupResource::collection($groups),
             'creatable_column_types' => $this->importer->creatableColumnTypes(),
+            'file_groups' => $this->importer->summarizeFileGroups($parsed['row_groups']),
+            'subitem_count' => $this->importer->countSubitems($parsed['subitems']),
         ]);
     }
 
@@ -114,7 +119,7 @@ class BoardImportController extends Controller
 
         if ($parsed === null) {
             return response()->json([
-                'message' => 'This import has expired — please upload the file again.',
+                'message' => 'This import has expired. Please upload the file again.',
             ], 410);
         }
 
@@ -130,6 +135,8 @@ class BoardImportController extends Controller
             'options' => [
                 'target_group_id' => $validated['target_group_id'] ?? null,
                 'new_group_name' => $validated['new_group_name'] ?? null,
+                'group_mode' => $validated['group_mode'] ?? BoardItemImportService::GROUP_MODE_SINGLE,
+                'import_subitems' => (bool) ($validated['import_subitems'] ?? false),
                 'mappings' => $validated['mappings'],
                 'duplicate_mode' => $validated['duplicate_mode'],
                 'match_source_index' => $validated['match_source_index'] ?? null,

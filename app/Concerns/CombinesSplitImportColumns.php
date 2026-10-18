@@ -3,8 +3,10 @@
 namespace App\Concerns;
 
 use App\Models\BoardColumn;
+use App\Models\User;
 use App\Services\Board\BoardItemImportService;
 use App\Services\Board\MondayBoardImportService;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -28,7 +30,8 @@ use Illuminate\Support\Str;
  *   to sit next to a checkbox.
  *
  * Requires the using class to also use {@see InfersBoardColumnTypes}, whose
- * checkmark token helpers this reads.
+ * checkmark token helpers and type guesses this reads, and
+ * {@see ReadsSpreadsheetSheets}, whose column keys it builds.
  */
 trait CombinesSplitImportColumns
 {
@@ -187,5 +190,74 @@ trait CombinesSplitImportColumns
         }
 
         return null;
+    }
+
+    /**
+     * Turns header columns into {@see BoardColumn} definitions: columns a
+     * value was split across collapse into one definition listing every
+     * source key, and every other column gets its type guessed by
+     * {@see InfersBoardColumnTypes::inferColumnType()} from its label and the
+     * values collected under it. `config` is the column's starting config
+     * (options, rating scale, hour format), built from those same values.
+     *
+     * @param  array<int, array{label: string, key: string}>  $header_columns
+     * @param  array<string, array<int, string>>  $collected_values  every non-empty cell, keyed by column key
+     * @param  Collection<int, User>|null  $users
+     * @return array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>
+     */
+    private function inferColumnDefinitions(array $header_columns, array $collected_values, ?Collection $users): array
+    {
+        $split_groups = $this->findSplitColumnGroups(array_map(fn (array $column) => [
+            'label' => $column['label'],
+            'values' => $collected_values[$column['key']] ?? [],
+        ], $header_columns));
+
+        $group_by_first_member = [];
+        $consumed = [];
+        foreach ($split_groups as $group) {
+            $group_by_first_member[$group['members'][0]] = $group;
+            foreach ($group['members'] as $member) {
+                $consumed[$member] = true;
+            }
+        }
+
+        $definitions = [];
+
+        foreach ($header_columns as $position => $column) {
+            if (isset($group_by_first_member[$position])) {
+                $group = $group_by_first_member[$position];
+
+                $definitions[] = [
+                    'key' => $this->columnKey($group['label'], $definitions),
+                    'label' => $group['label'],
+                    'type' => $group['type'],
+                    'options' => [],
+                    'source' => array_map(fn (int $member) => $header_columns[$member]['key'], $group['members']),
+                    'reason' => $group['reason'],
+                    'config' => null,
+                ];
+
+                continue;
+            }
+
+            if (isset($consumed[$position])) {
+                continue;
+            }
+
+            $values = $collected_values[$column['key']] ?? [];
+            [$type, $options, $reason] = $this->inferColumnType($column['label'], $values, $users);
+
+            $definitions[] = [
+                'key' => $this->columnKey($column['key'], $definitions),
+                'label' => $column['label'],
+                'type' => $type,
+                'options' => $options,
+                'source' => [$column['key']],
+                'reason' => $reason,
+                'config' => $this->initialColumnConfig($type, $options, $values),
+            ];
+        }
+
+        return $definitions;
     }
 }

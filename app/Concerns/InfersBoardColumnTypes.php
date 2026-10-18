@@ -8,6 +8,8 @@ use App\Models\User;
 use App\Services\Board\BoardItemImportService;
 use App\Services\Board\ImportedCellValueCaster;
 use App\Services\Board\MondayBoardImportService;
+use App\Support\CountryCatalog;
+use DateTimeZone;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -110,6 +112,18 @@ trait InfersBoardColumnTypes
     /** A Time Tracking cell as monday.com exports it: "HH:MM:SS". */
     private const DURATION_PATTERN = '/^(\d+):([0-5]\d):([0-5]\d)$/';
 
+    /** An Hour cell: "14:30", "2:30 PM", "02:30pm" or "9 AM". Seconds are never part of it, that's a duration. */
+    private const HOUR_PATTERN = '/^(?<hour>\d{1,2})(?::(?<minute>[0-5]\d))?\s*(?<meridiem>[AaPp]\.?\s?[Mm]\.?)?$/';
+
+    /** A week written the ISO way ("2026-W38", "2026W38") or spelled out ("W38 2026", "Week 38, 2026"). */
+    private const ISO_WEEK_PATTERNS = [
+        '/^(?<year>\d{4})-?W(?<week>\d{1,2})$/i',
+        '/^W(?:eek)?\s*(?<week>\d{1,2}),?\s+(?<year>\d{4})$/i',
+    ];
+
+    /** Headers monday.com gives its own Item ID column, the item's id rather than data anyone typed. */
+    private const ITEM_ID_LABELS = ['item id', 'item id (auto generated)', 'pulse id'];
+
     /**
      * Date (and date-time) layouts monday.com and common spreadsheets export,
      * tried strictly and in order. Deliberately an explicit list rather than
@@ -153,12 +167,32 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_CHECKLIST, [], 'Values are checklists of done/not done sub-tasks'];
         }
 
+        if ($this->shareMatching($values, fn (string $value) => $this->parseHexColor($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_COLOR_PICKER, [], 'Values are hex colors'];
+        }
+
         if ($this->shareMatching($values, fn (string $value) => $this->parseNumber($value) !== null) === 1.0) {
             return $this->detectNumericColumn($values, $hint, $label_lower);
         }
 
         if ($this->shareMatching($values, fn (string $value) => $this->parseDuration($value) !== null) >= self::DETECTION_THRESHOLD) {
             return [BoardColumn::TYPE_TIME_TRACKING, [], 'Values are tracked durations (hh:mm:ss)'];
+        }
+
+        if ($hint !== BoardColumn::TYPE_TIME_TRACKING && $this->shareMatching($values, fn (string $value) => $this->parseHour($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_HOUR, [], 'Values are times of day'];
+        }
+
+        if ($this->shareMatching($values, fn (string $value) => $this->parseTimeZone($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_WORLD_CLOCK, [], 'Values are time zones'];
+        }
+
+        if ($this->shareMatching($values, fn (string $value) => $this->parseIsoWeek($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_WEEK, [], 'Values are week numbers'];
+        }
+
+        if ($hint === BoardColumn::TYPE_WEEK && $this->shareMatching($values, fn (string $value) => $this->parseWeek($value) !== null) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_WEEK, [], 'Header names a week and the values read as weeks'];
         }
 
         if ($hint === BoardColumn::TYPE_PROGRESS && $this->shareMatching($values, fn (string $value) => $this->parsePercent($value) !== null) === 1.0) {
@@ -202,9 +236,18 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_DEPENDENCY, [], 'Header names a dependency, item names are linked once every row is imported'];
         }
 
+        if ($hint === BoardColumn::TYPE_LOCATION && $this->isSingleLineText($values, 500)) {
+            return [BoardColumn::TYPE_LOCATION, [], 'Header names a location, each value is kept as an address'];
+        }
+
         $people = $this->detectPeopleColumn($values, $hint, $users);
         if ($people !== null) {
             return $people;
+        }
+
+        $country = $this->detectCountryColumn($values, $distinct, $hint);
+        if ($country !== null) {
+            return $country;
         }
 
         if ($hint === BoardColumn::TYPE_TEXT) {
@@ -285,7 +328,7 @@ trait InfersBoardColumnTypes
             BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_TAGS => $fits(fn (string $value) => $this->maxLength($this->splitList($value)) <= 255),
             BoardColumn::TYPE_NUMBER => $fits(fn (string $value) => $this->parseNumber($value) !== null),
             BoardColumn::TYPE_PROGRESS => $fits(fn (string $value) => $this->parsePercent($value) !== null),
-            BoardColumn::TYPE_RATING => $fits(fn (string $value) => ($number = $this->parseNumber($value)) !== null && $number >= 0 && $number <= 5),
+            BoardColumn::TYPE_RATING => $fits(fn (string $value) => ($number = $this->parseNumber($value)) !== null && $number >= 0 && $number <= BoardColumn::RATING_MAX_LIMIT),
             BoardColumn::TYPE_CHECKBOX => $fits(fn (string $value) => $this->isCheckedToken($value) || $this->isUncheckedToken($value)),
             BoardColumn::TYPE_DATE => $fits(fn (string $value) => $this->parseDate($value) !== null || $this->parseActivityLogDate($value) !== null),
             BoardColumn::TYPE_TIMELINE => $fits(fn (string $value) => $this->parseDateRange($value) !== null || $this->parseDate($value) !== null),
@@ -294,6 +337,12 @@ trait InfersBoardColumnTypes
             BoardColumn::TYPE_LINK, BoardColumn::TYPE_FILES => $fits(fn (string $value) => $this->parseLinks($value) !== null),
             BoardColumn::TYPE_TIME_TRACKING => $fits(fn (string $value) => $this->parseDuration($value) !== null || $this->parseNumber($value) !== null),
             BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_VOTE => $users !== null && $this->detectPeopleColumn($values, BoardColumn::TYPE_PEOPLE, $users) !== null,
+            BoardColumn::TYPE_COUNTRY => $fits(fn (string $value) => CountryCatalog::codeFor($value) !== null),
+            BoardColumn::TYPE_WORLD_CLOCK => $fits(fn (string $value) => $this->parseTimeZone($value) !== null),
+            BoardColumn::TYPE_WEEK => $fits(fn (string $value) => $this->parseWeek($value) !== null),
+            BoardColumn::TYPE_HOUR => $fits(fn (string $value) => $this->parseHour($value) !== null),
+            BoardColumn::TYPE_COLOR_PICKER => $fits(fn (string $value) => $this->parseHexColor($value) !== null),
+            BoardColumn::TYPE_LOCATION => $this->isSingleLineText($values, 500),
             default => false,
         });
 
@@ -316,6 +365,7 @@ trait InfersBoardColumnTypes
         }
 
         $keyword_hints = [
+            BoardColumn::TYPE_WORLD_CLOCK => ['world clock', 'time zone', 'timezone'],
             BoardColumn::TYPE_CHECKBOX => ['checkbox'],
             BoardColumn::TYPE_CHECKLIST => ['checklist', 'to do', 'to-do', 'todo', 'todos', 'subtasks', 'sub tasks', 'sub-tasks', 'action items'],
             BoardColumn::TYPE_DEPENDENCY => ['dependency', 'dependencies', 'depends on', 'dependent on', 'blocked by', 'predecessor', 'predecessors'],
@@ -332,6 +382,12 @@ trait InfersBoardColumnTypes
             BoardColumn::TYPE_LABEL => ['priority'],
             BoardColumn::TYPE_STATUS => ['status', 'stage'],
             BoardColumn::TYPE_TIMELINE => ['timeline'],
+            BoardColumn::TYPE_COUNTRY => ['country', 'countries'],
+            BoardColumn::TYPE_LOCATION => ['location', 'address'],
+            BoardColumn::TYPE_WEEK => ['week'],
+            BoardColumn::TYPE_HOUR => ['hour', 'time of day', 'start time', 'end time'],
+            BoardColumn::TYPE_COLOR_PICKER => ['color', 'colour'],
+            BoardColumn::TYPE_NUMBER => ['hours', 'estimate', 'points', 'budget', 'cost', 'price', 'amount', 'quantity'],
         ];
 
         foreach ($keyword_hints as $type => $keywords) {
@@ -361,11 +417,16 @@ trait InfersBoardColumnTypes
         // monday.com item/pulse ids and similar references read as numbers but aren't quantities
         // anyone sums; a float would also silently lose their last digits.
         if ($all_whole && $this->shareMatching($values, fn (string $value) => preg_match('/^\d{9,}$/', $value) === 1) === 1.0) {
+            // monday.com's own Item ID column becomes this board's Item ID column, numbered with the new items' ids.
+            if (in_array($label_lower, self::ITEM_ID_LABELS, true)) {
+                return [BoardColumn::TYPE_AUTO_NUMBER, [], 'monday.com item ids, every imported item gets its own Item ID'];
+            }
+
             return [BoardColumn::TYPE_TEXT, [], 'Values are long identifiers, kept as text'];
         }
 
-        if ($hint === BoardColumn::TYPE_RATING && $all_whole && min($numbers) >= 0 && max($numbers) <= 5) {
-            return [BoardColumn::TYPE_RATING, [], 'Whole numbers from 0 to 5 under a rating header'];
+        if ($hint === BoardColumn::TYPE_RATING && $all_whole && min($numbers) >= 0 && max($numbers) <= BoardColumn::RATING_MAX_LIMIT) {
+            return [BoardColumn::TYPE_RATING, [], sprintf('Whole numbers from 0 to %d under a rating header', max(BoardColumn::RATING_DEFAULT_MAX, (int) max($numbers)))];
         }
 
         if ($hint === BoardColumn::TYPE_PROGRESS && min($numbers) >= 0 && max($numbers) <= 100) {
@@ -511,6 +572,172 @@ trait InfersBoardColumnTypes
         $type = $hint === BoardColumn::TYPE_TAGS ? BoardColumn::TYPE_TAGS : BoardColumn::TYPE_DROPDOWN;
 
         return [$type, $token_labels, sprintf('Comma-separated choices from %d options', count($token_labels))];
+    }
+
+    /**
+     * A Country column: the values name countries, and either the header says
+     * so or the values spell out full country names. Bare two letter codes
+     * without a "Country" header are left alone, since "CA" or "GA" could just
+     * as well be US states.
+     *
+     * @param  array<int, string>  $values
+     * @param  array<int, string>  $distinct
+     * @return array{0: string, 1: array<int, string>, 2: string}|null
+     */
+    private function detectCountryColumn(array $values, array $distinct, ?string $hint): ?array
+    {
+        if ($this->shareMatching($values, fn (string $value) => CountryCatalog::codeFor($value) !== null) < self::DETECTION_THRESHOLD) {
+            return null;
+        }
+
+        if ($hint === BoardColumn::TYPE_COUNTRY) {
+            return [BoardColumn::TYPE_COUNTRY, [], 'Header names a country and the values are countries'];
+        }
+
+        if (count($distinct) >= 2 && $this->shareMatching($values, fn (string $value) => CountryCatalog::isCountryName($value)) >= self::DETECTION_THRESHOLD) {
+            return [BoardColumn::TYPE_COUNTRY, [], 'Values are country names'];
+        }
+
+        return null;
+    }
+
+    /**
+     * True when every value fits on one line and runs no longer than `$max_length`.
+     *
+     * @param  array<int, string>  $values
+     */
+    private function isSingleLineText(array $values, int $max_length): bool
+    {
+        return $this->maxLength($values) <= $max_length
+            && $this->shareMatching($values, fn (string $value) => str_contains($value, "\n")) === 0.0;
+    }
+
+    /** A `#rrggbb` color from "#00C875", "#0c8" or "00c875" under no other reading; null for anything else. */
+    private function parseHexColor(string $raw): ?string
+    {
+        if (preg_match('/^#([0-9a-f]{3}|[0-9a-f]{6})$/i', trim($raw), $matches) !== 1) {
+            return null;
+        }
+
+        $hex = strtolower($matches[1]);
+
+        if (strlen($hex) === 3) {
+            $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
+        }
+
+        return '#'.$hex;
+    }
+
+    /**
+     * An Hour cell's value, `H:i` on a 24 hour clock ("2:30 PM" is "14:30"), and
+     * whether it was written on a 12 hour clock. Null for anything else.
+     *
+     * @return array{value: string, is_12_hour: bool}|null
+     */
+    private function parseHour(string $raw): ?array
+    {
+        $raw = trim($raw);
+
+        if (preg_match(self::HOUR_PATTERN, $raw, $matches) !== 1) {
+            return null;
+        }
+
+        $hour = (int) $matches['hour'];
+        $minute = isset($matches['minute']) && $matches['minute'] !== '' ? (int) $matches['minute'] : 0;
+        $meridiem = strtolower(str_replace(['.', ' '], '', $matches['meridiem'] ?? ''));
+
+        // A bare number ("9") is a number, not an hour.
+        if ($meridiem === '' && ($matches['minute'] ?? '') === '') {
+            return null;
+        }
+
+        if ($meridiem !== '') {
+            if ($hour < 1 || $hour > 12) {
+                return null;
+            }
+
+            $hour = ($hour % 12) + ($meridiem === 'pm' ? 12 : 0);
+        } elseif ($hour > 23) {
+            return null;
+        }
+
+        return ['value' => sprintf('%02d:%02d', $hour, $minute), 'is_12_hour' => $meridiem !== ''];
+    }
+
+    /**
+     * The IANA time zone a World clock cell names, "America/New_York" alone or
+     * inside a label like "(GMT-05:00) America/New_York". Legacy aliases such
+     * as "US/Eastern" count too, since the cell's picker lists them.
+     */
+    private function parseTimeZone(string $raw): ?string
+    {
+        static $zones_by_lower = null;
+        $zones_by_lower ??= collect(DateTimeZone::listIdentifiers(DateTimeZone::ALL_WITH_BC))
+            ->mapWithKeys(fn (string $zone) => [mb_strtolower($zone) => $zone])
+            ->all();
+
+        $raw = trim($raw);
+
+        if ($raw === '' || mb_strlen($raw) > 80) {
+            return null;
+        }
+
+        if (isset($zones_by_lower[mb_strtolower($raw)])) {
+            return $zones_by_lower[mb_strtolower($raw)];
+        }
+
+        if (preg_match('/\b([A-Za-z]+(?:\/[A-Za-z0-9_+\-]+){1,2})\b/', $raw, $matches) === 1) {
+            return $zones_by_lower[mb_strtolower($matches[1])] ?? null;
+        }
+
+        return null;
+    }
+
+    /** The Monday (`Y-m-d`) of a week written the ISO way ("2026-W38") or spelled out ("Week 38, 2026"). */
+    private function parseIsoWeek(string $raw): ?string
+    {
+        foreach (self::ISO_WEEK_PATTERNS as $pattern) {
+            if (preg_match($pattern, trim($raw), $matches) !== 1) {
+                continue;
+            }
+
+            $week = (int) $matches['week'];
+            $year = (int) $matches['year'];
+
+            if ($week < 1 || $week > 53 || $year < 1900 || $year > 2200) {
+                return null;
+            }
+
+            return Carbon::now()->setISODate($year, $week)->startOfWeek(Carbon::MONDAY)->toDateString();
+        }
+
+        return null;
+    }
+
+    /**
+     * The Monday (`Y-m-d`) a Week cell stands for: an ISO week, a range of at
+     * most seven days ("Sep 14, 2026 - Sep 20, 2026", how monday.com exports a
+     * Week column), or any single day of that week.
+     */
+    private function parseWeek(string $raw): ?string
+    {
+        $iso_week = $this->parseIsoWeek($raw);
+        if ($iso_week !== null) {
+            return $iso_week;
+        }
+
+        $range = $this->parseDateRange($raw);
+        if ($range !== null) {
+            $start = Carbon::parse($range['start']);
+
+            return abs($start->diffInDays(Carbon::parse($range['end']))) <= 6
+                ? $start->startOfWeek(Carbon::MONDAY)->toDateString()
+                : null;
+        }
+
+        $date = $this->parseDate($raw);
+
+        return $date === null ? null : Carbon::parse(substr($date, 0, 10))->startOfWeek(Carbon::MONDAY)->toDateString();
     }
 
     /**
@@ -923,15 +1150,32 @@ trait InfersBoardColumnTypes
     }
 
     /**
-     * The `config` a freshly-created column of `$type` starts with — the
-     * option list for Status/Label/Dropdown, and nothing for everything else
-     * (Tags options are board-wide {@see BoardTag} rows instead).
+     * The `config` a freshly-created column of `$type` starts with: the
+     * option list for Status/Label/Dropdown, a scale wide enough for every
+     * imported Rating, and a 24 hour clock for an Hour column whose values
+     * were written that way. Nothing for everything else (Tags options are
+     * board-wide {@see BoardTag} rows instead).
      *
      * @param  array<int, string>  $option_labels
+     * @param  array<int, string>  $values  the raw cells collected under the column
      * @return array<string, mixed>|null
      */
-    private function initialColumnConfig(string $type, array $option_labels): ?array
+    private function initialColumnConfig(string $type, array $option_labels, array $values = []): ?array
     {
+        if ($type === BoardColumn::TYPE_RATING) {
+            $highest = array_reduce($values, fn (float $max, string $value) => max($max, (float) ($this->parseNumber($value) ?? 0)), 0.0);
+
+            return $highest > BoardColumn::RATING_DEFAULT_MAX
+                ? ['rating_max' => min(BoardColumn::RATING_MAX_LIMIT, (int) ceil($highest))]
+                : null;
+        }
+
+        if ($type === BoardColumn::TYPE_HOUR) {
+            $hours = array_values(array_filter(array_map(fn (string $value) => $this->parseHour($value), $values)));
+
+            return $hours !== [] && ! in_array(true, array_column($hours, 'is_12_hour'), true) ? ['hour_format' => '24'] : null;
+        }
+
         if (! in_array($type, [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_DROPDOWN], true) || $option_labels === []) {
             return null;
         }
@@ -952,6 +1196,10 @@ trait InfersBoardColumnTypes
             BoardColumn::TYPE_EMAIL => 190,
             BoardColumn::TYPE_CHECKBOX, BoardColumn::TYPE_VOTE => 90,
             BoardColumn::TYPE_LONG_TEXT => 240,
+            BoardColumn::TYPE_LOCATION => 200,
+            BoardColumn::TYPE_WEEK => 170,
+            BoardColumn::TYPE_HOUR, BoardColumn::TYPE_COLOR_PICKER => 120,
+            BoardColumn::TYPE_AUTO_NUMBER => 140,
             default => 160,
         };
     }

@@ -15,6 +15,7 @@ use Throwable;
 
 // php artisan board:import-monday-directory --force --updates=raw
 // php artisan board:import-monday-directory --dry-run --columns   (review every detected column type first)
+// php artisan board:import-monday-directory --only="97th Floor Development" --force   (re-import one folder)
 class ImportMondayBoardTreeCommand extends Command
 {
     use ImportsMondayBoardFiles;
@@ -25,8 +26,9 @@ class ImportMondayBoardTreeCommand extends Command
         {--force : Replace an existing board with the same name without prompting}
         {--dry-run : Walk the directory and print a summary without writing to the database}
         {--columns : Print the detected columns of every board with their type and the reason each was chosen}
+        {--only=* : Only import files whose path (relative to the directory) contains this text, case-insensitive. Repeat it to allow several}
         {--updates-sheet=updates : Name of the sheet containing the item detail drawer\'s comment threads}
-        {--updates=skip : How to handle that sheet — skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
+        {--updates=skip : How to handle that sheet. skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
 
     protected $description = 'Import every monday.com board export (.xlsx) under a directory tree, mapping each subfolder to a sidebar folder and each file to a board';
 
@@ -57,16 +59,18 @@ class ImportMondayBoardTreeCommand extends Command
             return self::FAILURE;
         }
 
-        $files = $this->discoverFiles($root);
+        $files = $this->filterFiles($this->discoverFiles($root), $root, (array) $this->option('only'));
 
         if ($files === []) {
-            $this->warn("No .xlsx files found under {$root}.");
+            $this->warn($this->option('only') === []
+                ? "No .xlsx files found under {$root}."
+                : "No .xlsx file under {$root} matched --only=\"".implode('", "', (array) $this->option('only')).'".');
 
             return self::SUCCESS;
         }
 
         $this->info(sprintf(
-            'Found %d spreadsheet%s under %s — importing into "%s".',
+            'Found %d spreadsheet%s under %s, importing into "%s".',
             count($files),
             count($files) === 1 ? '' : 's',
             $root,
@@ -86,11 +90,15 @@ class ImportMondayBoardTreeCommand extends Command
         ];
         $unmatched_people = [];
         $unmatched_links = [];
+        /** @var array<string, int> $column_type_counts */
+        $column_type_counts = [];
 
         foreach ($files as $file) {
             $relative_label = $file['folders'] === []
                 ? basename($file['path'])
                 : implode(' / ', $file['folders']).' / '.basename($file['path']);
+
+            $started_at = microtime(true);
 
             try {
                 $outcome = $this->importOneFile($file, $workspace, $updates_mode, $dry_run, $force, $group_ids_by_path, $users);
@@ -102,8 +110,14 @@ class ImportMondayBoardTreeCommand extends Command
                 continue;
             }
 
+            foreach ($outcome['column_types'] as $type) {
+                $column_type_counts[$type] = ($column_type_counts[$type] ?? 0) + 1;
+            }
+
+            $elapsed = sprintf('%.1fs', microtime(true) - $started_at);
+
             if ($outcome['action'] === 'dry_run') {
-                $this->line("[DRY RUN] {$relative_label} — \"{$outcome['title']}\" ({$outcome['groups']} groups, {$outcome['items']} items, {$outcome['subitems']} subitems)");
+                $this->line("[DRY RUN] {$relative_label}: \"{$outcome['title']}\" ({$outcome['groups']} groups, {$outcome['items']} items, {$outcome['subitems']} subitems, {$elapsed})");
                 $totals['groups'] += $outcome['groups'];
                 $totals['items'] += $outcome['items'];
                 $totals['subitems'] += $outcome['subitems'];
@@ -137,7 +151,7 @@ class ImportMondayBoardTreeCommand extends Command
             }
 
             $this->info(sprintf(
-                '[%s] %s — "%s" (%d groups, %d items, %d subitems%s)',
+                '[%s] %s: "%s" (%d groups, %d items, %d subitems%s, %s)',
                 $outcome['action'] === 'created' ? 'OK' : 'REPLACED',
                 $relative_label,
                 $outcome['title'],
@@ -145,15 +159,17 @@ class ImportMondayBoardTreeCommand extends Command
                 $summary['items'],
                 $summary['subitems'],
                 $updates_summary !== null ? ", {$updates_summary['comments']} comments" : '',
+                $elapsed,
             ));
 
             $rows[] = [$relative_label, $outcome['action'], $summary['groups'], $summary['items'], $summary['subitems']];
         }
 
         $this->newLine();
+        $this->renderColumnTypeSummary($column_type_counts);
 
         if ($dry_run) {
-            $this->comment('Dry run — nothing was written to the database.');
+            $this->comment('Dry run, nothing was written to the database.');
             $this->table(['Groups', 'Items', 'Subitems'], [[$totals['groups'], $totals['items'], $totals['subitems']]]);
 
             return self::SUCCESS;
@@ -197,6 +213,7 @@ class ImportMondayBoardTreeCommand extends Command
      * @return array{
      *     action: 'dry_run'|'created'|'replaced'|'skipped',
      *     title: string,
+     *     column_types: array<int, string>,
      *     groups: int,
      *     items: int,
      *     subitems: int,
@@ -216,6 +233,7 @@ class ImportMondayBoardTreeCommand extends Command
         $spreadsheet = IOFactory::load($file['path']);
         $sheet = $spreadsheet->getSheet(0);
         $parsed = $this->importer->parse($sheet, $users);
+        $column_types = array_column([...$parsed['item_columns'], ...$parsed['subitem_columns']], 'type');
 
         if ($this->option('columns')) {
             $this->line("Columns detected in \"{$parsed['title']}\":");
@@ -235,6 +253,7 @@ class ImportMondayBoardTreeCommand extends Command
             return [
                 'action' => 'dry_run',
                 'title' => $parsed['title'],
+                'column_types' => $column_types,
                 'groups' => count($parsed['groups']),
                 'items' => collect($parsed['groups'])->sum(fn (array $group) => count($group['items'])),
                 'subitems' => collect($parsed['groups'])->flatMap(fn (array $group) => $group['items'])->sum(fn (array $item) => count($item['subitems'])),
@@ -255,17 +274,70 @@ class ImportMondayBoardTreeCommand extends Command
             force: $force,
             search_globally: false,
             interactive: false,
+            users: $users,
         );
 
         return [
             'action' => $result['action'],
             'title' => $parsed['title'],
+            'column_types' => $result['action'] === 'skipped' ? [] : $column_types,
             'groups' => $result['summary']['groups'] ?? 0,
             'items' => $result['summary']['items'] ?? 0,
             'subitems' => $result['summary']['subitems'] ?? 0,
             'summary' => $result['summary'],
             'updates_summary' => $result['updates_summary'],
         ];
+    }
+
+    /**
+     * Keeps the files whose path relative to `$root` contains one of the
+     * `--only` filters (case-insensitive), or every file when none are given.
+     *
+     * @param  array<int, array{path: string, folders: array<int, string>}>  $files
+     * @param  array<int, string>  $filters
+     * @return array<int, array{path: string, folders: array<int, string>}>
+     */
+    private function filterFiles(array $files, string $root, array $filters): array
+    {
+        $filters = array_values(array_filter(array_map(fn (string $filter) => mb_strtolower(trim($filter)), $filters)));
+
+        if ($filters === []) {
+            return $files;
+        }
+
+        return array_values(array_filter($files, function (array $file) use ($root, $filters) {
+            $relative = mb_strtolower(ltrim(substr($file['path'], strlen($root)), DIRECTORY_SEPARATOR));
+
+            foreach ($filters as $filter) {
+                if (str_contains($relative, $filter)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }));
+    }
+
+    /**
+     * How many columns of each type the run created (or, on a dry run, would
+     * create), so a whole directory can be checked at a glance.
+     *
+     * @param  array<string, int>  $column_type_counts
+     */
+    private function renderColumnTypeSummary(array $column_type_counts): void
+    {
+        if ($column_type_counts === []) {
+            return;
+        }
+
+        arsort($column_type_counts);
+
+        $this->line('Column types:');
+        $this->table(['Type', 'Columns'], array_map(
+            fn (string $type, int $count) => [$type, $count],
+            array_keys($column_type_counts),
+            array_values($column_type_counts),
+        ));
     }
 
     /**

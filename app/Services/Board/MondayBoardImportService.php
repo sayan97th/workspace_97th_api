@@ -72,6 +72,8 @@ class MondayBoardImportService
      */
     private const SECRET_LINE_PATTERN = '/^\s*(u|p|pw|pwd|pass|password|passwd|user(name)?|login|secret|token|api[\s_-]?key|apikey|credential)\s*[:=]/i';
 
+    public function __construct(private readonly BoardItemIdAssigner $item_id_assigner) {}
+
     /**
      * Reads the whole sheet into an in-memory tree. Column layout is discovered from whatever
      * the sheet's own header rows name — see the class docblock — so this works the same
@@ -94,8 +96,8 @@ class MondayBoardImportService
      *             subitems: array<int, array{name: string, monday_id: string, data: array<string, string>}>,
      *         }>,
      *     }>,
-     *     item_columns: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string}>,
-     *     subitem_columns: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string}>,
+     *     item_columns: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>,
+     *     subitem_columns: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>,
      * }
      */
     public function parse(Worksheet $sheet, ?Collection $users = null): array
@@ -204,20 +206,23 @@ class MondayBoardImportService
             'title' => $this->boardTitle($sheet),
             'description' => $this->boardDescription($sheet),
             'groups' => $groups,
-            'item_columns' => $this->inferColumns(array_values($item_header_columns), $item_values, $users),
-            'subitem_columns' => $this->inferColumns(array_values($subitem_header_columns), $subitem_values, $users),
+            'item_columns' => $this->inferColumnDefinitions(array_values($item_header_columns), $item_values, $users),
+            'subitem_columns' => $this->inferColumnDefinitions(array_values($subitem_header_columns), $subitem_values, $users),
         ];
     }
 
     /**
      * Creates the board's columns, groups, items and subitems from a parsed tree.
+     * monday.com's own Item ID column comes back as an Item ID column numbered
+     * with the new items' ids, once every item exists.
      *
      * @param  array<string, mixed>  $parsed  the array returned by {@see parse()}
+     * @param  Collection<int, User>|null  $users  users People cells are matched against; defaults to every user
      * @return array{groups: int, items: int, subitems: int, linked_cells: int, unmatched_people: array<int, string>, unmatched_links: array<int, string>, item_ids_by_monday_id: array<string, int>}
      */
-    public function import(WorkspaceNavigationItem $board, BoardView $view, array $parsed): array
+    public function import(WorkspaceNavigationItem $board, BoardView $view, array $parsed, ?Collection $users = null): array
     {
-        $caster = new ImportedCellValueCaster($board, User::all());
+        $caster = new ImportedCellValueCaster($board, $users ?? User::all());
 
         $item_columns = $this->createColumnsFromDefinitions($board, $view, BoardColumn::SCOPE_ITEM, $parsed['item_columns']);
         $subitem_columns = $this->createColumnsFromDefinitions($board, $view, BoardColumn::SCOPE_SUBITEM, $parsed['subitem_columns']);
@@ -269,6 +274,10 @@ class MondayBoardImportService
         }
 
         $linked_cells = $caster->resolveLinkedItems();
+
+        foreach ([...$item_columns, ...$subitem_columns] as $column) {
+            $this->item_id_assigner->backfillColumn($column);
+        }
 
         return [
             'groups' => $group_count,
@@ -518,72 +527,7 @@ class MondayBoardImportService
     }
 
     /**
-     * Turns the header columns into {@see BoardColumn} definitions: columns a
-     * value was split across (see {@see CombinesSplitImportColumns}) collapse
-     * into one definition listing every source key, and every other column
-     * gets its type guessed by {@see InfersBoardColumnTypes::inferColumnType()}
-     * from its label and the values collected under it.
-     *
-     * @param  array<int, array{label: string, key: string}>  $header_columns
-     * @param  array<string, array<int, string>>  $collected_values
-     * @param  Collection<int, User>  $users
-     * @return array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string}>
-     */
-    private function inferColumns(array $header_columns, array $collected_values, Collection $users): array
-    {
-        $split_groups = $this->findSplitColumnGroups(array_map(fn (array $column) => [
-            'label' => $column['label'],
-            'values' => $collected_values[$column['key']] ?? [],
-        ], $header_columns));
-
-        $group_by_first_member = [];
-        $consumed = [];
-        foreach ($split_groups as $group) {
-            $group_by_first_member[$group['members'][0]] = $group;
-            foreach ($group['members'] as $member) {
-                $consumed[$member] = true;
-            }
-        }
-
-        $definitions = [];
-
-        foreach ($header_columns as $position => $column) {
-            if (isset($group_by_first_member[$position])) {
-                $group = $group_by_first_member[$position];
-
-                $definitions[] = [
-                    'key' => $this->columnKey($group['label'], $definitions),
-                    'label' => $group['label'],
-                    'type' => $group['type'],
-                    'options' => [],
-                    'source' => array_map(fn (int $member) => $header_columns[$member]['key'], $group['members']),
-                    'reason' => $group['reason'],
-                ];
-
-                continue;
-            }
-
-            if (isset($consumed[$position])) {
-                continue;
-            }
-
-            [$type, $options, $reason] = $this->inferColumnType($column['label'], $collected_values[$column['key']] ?? [], $users);
-
-            $definitions[] = [
-                'key' => $this->columnKey($column['key'], $definitions),
-                'label' => $column['label'],
-                'type' => $type,
-                'options' => $options,
-                'source' => [$column['key']],
-                'reason' => $reason,
-            ];
-        }
-
-        return $definitions;
-    }
-
-    /**
-     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string}>  $definitions
+     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>  $definitions
      * @return array<string, BoardColumn>
      */
     private function createColumnsFromDefinitions(WorkspaceNavigationItem $board, BoardView $view, string $scope, array $definitions): array
@@ -599,7 +543,7 @@ class MondayBoardImportService
                 'type' => $definition['type'],
                 'position' => $position,
                 'width' => $this->widthForType($definition['type']),
-                'config' => $this->initialColumnConfig($definition['type'], $definition['options']),
+                'config' => $definition['config'] ?? $this->initialColumnConfig($definition['type'], $definition['options']),
             ]);
         }
 
@@ -610,7 +554,7 @@ class MondayBoardImportService
      * Casts and writes one item/subitem's cell values — see {@see ImportedCellValueCaster}.
      * Dependency cells are only queued here; `import()` links them once every item exists.
      *
-     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string}>  $definitions
+     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>  $definitions
      * @param  array<string, BoardColumn>  $columns
      * @param  array<string, string>  $data
      */

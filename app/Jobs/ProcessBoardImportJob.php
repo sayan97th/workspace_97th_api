@@ -110,6 +110,8 @@ class ProcessBoardImportJob implements ShouldQueue
             'updated_count' => $result['updated'],
             'skipped_count' => $result['skipped'],
             'columns_created' => $result['columns_created'],
+            'groups_created' => $result['groups_created'],
+            'subitems_created' => $result['subitems_created'],
             'group_id' => $result['group_id'],
             'parsed_payload' => null,
             'finished_at' => now(),
@@ -152,7 +154,7 @@ class ProcessBoardImportJob implements ShouldQueue
      * just restoring the static type Eloquent's JSON cast can't carry.
      *
      * @param  array<string, mixed>  $raw
-     * @return array{target_group_id: int|null, new_group_name: string|null, mappings: array<int, array{source_index: int, mode: string, target_column_id: int|null, new_label: string|null, new_type: string|null}>, duplicate_mode: string, match_source_index: int|null}
+     * @return array{target_group_id: int|null, new_group_name: string|null, group_mode: string, import_subitems: bool, mappings: array<int, array{source_index: int, mode: string, target_column_id: int|null, new_label: string|null, new_type: string|null}>, duplicate_mode: string, match_source_index: int|null}
      */
     private function resolveOptions(array $raw): array
     {
@@ -175,6 +177,8 @@ class ProcessBoardImportJob implements ShouldQueue
         return [
             'target_group_id' => isset($raw['target_group_id']) ? (int) $raw['target_group_id'] : null,
             'new_group_name' => isset($raw['new_group_name']) ? (string) $raw['new_group_name'] : null,
+            'group_mode' => (string) ($raw['group_mode'] ?? BoardItemImportService::GROUP_MODE_SINGLE),
+            'import_subitems' => (bool) ($raw['import_subitems'] ?? false),
             'mappings' => $mappings,
             'duplicate_mode' => (string) ($raw['duplicate_mode'] ?? 'add'),
             'match_source_index' => isset($raw['match_source_index']) ? (int) $raw['match_source_index'] : null,

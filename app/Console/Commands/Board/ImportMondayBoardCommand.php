@@ -21,7 +21,7 @@ class ImportMondayBoardCommand extends Command
         {--dry-run : Parse the file and print a summary without writing to the database}
         {--columns : Print every detected column with its type and the reason it was chosen}
         {--updates-sheet=updates : Name of the sheet containing the item detail drawer\'s comment threads}
-        {--updates=skip : How to handle that sheet — skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
+        {--updates=skip : How to handle that sheet. skip (default), redact (replace credential-looking lines), raw (import verbatim), or exclude (drop only comments that look like they contain a credential)}';
 
     protected $description = 'Import a monday.com board export (.xlsx) into a workspace as a real board';
 
@@ -81,7 +81,7 @@ class ImportMondayBoardCommand extends Command
             $updates_sheet = $this->findSheet($spreadsheet, (string) $this->option('updates-sheet'));
 
             if ($updates_sheet === null) {
-                $this->warn("No sheet named \"{$this->option('updates-sheet')}\" was found — skipping comment import.");
+                $this->warn("No sheet named \"{$this->option('updates-sheet')}\" was found, skipping comment import.");
             } else {
                 $update_rows = $this->importer->parseUpdates($updates_sheet);
                 $this->line("Updates: {$this->countTopLevel($update_rows)} threads, ".(count($update_rows) - $this->countTopLevel($update_rows)).' replies (mode: '.$updates_mode.')');
@@ -89,7 +89,7 @@ class ImportMondayBoardCommand extends Command
         }
 
         if ($this->option('dry-run')) {
-            $this->comment('Dry run — nothing was written to the database.');
+            $this->comment('Dry run, nothing was written to the database.');
 
             return self::SUCCESS;
         }

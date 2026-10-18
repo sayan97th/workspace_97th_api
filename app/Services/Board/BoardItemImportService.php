@@ -10,7 +10,6 @@ use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardImportJob;
 use App\Models\BoardItem;
-use App\Models\BoardItemValue;
 use App\Models\BoardTag;
 use App\Models\BoardView;
 use App\Models\User;
@@ -73,7 +72,12 @@ class BoardItemImportService
      * into one column, see {@see CombinesSplitImportColumns}; `combined_from`
      * lists, per merged column index, the source labels it was built from.
      *
-     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>, combined_from: array<int, array<int, string>>}
+     * A monday.com export also brings back its structure: `row_groups` holds
+     * the group title each row sat under, and `subitems` the subitem rows
+     * listed under each row (keyed by row index), whose columns are
+     * `subitem_columns`. A plain table leaves all three empty.
+     *
+     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>, combined_from: array<int, array<int, string>>, row_groups: array<int, string>, subitem_columns: array<int, array{key: string, label: string}>, subitems: array<int, array<int, array{name: string, data: array<string, string>}>>}
      */
     public function readSpreadsheet(UploadedFile $file): array
     {
@@ -89,9 +93,45 @@ class BoardItemImportService
 
         $parsed = $header_row !== null
             ? $this->readMondayStyleSheet($sheet, $header_row)
-            : $this->readFlatSheet($sheet);
+            : [...$this->readFlatSheet($sheet), 'row_groups' => [], 'subitem_columns' => [], 'subitems' => []];
 
-        return $this->combineSplitColumns($parsed['headers'], $parsed['rows']);
+        return [
+            ...$this->combineSplitColumns($parsed['headers'], $parsed['rows']),
+            'row_groups' => $parsed['row_groups'],
+            'subitem_columns' => $parsed['subitem_columns'],
+            'subitems' => $parsed['subitems'],
+        ];
+    }
+
+    /**
+     * The groups a monday.com export's rows sat under, in file order, with
+     * how many rows each holds. Feeds the "Add items to" picker's "Groups
+     * from file" choice. Empty for a plain table.
+     *
+     * @param  array<int, string>  $row_groups
+     * @return array<int, array{name: string, row_count: int}>
+     */
+    public function summarizeFileGroups(array $row_groups): array
+    {
+        $counts = [];
+
+        foreach ($row_groups as $name) {
+            if ($name !== '') {
+                $counts[$name] = ($counts[$name] ?? 0) + 1;
+            }
+        }
+
+        return array_map(fn (string $name, int $count) => ['name' => $name, 'row_count' => $count], array_keys($counts), array_values($counts));
+    }
+
+    /**
+     * How many subitem rows a monday.com export lists under its items.
+     *
+     * @param  array<int, array<int, array{name: string, data: array<string, string>}>>  $subitems
+     */
+    public function countSubitems(array $subitems): int
+    {
+        return array_sum(array_map('count', $subitems));
     }
 
     /**
@@ -203,6 +243,19 @@ class BoardItemImportService
                 continue;
             }
 
+            // monday.com's own Item ID column: the board numbers its items itself.
+            if (in_array($column['suggested_type'], BoardColumn::READ_ONLY_TYPES, true)) {
+                $mappings[] = [
+                    'source_index' => $index,
+                    'mode' => 'skip',
+                    'target_column_id' => null,
+                    'new_label' => null,
+                    'new_type' => null,
+                ];
+
+                continue;
+            }
+
             $type = in_array($column['suggested_type'], $creatable_types, true) ? $column['suggested_type'] : BoardColumn::TYPE_TEXT;
 
             $mappings[] = [
@@ -220,12 +273,11 @@ class BoardItemImportService
     /**
      * Caches a parsed upload to disk under a fresh token, so the "Map
      * columns"/"Handle matches" steps (and the eventual `commit()`) never
-     * need the original file again — only ever this token.
+     * need the original file again, only ever this token.
      *
-     * @param  array<int, string>  $headers
-     * @param  array<int, array<int, string>>  $rows
+     * @param  array{headers: array<int, string>, rows: array<int, array<int, string>>, row_groups?: array<int, string>, subitem_columns?: array<int, array{key: string, label: string}>, subitems?: array<int, array<int, array{name: string, data: array<string, string>}>>}  $parsed  {@see readSpreadsheet()}'s output
      */
-    public function storeParsedImport(string $file_name, array $headers, array $rows): string
+    public function storeParsedImport(string $file_name, array $parsed): string
     {
         $this->pruneExpiredImports();
 
@@ -233,8 +285,11 @@ class BoardItemImportService
 
         $payload = [
             'file_name' => $file_name,
-            'headers' => $headers,
-            'rows' => $rows,
+            'headers' => $parsed['headers'],
+            'rows' => $parsed['rows'],
+            'row_groups' => $parsed['row_groups'] ?? [],
+            'subitem_columns' => $parsed['subitem_columns'] ?? [],
+            'subitems' => $parsed['subitems'] ?? [],
             'created_at' => now()->toIso8601String(),
         ];
 
@@ -298,6 +353,13 @@ class BoardItemImportService
             }
         }
 
+        // The monday.com structure keys are optional, a payload cached before they existed has none.
+        foreach (['row_groups', 'subitem_columns', 'subitems'] as $key) {
+            if (isset($payload[$key]) && ! is_array($payload[$key])) {
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -328,17 +390,25 @@ class BoardItemImportService
      * caller staring at a stalled request for however long the whole file
      * takes.
      *
-     * @param  array{headers: array<int, string>, rows: array<int, array<int, string>>}  $parsed
+     * With `group_mode` "file", rows land in the groups they sat under in a
+     * monday.com export (an existing group with the same name is reused), and
+     * with `import_subitems` every new item gets the subitem rows listed under
+     * it, their columns matched to the tab's subitem columns by name or
+     * created like the `board:import-monday` command creates them.
+     *
+     * @param  array{headers: array<int, string>, rows: array<int, array<int, string>>, row_groups?: array<int, string>, subitem_columns?: array<int, array{key: string, label: string}>, subitems?: array<int, array<int, array{name: string, data: array<string, string>}>>}  $parsed
      * @param  array{
      *     target_group_id: int|null,
      *     new_group_name: string|null,
+     *     group_mode?: string,
+     *     import_subitems?: bool,
      *     mappings: array<int, array{source_index: int, mode: string, target_column_id: int|null, new_label: string|null, new_type: string|null}>,
      *     duplicate_mode: string,
      *     match_source_index: int|null,
      * }  $options
      * @param  callable(int $processed, int $total): void  $onChunkProcessed
      * @param  callable(): bool  $isCancelled
-     * @return array{created: int, updated: int, skipped: int, columns_created: int, group_id: int|null, group_created: bool, processed_rows: int, total_rows: int, cancelled: bool}
+     * @return array{created: int, updated: int, skipped: int, columns_created: int, groups_created: int, subitems_created: int, group_id: int|null, group_created: bool, processed_rows: int, total_rows: int, cancelled: bool}
      */
     public function commit(
         WorkspaceNavigationItem $board,
@@ -354,33 +424,49 @@ class BoardItemImportService
 
         // Checked once up front too — cancelling an import the instant it's
         // queued shouldn't still leave behind a freshly-created table and
-        // columns nobody asked to keep, so this skips `resolveTargetGroup()`/
+        // columns nobody asked to keep, so this skips the group resolution and
         // `resolveMappings()` entirely rather than creating them first.
         if ($this->checkCancelled($isCancelled)) {
             return $this->cancelledResult($total);
         }
 
-        [$group, $group_created] = DB::transaction(fn () => $this->resolveTargetGroup($board, $view, $options));
+        $row_groups = array_slice($parsed['row_groups'] ?? [], 0, self::MAX_ROWS);
+        $uses_file_groups = ($options['group_mode'] ?? self::GROUP_MODE_SINGLE) === self::GROUP_MODE_FILE && $row_groups !== [];
+        $subitems_by_row = ($options['import_subitems'] ?? false) ? ($parsed['subitems'] ?? []) : [];
+
+        [$groups_by_name, $default_group, $groups_created] = DB::transaction(fn () => $uses_file_groups
+            ? $this->resolveFileGroups($board, $view, $row_groups, $options['new_group_name'] ?? null)
+            : [[], ...$this->resolveSingleTargetGroup($board, $view, $options)]);
         [$name_index, $index_to_column, $columns_created] = DB::transaction(
             fn () => $this->resolveMappings($board, $view, $headers, $rows, $options['mappings'])
         );
 
+        $users = User::all();
+        [$subitem_definitions, $subitem_columns, $subitem_columns_created] = $subitems_by_row === []
+            ? [[], [], 0]
+            : DB::transaction(fn () => $this->resolveSubitemColumns($board, $view, $parsed['subitem_columns'] ?? [], $subitems_by_row, $users));
+        $columns_created += $subitem_columns_created;
+
         $duplicate_mode = $options['duplicate_mode'];
         $match_index = $options['match_source_index'] ?? $name_index;
+        $lookup_group_ids = $uses_file_groups ? $view->groups()->pluck('id')->all() : [$default_group->id];
         $existing_by_key = $duplicate_mode !== 'add'
-            ? $this->buildExistingItemLookup($group, $match_index, $name_index, $index_to_column)
+            ? $this->buildExistingItemLookup($board, $lookup_group_ids, $match_index, $name_index, $index_to_column)
             : [];
 
-        $caster = new ImportedCellValueCaster($board, User::all());
-        $auto_number_counters = $this->autoNumberCounters($view);
+        $caster = new ImportedCellValueCaster($board, $users);
+        $item_id_column_ids = $this->itemIdColumnIds($view, BoardColumn::SCOPE_ITEM);
+        $subitem_id_column_ids = $subitems_by_row === [] ? [] : $this->itemIdColumnIds($view, BoardColumn::SCOPE_SUBITEM);
         $created = 0;
         $updated = 0;
         $skipped = 0;
+        $subitems_created = 0;
         $processed = 0;
         $was_cancelled = false;
-        $next_position = (int) $group->items()->whereNull('parent_id')->max('position') + 1;
+        /** @var array<int, int> $next_positions group id => next top level position */
+        $next_positions = [];
 
-        foreach (array_chunk($rows, self::CHUNK_SIZE) as $chunk) {
+        foreach (array_chunk($rows, self::CHUNK_SIZE, true) as $chunk) {
             if ($this->checkCancelled($isCancelled)) {
                 $was_cancelled = true;
 
@@ -388,10 +474,11 @@ class BoardItemImportService
             }
 
             DB::transaction(function () use (
-                $chunk, $board, $group, $name_index, $index_to_column, $duplicate_mode, $match_index,
-                &$existing_by_key, $caster, &$auto_number_counters, &$created, &$updated, &$skipped, &$next_position,
+                $chunk, $board, $row_groups, $groups_by_name, $default_group, $name_index, $index_to_column, $duplicate_mode, $match_index,
+                &$existing_by_key, $caster, $item_id_column_ids, $subitem_id_column_ids, $subitems_by_row, $subitem_definitions, $subitem_columns,
+                &$created, &$updated, &$skipped, &$subitems_created, &$next_positions,
             ) {
-                foreach ($chunk as $row) {
+                foreach ($chunk as $row_index => $row) {
                     $name_raw = trim($row[$name_index] ?? '');
                     [$name, $overflow] = $this->splitOverflowingName($name_raw !== '' ? $name_raw : 'Untitled item');
 
@@ -423,19 +510,19 @@ class BoardItemImportService
                         continue;
                     }
 
+                    $group = $groups_by_name[mb_strtolower($row_groups[$row_index] ?? '')] ?? $default_group;
+                    $next_positions[$group->id] ??= (int) $group->items()->whereNull('parent_id')->max('position') + 1;
+
                     $item = $board->items()->create([
                         'group_id' => $group->id,
                         'name' => $name,
                         'description' => $overflow,
-                        'position' => $next_position++,
+                        'position' => $next_positions[$group->id]++,
                     ]);
 
-                    // Auto-number columns are numbered here in memory rather than
-                    // through `BoardItemValueService::assignAutoNumbers()`, which
-                    // re-reads the column's highest number once per item.
-                    foreach ($auto_number_counters as $column_id => $last_number) {
-                        $auto_number_counters[$column_id] = $last_number + 1;
-                        $values[] = ['column_id' => $column_id, 'value' => $last_number + 1];
+                    // Like monday.com, an item's Item ID is the item's own id.
+                    foreach ($item_id_column_ids as $column_id) {
+                        $values[] = ['column_id' => $column_id, 'value' => $item->id];
                     }
 
                     if ($values !== []) {
@@ -444,6 +531,13 @@ class BoardItemImportService
 
                     foreach ($linked_cells as [$column, $raw]) {
                         $caster->deferLinkedItems($item->id, $column, $raw);
+                    }
+
+                    // A new item is also the only one its subitems are added to: an updated
+                    // item keeps the subitems it already has rather than getting a second copy.
+                    foreach (array_values($subitems_by_row[$row_index] ?? []) as $position => $subitem_row) {
+                        $this->createSubitem($board, $item, $position, $subitem_row, $subitem_definitions, $subitem_columns, $subitem_id_column_ids, $caster);
+                        $subitems_created++;
                     }
 
                     $created++;
@@ -463,8 +557,10 @@ class BoardItemImportService
             'updated' => $updated,
             'skipped' => $skipped,
             'columns_created' => $columns_created,
-            'group_id' => $group->id,
-            'group_created' => $group_created,
+            'groups_created' => $groups_created,
+            'subitems_created' => $subitems_created,
+            'group_id' => $default_group->id,
+            'group_created' => $groups_created > 0,
             'processed_rows' => $processed,
             'total_rows' => $total,
             'cancelled' => $was_cancelled,
@@ -488,7 +584,7 @@ class BoardItemImportService
     }
 
     /**
-     * @return array{created: int, updated: int, skipped: int, columns_created: int, group_id: int|null, group_created: bool, processed_rows: int, total_rows: int, cancelled: bool}
+     * @return array{created: int, updated: int, skipped: int, columns_created: int, groups_created: int, subitems_created: int, group_id: int|null, group_created: bool, processed_rows: int, total_rows: int, cancelled: bool}
      */
     private function cancelledResult(int $total): array
     {
@@ -497,6 +593,8 @@ class BoardItemImportService
             'updated' => 0,
             'skipped' => 0,
             'columns_created' => 0,
+            'groups_created' => 0,
+            'subitems_created' => 0,
             'group_id' => null,
             'group_created' => false,
             'processed_rows' => 0,
@@ -512,7 +610,9 @@ class BoardItemImportService
      * a whole "2024-01-01 - 2024-01-31" range, a Checklist since each line
      * (or comma-separated entry) becomes a sub-task, a Vote since its cell
      * names the voters, and a Dependency since the items it names are linked
-     * by name once every row is in. Connect boards is not, since a new column
+     * by name once every row is in. The Column Center kinds that store a plain
+     * value (Country, World clock, Location, Week, Hour, Color) are included
+     * too. Connect boards is not, since a new column
      * has no linked board to match names against yet, and neither are the
      * computed types (Formula, Mirror, Auto-number), which never store an
      * imported value.
@@ -525,8 +625,15 @@ class BoardItemImportService
         BoardColumn::TYPE_DROPDOWN, BoardColumn::TYPE_NUMBER, BoardColumn::TYPE_CHECKBOX, BoardColumn::TYPE_PROGRESS,
         BoardColumn::TYPE_RATING, BoardColumn::TYPE_PHONE, BoardColumn::TYPE_EMAIL, BoardColumn::TYPE_LINK,
         BoardColumn::TYPE_FILES, BoardColumn::TYPE_TIME_TRACKING, BoardColumn::TYPE_CHECKLIST, BoardColumn::TYPE_VOTE,
-        BoardColumn::TYPE_DEPENDENCY,
+        BoardColumn::TYPE_DEPENDENCY, BoardColumn::TYPE_COUNTRY, BoardColumn::TYPE_WORLD_CLOCK, BoardColumn::TYPE_LOCATION,
+        BoardColumn::TYPE_WEEK, BoardColumn::TYPE_HOUR, BoardColumn::TYPE_COLOR_PICKER,
     ];
+
+    /** Every row lands in the one table the wizard's "Add items to" picker names. */
+    public const GROUP_MODE_SINGLE = 'single';
+
+    /** Every row lands in the group it sat under in a monday.com export. */
+    public const GROUP_MODE_FILE = 'file';
 
     /**
      * @return array<int, string>
@@ -561,37 +668,119 @@ class BoardItemImportService
     }
 
     /**
-     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>}
+     * Reads a raw monday.com board export. Every group repeats its own "Name |
+     * ... | Item ID" header and one header may name columns another doesn't,
+     * so the columns are the union of every header, in first-seen order. Each
+     * item row remembers the group title above it, and the subitem rows under
+     * it ("Subitems | Name | ... | Item ID" header, column A empty) are kept
+     * with it, keyed by the item row's index.
+     *
+     * Every real item row carries a name in column A and monday.com's own
+     * (long, numeric) id in its header's trailing column, which tells it apart
+     * from a blank separator, a group title, a repeated header and a group's
+     * summary row without tracking any of those states explicitly.
+     *
+     * @return array{headers: array<int, string>, rows: array<int, array<int, string>>, row_groups: array<int, string>, subitem_columns: array<int, array{key: string, label: string}>, subitems: array<int, array<int, array{name: string, data: array<string, string>}>>}
      */
     private function readMondayStyleSheet(Worksheet $sheet, int $header_row): array
     {
-        $header = $this->readHeader($sheet, $header_row, 'A');
-        $headers = ['Name', ...array_map(fn (array $column) => $column['label'], $header['columns'])];
-
         $highest_row = $sheet->getHighestRow();
-        $rows = [];
 
-        for ($row = $header_row + 1; $row <= $highest_row; $row++) {
-            $id_value = $this->cell($sheet, $header['id_col'], $row);
+        /** @var array<string, string> $item_labels union of every item header, column key => label */
+        $item_labels = [];
+        /** @var array<string, array{key: string, label: string}> $subitem_columns */
+        $subitem_columns = [];
+        /** @var array<int, array{name: string, data: array<string, string>}> $items */
+        $items = [];
+        $row_groups = [];
+        $subitems = [];
 
-            // Every real item row carries a name in column A and monday.com's
-            // own (long, numeric) id in the header's trailing column — this
-            // single check is what tells an item row apart from a blank
-            // separator, a group-title row, a repeated header row, a group's
-            // summary row and any subitem row (column A empty), without
-            // tracking any of those states explicitly.
-            if ($this->cell($sheet, 'A', $row) === '' || ! $this->isMondayId($id_value)) {
+        $item_header = null;
+        $subitem_header = null;
+        $in_subitems = false;
+        $group_name = '';
+
+        for ($row = max(1, $header_row - 1); $row <= $highest_row; $row++) {
+            $col_a = $this->cell($sheet, 'A', $row);
+
+            if ($this->isItemHeaderRow($sheet, $row)) {
+                $item_header = $this->readHeader($sheet, $row, 'A');
+                foreach ($item_header['columns'] as $column) {
+                    $item_labels[$column['key']] ??= $column['label'];
+                }
+                $in_subitems = false;
+
                 continue;
             }
 
-            $values = [$this->cell($sheet, 'A', $row)];
-            foreach ($header['columns'] as $column) {
-                $values[] = $this->cell($sheet, $column['letter'], $row);
+            if ($this->isSubitemHeaderRow($sheet, $row)) {
+                $subitem_header = $this->readHeader($sheet, $row, 'B');
+                foreach ($subitem_header['columns'] as $column) {
+                    $subitem_columns[$column['key']] ??= ['key' => $column['key'], 'label' => $column['label']];
+                }
+                $in_subitems = true;
+
+                continue;
             }
-            $rows[] = $values;
+
+            if ($in_subitems && $subitem_header !== null) {
+                if ($col_a === '' && $this->isMondayId($this->cell($sheet, $subitem_header['id_col'], $row)) && $items !== []) {
+                    $name = $this->cell($sheet, 'B', $row);
+                    $subitems[count($items) - 1][] = [
+                        'name' => $name !== '' ? $name : 'Untitled subitem',
+                        'data' => $this->readKeyedRow($sheet, $row, $subitem_header['columns']),
+                    ];
+
+                    continue;
+                }
+
+                // Not a subitem, so this is the next item, group title or summary row.
+                $in_subitems = false;
+            }
+
+            if ($item_header !== null && $col_a !== '' && $this->isMondayId($this->cell($sheet, $item_header['id_col'], $row))) {
+                $items[] = ['name' => $col_a, 'data' => $this->readKeyedRow($sheet, $row, $item_header['columns'])];
+                $row_groups[] = $group_name;
+
+                continue;
+            }
+
+            if ($col_a !== '' && $this->isItemHeaderRow($sheet, $row + 1)) {
+                $group_name = $col_a;
+            }
         }
 
-        return ['headers' => $headers, 'rows' => $rows];
+        $keys = array_keys($item_labels);
+
+        return [
+            'headers' => ['Name', ...array_values($item_labels)],
+            'rows' => array_map(
+                fn (array $item) => [$item['name'], ...array_map(fn (string $key) => $item['data'][$key] ?? '', $keys)],
+                $items,
+            ),
+            'row_groups' => $row_groups,
+            'subitem_columns' => array_values($subitem_columns),
+            'subitems' => $subitems,
+        ];
+    }
+
+    /**
+     * @param  array<int, array{letter: string, label: string, key: string}>  $columns
+     * @return array<string, string>
+     */
+    private function readKeyedRow(Worksheet $sheet, int $row, array $columns): array
+    {
+        $data = [];
+
+        foreach ($columns as $column) {
+            $value = $this->cell($sheet, $column['letter'], $row);
+
+            if ($value !== '') {
+                $data[$column['key']] = $value;
+            }
+        }
+
+        return $data;
     }
 
     /**
@@ -689,23 +878,193 @@ class BoardItemImportService
     // ── Commit helpers ───────────────────────────────────────────────────
 
     /**
+     * The one table every row lands in, and how many tables were created for it (0 or 1).
+     *
      * @param  array{target_group_id: int|null, new_group_name: string|null}  $options
-     * @return array{0: BoardGroup, 1: bool}
+     * @return array{0: BoardGroup, 1: int}
      */
-    private function resolveTargetGroup(WorkspaceNavigationItem $board, BoardView $view, array $options): array
+    private function resolveSingleTargetGroup(WorkspaceNavigationItem $board, BoardView $view, array $options): array
     {
         if (! empty($options['target_group_id'])) {
-            return [$view->groups()->findOrFail($options['target_group_id']), false];
+            return [$view->groups()->findOrFail($options['target_group_id']), 0];
         }
 
-        $group = $view->groups()->create([
+        return [$this->createGroup($board, $view, $options['new_group_name'] ?: 'Imported items', '#579bfc'), 1];
+    }
+
+    /**
+     * The groups a monday.com export's rows sat under, keyed by lower-cased
+     * name: a group of the tab with the same name is reused, any other is
+     * created in file order. Rows without a group fall back to a table named
+     * `$fallback_name`, created only when such a row exists.
+     *
+     * @param  array<int, string>  $row_groups
+     * @return array{0: array<string, BoardGroup>, 1: BoardGroup, 2: int} `[groups by name, the first group, how many were created]`
+     */
+    private function resolveFileGroups(WorkspaceNavigationItem $board, BoardView $view, array $row_groups, ?string $fallback_name): array
+    {
+        $existing = $view->groups()->get()->keyBy(fn (BoardGroup $group) => mb_strtolower(trim($group->name)));
+        $groups_by_name = [];
+        $created = 0;
+
+        foreach (array_values(array_unique($row_groups)) as $position => $name) {
+            $label = trim($name) !== '' ? $name : ($fallback_name ?: 'Imported items');
+            $key = mb_strtolower(trim($name));
+
+            if (isset($groups_by_name[$key])) {
+                continue;
+            }
+
+            $group = $existing->get(mb_strtolower(trim($label)));
+
+            if ($group === null) {
+                $group = $this->createGroup($board, $view, $label, self::OPTION_COLOR_PALETTE[$position % count(self::OPTION_COLOR_PALETTE)]);
+                $existing->put(mb_strtolower(trim($label)), $group);
+                $created++;
+            }
+
+            $groups_by_name[$key] = $group;
+        }
+
+        $first_group = reset($groups_by_name);
+
+        if ($first_group === false) {
+            $first_group = $this->createGroup($board, $view, $fallback_name ?: 'Imported items', '#579bfc');
+            $groups_by_name[''] = $first_group;
+            $created++;
+        }
+
+        return [$groups_by_name, $first_group, $created];
+    }
+
+    private function createGroup(WorkspaceNavigationItem $board, BoardView $view, string $name, string $accent_color): BoardGroup
+    {
+        return $view->groups()->create([
             'board_id' => $board->id,
-            'name' => $this->truncate($options['new_group_name'] ?: 'Imported items'),
-            'accent_color' => '#579bfc',
+            'name' => $this->truncate($name),
+            'accent_color' => $accent_color,
             'position' => (int) $view->groups()->max('position') + 1,
         ]);
+    }
 
-        return [$group, true];
+    /**
+     * The tab's subitem columns the file's subitem values are written into:
+     * each subitem column of the file is typed from its own values (see
+     * {@see CombinesSplitImportColumns::inferColumnDefinitions()}), then
+     * matched by name to an existing, writable subitem column or created.
+     * Computed types (monday.com's Item ID) are left out, the tab numbers its
+     * own subitems.
+     *
+     * @param  array<int, array{key: string, label: string}>  $header_columns
+     * @param  array<int, array<int, array{name: string, data: array<string, string>}>>  $subitems_by_row
+     * @param  Collection<int, User>  $users
+     * @return array{0: array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>, 1: array<string, BoardColumn>, 2: int}
+     */
+    private function resolveSubitemColumns(WorkspaceNavigationItem $board, BoardView $view, array $header_columns, array $subitems_by_row, Collection $users): array
+    {
+        $collected = [];
+        foreach ($subitems_by_row as $subitem_rows) {
+            foreach ($subitem_rows as $subitem_row) {
+                foreach ($subitem_row['data'] as $key => $value) {
+                    $collected[$key][] = $value;
+                }
+            }
+        }
+
+        $definitions = array_values(array_filter(
+            $this->inferColumnDefinitions($header_columns, $collected, $users),
+            fn (array $definition) => ! in_array($definition['type'], BoardColumn::READ_ONLY_TYPES, true),
+        ));
+
+        $existing = $view->columns()
+            ->where('scope', BoardColumn::SCOPE_SUBITEM)
+            ->whereNotIn('type', BoardColumn::READ_ONLY_TYPES)
+            ->get()
+            ->keyBy(fn (BoardColumn $column) => mb_strtolower(trim($column->label)));
+        $next_position = (int) $view->columns()->where('scope', BoardColumn::SCOPE_SUBITEM)->max('position') + 1;
+        $columns = [];
+        $created = 0;
+
+        foreach ($definitions as $definition) {
+            $column = $existing->get(mb_strtolower(trim($definition['label'])));
+
+            if ($column === null) {
+                $column = $view->columns()->create([
+                    'board_id' => $board->id,
+                    'key' => $this->uniqueColumnKey($view, $definition['label'], BoardColumn::SCOPE_SUBITEM),
+                    'label' => $this->truncate($definition['label']),
+                    'type' => $definition['type'],
+                    'scope' => BoardColumn::SCOPE_SUBITEM,
+                    'position' => $next_position++,
+                    'width' => $this->widthForType($definition['type']),
+                    'config' => $definition['config'] ?? $this->initialColumnConfig($definition['type'], $definition['options']),
+                ]);
+                $created++;
+            }
+
+            $columns[$definition['key']] = $column;
+        }
+
+        return [$definitions, $columns, $created];
+    }
+
+    /**
+     * Creates one subitem under `$parent` with its cell values, written the
+     * same way {@see MondayBoardImportService::import()} writes them.
+     *
+     * @param  array{name: string, data: array<string, string>}  $subitem_row
+     * @param  array<int, array{key: string, label: string, type: string, options: array<int, string>, source: array<int, string>, reason: string, config: array<string, mixed>|null}>  $definitions
+     * @param  array<string, BoardColumn>  $columns
+     * @param  array<int, int>  $item_id_column_ids
+     */
+    private function createSubitem(
+        WorkspaceNavigationItem $board,
+        BoardItem $parent,
+        int $position,
+        array $subitem_row,
+        array $definitions,
+        array $columns,
+        array $item_id_column_ids,
+        ImportedCellValueCaster $caster,
+    ): void {
+        [$name, $overflow] = $this->splitOverflowingName($subitem_row['name']);
+
+        $subitem = $board->items()->create([
+            'group_id' => $parent->group_id,
+            'parent_id' => $parent->id,
+            'name' => $name,
+            'description' => $overflow,
+            'position' => $position,
+        ]);
+
+        $values = array_map(fn (int $column_id) => ['column_id' => $column_id, 'value' => $subitem->id], $item_id_column_ids);
+
+        foreach ($definitions as $definition) {
+            $column = $columns[$definition['key']] ?? null;
+
+            if ($column === null) {
+                continue;
+            }
+
+            $cells = array_map(fn (string $key) => $subitem_row['data'][$key] ?? '', $definition['source']);
+            $raw = count($cells) > 1 ? $this->combineSplitCells($column->type, $cells) : $cells[0];
+
+            if ($caster->defersLinkedItems($column)) {
+                $caster->deferLinkedItems($subitem->id, $column, $raw);
+
+                continue;
+            }
+
+            $value = $caster->cast($column, $raw);
+
+            if ($value !== null) {
+                $values[] = ['column_id' => $column->id, 'value' => $value];
+            }
+        }
+
+        if ($values !== []) {
+            $subitem->values()->createMany($values);
+        }
     }
 
     /**
@@ -760,13 +1119,13 @@ class BoardItemImportService
 
                 $column = $view->columns()->create([
                     'board_id' => $board->id,
-                    'key' => $this->uniqueColumnKey($view, $label),
+                    'key' => $this->uniqueColumnKey($view, $label, BoardColumn::SCOPE_ITEM),
                     'label' => $label,
                     'type' => $type,
                     'scope' => BoardColumn::SCOPE_ITEM,
                     'position' => $next_position++,
                     'width' => $this->widthForType($type),
-                    'config' => $this->initialColumnConfig($type, $this->optionLabelsFor($type, $this->columnValues($rows, $index))),
+                    'config' => $this->initialColumnConfig($type, $this->optionLabelsFor($type, $this->columnValues($rows, $index)), $this->columnValues($rows, $index)),
                 ]);
 
                 $index_to_column[$index] = $column;
@@ -784,10 +1143,11 @@ class BoardItemImportService
      * Returns empty when the dedupe column isn't the name field and wasn't
      * actually mapped to a real column (nothing to compare against).
      *
+     * @param  array<int, int>  $group_ids  the tables whose items count as "already on the board"
      * @param  array<int, BoardColumn>  $index_to_column
      * @return array<string, BoardItem>
      */
-    private function buildExistingItemLookup(BoardGroup $group, int $match_index, int $name_index, array $index_to_column): array
+    private function buildExistingItemLookup(WorkspaceNavigationItem $board, array $group_ids, int $match_index, int $name_index, array $index_to_column): array
     {
         $match_column = $match_index === $name_index ? null : ($index_to_column[$match_index] ?? null);
 
@@ -795,9 +1155,9 @@ class BoardItemImportService
             return [];
         }
 
-        $existing_items = $group->items()->whereNull('parent_id')->where('is_archived', false)->with('values')->get();
+        $existing_items = BoardItem::whereIn('group_id', $group_ids)->whereNull('parent_id')->where('is_archived', false)->with('values')->get();
         $tag_labels = $match_column?->type === BoardColumn::TYPE_TAGS
-            ? BoardTag::where('board_id', $group->board_id)->pluck('label', 'id')->all()
+            ? BoardTag::where('board_id', $board->id)->pluck('label', 'id')->all()
             : [];
         $by_key = [];
 
@@ -849,29 +1209,19 @@ class BoardItemImportService
     }
 
     /**
-     * The highest number each of the tab's item-scope Auto-number columns has
-     * handed out so far, keyed by column id: `commit()` numbers every item it
-     * creates on from there, the same way creating an item by hand would.
+     * The tab's Item ID columns of `$scope`. Like monday.com (and like
+     * {@see BoardItemIdAssigner}), an imported item's Item ID is its own id.
      *
      * @return array<int, int>
      */
-    private function autoNumberCounters(BoardView $view): array
+    private function itemIdColumnIds(BoardView $view, string $scope): array
     {
-        $counters = [];
-
-        $column_ids = $view->columns()
-            ->where('scope', BoardColumn::SCOPE_ITEM)
+        return $view->columns()
+            ->where('scope', $scope)
             ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
-            ->pluck('id');
-
-        foreach ($column_ids as $column_id) {
-            $counters[$column_id] = (int) BoardItemValue::where('column_id', $column_id)
-                ->pluck('value')
-                ->map(fn ($value) => is_numeric($value) ? (int) $value : 0)
-                ->max();
-        }
-
-        return $counters;
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
     }
 
     /**
@@ -1006,7 +1356,7 @@ class BoardItemImportService
         return array_values(array_unique($values));
     }
 
-    private function uniqueColumnKey(BoardView $view, string $label): string
+    private function uniqueColumnKey(BoardView $view, string $label, string $scope): string
     {
         $base = (string) Str::of($label)->ascii()->lower()->replaceMatches('/[^a-z0-9]+/', '_')->trim('_');
         if ($base === '') {
@@ -1017,7 +1367,7 @@ class BoardItemImportService
         $key = $base;
         $suffix = 2;
 
-        while (BoardColumn::where('board_view_id', $view->id)->where('scope', BoardColumn::SCOPE_ITEM)->where('key', $key)->exists()) {
+        while (BoardColumn::where('board_view_id', $view->id)->where('scope', $scope)->where('key', $key)->exists()) {
             $key = $base.'_'.$suffix;
             $suffix++;
         }

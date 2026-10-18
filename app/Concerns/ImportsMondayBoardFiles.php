@@ -5,9 +5,11 @@ namespace App\Concerns;
 use App\Console\Commands\Board\ImportMondayBoardCommand;
 use App\Console\Commands\Board\ImportMondayBoardTreeCommand;
 use App\Models\BoardView;
+use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\MondayBoardImportService;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -185,6 +187,7 @@ trait ImportsMondayBoardFiles
      *
      * @param  array<string, mixed>  $parsed  the array returned by {@see MondayBoardImportService::parse()}
      * @param  array<int, array{monday_item_id: string, author: string, created_at: string, body: string, post_id: string, parent_post_id: string}>  $update_rows
+     * @param  Collection<int, User>|null  $users  loaded once for a whole batch, People cells are matched against it
      * @return array{
      *     action: 'created'|'replaced'|'skipped',
      *     board: WorkspaceNavigationItem|null,
@@ -202,6 +205,7 @@ trait ImportsMondayBoardFiles
         bool $force,
         bool $search_globally,
         bool $interactive,
+        ?Collection $users = null,
     ): array {
         $query = $workspace->navigationItems()
             ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
@@ -234,7 +238,7 @@ trait ImportsMondayBoardFiles
             $target_parent_id = $existing->parent_id;
         }
 
-        return DB::transaction(function () use ($importer, $workspace, $parsed, $update_rows, $updates_mode, $existing, $target_parent_id) {
+        return DB::transaction(function () use ($importer, $workspace, $parsed, $update_rows, $updates_mode, $existing, $target_parent_id, $users) {
             // A hard delete (not a soft delete) so the FK cascades actually clean up the old
             // board's views/groups/columns/items/values — a soft delete would leave them
             // orphaned under the trashed board.
@@ -243,7 +247,7 @@ trait ImportsMondayBoardFiles
             $board = $this->createBoard($workspace, $parsed['title'], $target_parent_id, $parsed['description']);
             $view = $this->createPrimaryView($board);
 
-            $summary = $importer->import($board, $view, $parsed);
+            $summary = $importer->import($board, $view, $parsed, $users);
 
             $updates_summary = $update_rows === []
                 ? null

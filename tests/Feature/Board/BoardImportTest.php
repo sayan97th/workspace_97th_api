@@ -12,6 +12,8 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardItemImportService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Str;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 function createImportTestBoard(): WorkspaceNavigationItem
 {
@@ -537,11 +539,11 @@ test('commit writes checklist, dependency and activity log values in the shapes 
         ->and($valueOf('Design', 'Last Updated'))->toBe('2026-05-08T16:43');
 });
 
-test('commit numbers new items on an existing auto-number column after its highest number', function () {
+test('commit gives new items on an existing Item ID column their own item id', function () {
     $user = User::factory()->create();
     $board = createImportTestBoard();
     $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
-    $auto_number = BoardColumn::factory()->create([
+    $item_id_column = BoardColumn::factory()->create([
         'board_id' => $board->id,
         'board_view_id' => $view->id,
         'scope' => BoardColumn::SCOPE_ITEM,
@@ -549,9 +551,6 @@ test('commit numbers new items on an existing auto-number column after its highe
         'label' => 'Ticket',
         'type' => BoardColumn::TYPE_AUTO_NUMBER,
     ]);
-    $existing_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id]);
-    $existing_item = $board->items()->create(['group_id' => $existing_group->id, 'name' => 'Existing', 'position' => 1]);
-    $existing_item->values()->create(['column_id' => $auto_number->id, 'value' => 7]);
 
     $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
         'file' => fakeFlatCsvUpload("Name,Ticket\nTask One,T-100\nTask Two,T-101\n"),
@@ -567,15 +566,119 @@ test('commit numbers new items on an existing auto-number column after its highe
         'new_group_name' => 'Imported table',
         'mappings' => [
             ['source_index' => 0, 'mode' => 'name'],
-            // Mapping onto a read-only column is ignored rather than overwriting its numbers.
-            ['source_index' => 1, 'mode' => 'map', 'target_column_id' => $auto_number->id],
+            // Mapping onto a read-only column is ignored rather than overwriting its ids.
+            ['source_index' => 1, 'mode' => 'map', 'target_column_id' => $item_id_column->id],
         ],
         'duplicate_mode' => 'add',
     ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
 
     $group = BoardGroup::where('board_id', $board->id)->where('name', 'Imported table')->firstOrFail();
-    $numbers = $group->items()->orderBy('position')->get()
-        ->map(fn ($item) => $item->values()->where('column_id', $auto_number->id)->value('value'))->all();
 
-    expect($numbers)->toBe([8, 9]);
+    foreach ($group->items()->get() as $item) {
+        expect((int) $item->values()->where('column_id', $item_id_column->id)->value('value'))->toBe($item->id);
+    }
+});
+
+test('analyze detects and commit writes the Column Center types', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+
+    $csv = "Name,Country,Time zone,Week,Start time,Color,Office location,Rating\n"
+        ."One,Mexico,America/New_York,2026-W38,2:30 PM,#00C875,\"123 Main St, Springfield\",8\n"
+        ."Two,United States,Europe/Madrid,2026-W39,9:00 AM,#579bfc,Somewhere else,10\n";
+
+    $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
+        'file' => fakeFlatCsvUpload($csv),
+    ])->assertOk()->json();
+
+    $types = collect($analyze['source_columns'])->pluck('suggested_type', 'label')->all();
+    expect($types)->toMatchArray([
+        'Country' => BoardColumn::TYPE_COUNTRY,
+        'Time zone' => BoardColumn::TYPE_WORLD_CLOCK,
+        'Week' => BoardColumn::TYPE_WEEK,
+        'Start time' => BoardColumn::TYPE_HOUR,
+        'Color' => BoardColumn::TYPE_COLOR_PICKER,
+        'Office location' => BoardColumn::TYPE_LOCATION,
+        'Rating' => BoardColumn::TYPE_RATING,
+    ]);
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $analyze['import_token'],
+        'new_group_name' => 'Places',
+        'mappings' => createMappingsFor($analyze['source_columns']),
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED);
+
+    $item = $board->items()->where('name', 'One')->firstOrFail();
+    $value_for = fn (string $label) => $item->values()
+        ->where('column_id', BoardColumn::where('board_id', $board->id)->where('label', $label)->value('id'))
+        ->value('value');
+
+    expect($value_for('Country'))->toBe('MX')
+        ->and($value_for('Time zone'))->toBe('America/New_York')
+        ->and($value_for('Week'))->toBe('2026-09-14')
+        ->and($value_for('Start time'))->toBe('14:30')
+        ->and($value_for('Color'))->toBe('#00c875')
+        ->and($value_for('Office location'))->toBe('123 Main St, Springfield')
+        ->and($value_for('Rating'))->toBe(8);
+
+    expect(BoardColumn::where('board_id', $board->id)->where('label', 'Rating')->first()->config['rating_max'])->toBe(10);
+});
+
+test('a monday.com export keeps its groups and subitems when asked to', function () {
+    $user = User::factory()->create();
+    $board = createImportTestBoard();
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true]);
+    $existing_group = BoardGroup::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'name' => 'Backlog']);
+
+    $spreadsheet = new Spreadsheet;
+    $spreadsheet->getActiveSheet()->fromArray([
+        ['Roadmap'],
+        ['Backlog'],
+        ['Name', 'Subitems', 'Status', 'Item ID (auto generated)'],
+        ['Write spec', 'Draft', 'Done', '1000000001'],
+        ['Subitems', 'Name', 'Status', 'Item ID (auto generated)'],
+        ['', 'Draft', 'Done', '1000000002'],
+        ['', 'Review', 'Stuck', '1000000003'],
+        [],
+        ['In progress'],
+        ['Name', 'Subitems', 'Status', 'Item ID (auto generated)'],
+        ['Build it', '', 'Working on it', '1000000004'],
+    ], null, 'A1', true);
+    $path = tempnam(sys_get_temp_dir(), 'import_test_').'.xlsx';
+    (new Xlsx($spreadsheet))->save($path);
+
+    $analyze = $this->actingAs($user, 'api')->post("/api/boards/{$board->id}/import/analyze", [
+        'file' => new UploadedFile($path, 'Roadmap_123456789.xlsx', null, null, true),
+        'view_id' => $view->id,
+    ])->assertOk()
+        ->assertJsonPath('row_count', 2)
+        ->assertJsonPath('file_groups.0.name', 'Backlog')
+        ->assertJsonPath('file_groups.1.name', 'In progress')
+        ->assertJsonPath('subitem_count', 2)
+        ->json();
+
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/import/commit", [
+        'import_token' => $analyze['import_token'],
+        'view_id' => $view->id,
+        'group_mode' => 'file',
+        'import_subitems' => true,
+        'mappings' => createMappingsFor($analyze['source_columns']),
+        'duplicate_mode' => 'add',
+    ])->assertStatus(202)
+        ->assertJsonPath('data.status', BoardImportJob::STATUS_COMPLETED)
+        ->assertJsonPath('data.groups_created', 1)
+        ->assertJsonPath('data.subitems_created', 2);
+
+    // The file's "Backlog" group is the board's own, "In progress" is new.
+    $spec = $board->items()->where('name', 'Write spec')->firstOrFail();
+    expect($spec->group_id)->toBe($existing_group->id)
+        ->and($board->items()->where('name', 'Build it')->firstOrFail()->group->name)->toBe('In progress');
+
+    $subitems = $board->items()->where('parent_id', $spec->id)->orderBy('position')->get();
+    expect($subitems->pluck('name')->all())->toBe(['Draft', 'Review']);
+
+    $subitem_status = BoardColumn::where('board_view_id', $view->id)->where('scope', BoardColumn::SCOPE_SUBITEM)->where('label', 'Status')->firstOrFail();
+    $label_id = $subitems[1]->values()->where('column_id', $subitem_status->id)->value('value');
+    expect(collect($subitem_status->config['options'])->firstWhere('id', $label_id)['label'])->toBe('Stuck');
 });

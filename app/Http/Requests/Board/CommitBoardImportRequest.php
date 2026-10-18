@@ -36,6 +36,8 @@ class CommitBoardImportRequest extends FormRequest
                 Rule::exists('board_groups', 'id')->where(fn ($query) => $query->where('board_view_id', $view_id)),
             ],
             'new_group_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'group_mode' => ['sometimes', 'string', Rule::in([BoardItemImportService::GROUP_MODE_SINGLE, BoardItemImportService::GROUP_MODE_FILE])],
+            'import_subitems' => ['sometimes', 'boolean'],
 
             'mappings' => ['required', 'array', 'min:1'],
             'mappings.*.source_index' => ['required', 'integer', 'min:0'],

@@ -31,13 +31,15 @@ use Illuminate\Support\Carbon;
  * @property string $file_name
  * @property string $status
  * @property array<string, mixed> $options
- * @property array{file_name: string, headers: array<int, string>, rows: array<int, array<int, string>>}|null $parsed_payload
+ * @property array{file_name: string, headers: array<int, string>, rows: array<int, array<int, string>>, row_groups?: array<int, string>, subitem_columns?: array<int, array{key: string, label: string}>, subitems?: array<int, array<int, array{name: string, data: array<string, string>}>>}|null $parsed_payload
  * @property int $total_rows
  * @property int $processed_rows
  * @property int $created_count
  * @property int $updated_count
  * @property int $skipped_count
  * @property int $columns_created
+ * @property int $groups_created
+ * @property int $subitems_created
  * @property bool $cancel_requested
  * @property string|null $error_message
  * @property Carbon|null $started_at
@@ -52,6 +54,7 @@ use Illuminate\Support\Carbon;
 #[Fillable([
     'board_id', 'board_view_id', 'group_id', 'user_id', 'import_token', 'file_name', 'status', 'options', 'parsed_payload',
     'total_rows', 'processed_rows', 'created_count', 'updated_count', 'skipped_count', 'columns_created',
+    'groups_created', 'subitems_created',
     'cancel_requested', 'error_message', 'started_at', 'finished_at',
 ])]
 class BoardImportJob extends Model
@@ -125,6 +128,8 @@ class BoardImportJob extends Model
             'updated_count' => 'integer',
             'skipped_count' => 'integer',
             'columns_created' => 'integer',
+            'groups_created' => 'integer',
+            'subitems_created' => 'integer',
             'cancel_requested' => 'boolean',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',

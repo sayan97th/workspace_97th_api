@@ -27,6 +27,8 @@ class BoardImportJobResource extends JsonResource
             'updated_count' => $this->updated_count,
             'skipped_count' => $this->skipped_count,
             'columns_created' => $this->columns_created,
+            'groups_created' => $this->groups_created,
+            'subitems_created' => $this->subitems_created,
             'group_id' => $this->group_id,
             'cancel_requested' => $this->cancel_requested,
             'error_message' => $this->error_message,

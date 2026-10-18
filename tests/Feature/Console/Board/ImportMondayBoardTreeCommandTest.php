@@ -194,3 +194,51 @@ test('does nothing when the workspace slug does not exist', function () {
 
     expect(WorkspaceNavigationItem::where('label', 'Board A')->exists())->toBeFalse();
 });
+
+test('--only imports just the files whose path matches', function () {
+    $workspace = Workspace::factory()->create();
+    $root = writeMondayTreeFixtures();
+
+    $this->artisan('board:import-monday-directory', [
+        'directory' => $root,
+        '--workspace' => $workspace->slug,
+        '--only' => ['folder two', 'board c'],
+    ])->assertSuccessful();
+
+    $board_labels = WorkspaceNavigationItem::where('workspace_id', $workspace->id)
+        ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
+        ->pluck('label')
+        ->sort()
+        ->values()
+        ->all();
+
+    expect($board_labels)->toBe(['Board B', 'Board C']);
+
+    deleteDirectory($root);
+});
+
+test('a monday.com Item ID column becomes an Item ID column numbered with the new items\' ids', function () {
+    $workspace = Workspace::factory()->create();
+    $root = sys_get_temp_dir().'/monday-tree-item-id-'.uniqid();
+    mkdir($root);
+
+    $spreadsheet = new Spreadsheet;
+    $spreadsheet->getActiveSheet()->fromArray([
+        ['Tickets'],
+        ['Group One'],
+        ['Name', 'Item ID', 'Status', 'Item ID (auto generated)'],
+        ['First task', '8396967148', 'Done', '1111111111'],
+        ['Second task', '8396967149', 'Stuck', '1111111112'],
+    ], null, 'A1');
+    (new Xlsx($spreadsheet))->save($root.'/Tickets.xlsx');
+
+    $this->artisan('board:import-monday-directory', ['directory' => $root, '--workspace' => $workspace->slug])->assertSuccessful();
+
+    $column = BoardColumn::where('label', 'Item ID')->whereHas('board', fn ($query) => $query->where('workspace_id', $workspace->id))->firstOrFail();
+    expect($column->type)->toBe(BoardColumn::TYPE_AUTO_NUMBER);
+
+    $item = $column->board->items()->where('name', 'First task')->firstOrFail();
+    expect((int) $item->values()->where('column_id', $column->id)->value('value'))->toBe($item->id);
+
+    deleteDirectory($root);
+});

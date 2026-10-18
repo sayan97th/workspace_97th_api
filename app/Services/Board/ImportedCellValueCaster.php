@@ -12,6 +12,7 @@ use App\Models\BoardItemValue;
 use App\Models\BoardTag;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\CountryCatalog;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -96,8 +97,14 @@ class ImportedCellValueCaster
             BoardColumn::TYPE_FILES => $this->castFiles($raw),
             BoardColumn::TYPE_TIME_TRACKING => $this->castTimeTracking($raw),
             BoardColumn::TYPE_CHECKLIST => $this->castChecklist($raw),
+            BoardColumn::TYPE_COUNTRY => CountryCatalog::codeFor($raw),
+            BoardColumn::TYPE_WORLD_CLOCK => $this->parseTimeZone($raw),
+            BoardColumn::TYPE_WEEK => $this->parseWeek($raw),
+            BoardColumn::TYPE_HOUR => $this->parseHour($raw)['value'] ?? null,
+            BoardColumn::TYPE_COLOR_PICKER => $this->parseHexColor($raw),
+            BoardColumn::TYPE_LOCATION => Str::limit((string) preg_replace('/\s*[\r\n]+\s*/', ', ', $raw), 500, ''),
             // Dependency/Connect boards are resolved later (see `deferLinkedItems()`), and the
-            // computed types (Formula, Mirror, Auto-number) never store an imported value.
+            // computed types (Formula, Mirror, Item ID) never store an imported value.
             default => null,
         };
     }
