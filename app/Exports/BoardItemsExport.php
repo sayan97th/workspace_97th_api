@@ -4,7 +4,6 @@ namespace App\Exports;
 
 use App\Models\BoardColumn;
 use App\Models\BoardItem;
-use App\Models\User;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithHeadings;
@@ -76,8 +75,36 @@ class BoardItemsExport implements FromArray, WithHeadings, WithTitle
                 ->map(fn ($option_id) => $this->optionLabel($column, $option_id))
                 ->implode(', '),
             BoardColumn::TYPE_CHECKBOX => $value ? 'Yes' : 'No',
-            default => is_array($value) ? implode(', ', $value) : (string) $value,
+            default => $this->stringify($value),
         };
+    }
+
+    /**
+     * Flattens a stored cell value into readable text. Structured values
+     * (a timeline range, a link, a list of files) used to be imploded
+     * as is, which threw "Array to string conversion" on nested arrays.
+     */
+    private function stringify(mixed $value): string
+    {
+        if (! is_array($value)) {
+            return is_bool($value) ? ($value ? 'Yes' : 'No') : (string) $value;
+        }
+
+        if (array_is_list($value)) {
+            return collect($value)->map(fn ($entry) => $this->stringify($entry))->filter(fn ($text) => $text !== '')->implode(', ');
+        }
+
+        if (isset($value['from']) || isset($value['to'])) {
+            return trim(($value['from'] ?? '').' - '.($value['to'] ?? ''), ' -');
+        }
+
+        foreach (['text', 'label', 'name', 'title', 'url', 'value', 'date'] as $key) {
+            if (isset($value[$key]) && ! is_array($value[$key]) && $value[$key] !== '') {
+                return (string) $value[$key];
+            }
+        }
+
+        return (string) json_encode($value);
     }
 
     private function optionLabel(BoardColumn $column, mixed $option_id): string
