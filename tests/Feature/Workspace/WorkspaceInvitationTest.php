@@ -515,6 +515,59 @@ test('a workspace owner can search the pool of users to invite', function () {
         ->assertJsonPath('data.0.email', 'amanda@example.com');
 });
 
+test('the pool of users to invite includes the job title and flags open invitations', function () {
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    User::factory()->create(['first_name' => 'Amanda', 'email' => 'amanda@example.com', 'job_title' => 'Designer']);
+    User::factory()->create(['first_name' => 'Amaro', 'email' => 'amaro@example.com']);
+
+    WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+        'email' => 'amanda@example.com',
+        'accepted_at' => null,
+        'expires_at' => now()->addDays(3),
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->getJson("/api/workspaces/{$workspace->slug}/invitations/available-users?search=Ama");
+
+    $response->assertOk()
+        ->assertJsonCount(2, 'data')
+        ->assertJsonPath('data.0.email', 'amanda@example.com')
+        ->assertJsonPath('data.0.job_title', 'Designer')
+        ->assertJsonPath('data.0.has_pending_invitation', true)
+        ->assertJsonPath('data.1.has_pending_invitation', false);
+});
+
+test('inviting an address with an open invitation reports it as resent', function () {
+    Mail::fake();
+
+    $owner = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+
+    WorkspaceInvitation::factory()->create([
+        'workspace_id' => $workspace->id,
+        'invited_by' => $owner->id,
+        'email' => 'again@example.com',
+        'accepted_at' => null,
+        'expires_at' => now()->addDays(3),
+    ]);
+
+    $response = $this->actingAs($owner, 'api')
+        ->postJson("/api/workspaces/{$workspace->slug}/invitations", [
+            'emails' => ['again@example.com', 'fresh@example.com'],
+            'role' => 'member',
+        ]);
+
+    $response->assertCreated()
+        ->assertJsonCount(2, 'data')
+        ->assertJsonPath('resent_emails', ['again@example.com']);
+});
+
 test('the pool of users to invite excludes people already in the workspace', function () {
     $owner = User::factory()->create();
     $workspace = Workspace::factory()->create();

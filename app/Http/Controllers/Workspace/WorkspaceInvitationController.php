@@ -153,6 +153,19 @@ class WorkspaceInvitationController extends Controller
             ->limit(self::CANDIDATE_MAX_RESULTS)
             ->get();
 
+        // Flags people who already have an open invitation, so the dialog can say a send resends it.
+        $pending_emails = $workspace->invitations()
+            ->whereIn('email', $candidates->pluck('email'))
+            ->whereNull('accepted_at')
+            ->where(fn (Builder $q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()))
+            ->pluck('email')
+            ->map(fn (string $email) => strtolower($email));
+
+        $candidates->each(fn (User $candidate) => $candidate->setAttribute(
+            'has_pending_invitation',
+            $pending_emails->contains(strtolower($candidate->email))
+        ));
+
         return response()->json([
             'data' => WorkspaceInvitationCandidateResource::collection($candidates),
         ]);
@@ -196,6 +209,7 @@ class WorkspaceInvitationController extends Controller
 
         $invitations = collect();
         $skipped = collect();
+        $resent_emails = collect();
 
         foreach ($emails as $index => $email) {
             if ($existing_member_emails->contains(strtolower($email))) {
@@ -217,6 +231,10 @@ class WorkspaceInvitationController extends Controller
                 ->whereRaw('LOWER(email) = ?', [strtolower($email)])
                 ->whereNull('accepted_at')
                 ->first();
+
+            if ($invitation) {
+                $resent_emails->push($invitation->email);
+            }
 
             $invitation = DB::transaction(function () use ($workspace, $invitation, $email, $role, $message, $user) {
                 $attributes = [
@@ -246,6 +264,8 @@ class WorkspaceInvitationController extends Controller
                 : 'Invitations sent successfully.',
             'data' => WorkspaceInvitationResource::collection($invitations),
             'skipped' => $skipped->values(),
+            // Addresses that already had an open invitation, it was sent again with a fresh expiry.
+            'resent_emails' => $resent_emails->values(),
         ], 201);
     }
 
