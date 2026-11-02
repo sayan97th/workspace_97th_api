@@ -63,6 +63,7 @@ class AssignedNotificationEmail extends Mailable
                 'workspace_name' => $workspace?->name,
                 'workspace_mono' => $workspace?->mono,
                 'workspace_color' => $workspace?->color,
+                'workspace_avatar_url' => $workspace?->avatar_url,
                 'cta_url' => $this->notification->link ? $frontend_url.$this->notification->link : $frontend_url,
             ],
         );

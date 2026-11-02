@@ -5,7 +5,7 @@
 @endphp
 <x-emails.layout :title="$email_title" :preview="$email_preview">
     <div class="email-padding" style="padding:32px 32px 28px;">
-        <x-emails.workspace-badge :mono="$workspace_mono" :color="$workspace_color" :name="$workspace_name" role="Board invitation" />
+        <x-emails.workspace-badge :avatar-url="$workspace_avatar_url ?? null" :mono="$workspace_mono" :color="$workspace_color" :name="$workspace_name" role="Board invitation" />
 
         <h1 class="email-heading" style="margin:0 0 12px; font-size:21px; line-height:1.35; color:#111827;">
             Take a look at &ldquo;{{ $board_label }}&rdquo;

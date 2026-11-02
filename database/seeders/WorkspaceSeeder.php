@@ -41,6 +41,8 @@ class WorkspaceSeeder extends Seeder
             );
         }
 
+        $this->call(WorkspaceLogoSeeder::class);
+
         $fulfillment = Workspace::where('slug', 'fulfillment')->firstOrFail();
 
         // Enroll every existing user in the home workspace so any login sees

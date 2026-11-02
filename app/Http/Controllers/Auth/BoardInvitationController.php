@@ -50,6 +50,7 @@ class BoardInvitationController extends Controller
                 'name' => $invitation->board->workspace->name,
                 'mono' => $invitation->board->workspace->mono,
                 'color' => $invitation->board->workspace->color,
+                'avatar_url' => $invitation->board->workspace->avatar_thumbnail_url ?? $invitation->board->workspace->avatar_url,
             ],
             'inviter_name' => $invitation->inviter->full_name,
             'message' => $invitation->message,

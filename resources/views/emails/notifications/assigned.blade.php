@@ -16,7 +16,7 @@
 <x-emails.layout :title="$email_title" :preview="$email_preview">
     <div class="email-padding" style="padding:34px 32px 28px;">
         @if ($workspace_name)
-            <x-emails.workspace-badge :mono="$workspace_mono ?? '?'" :color="$workspace_color ?? '#e53e2e'" :name="$workspace_name" role="New assignment" />
+            <x-emails.workspace-badge :avatar-url="$workspace_avatar_url ?? null" :mono="$workspace_mono ?? '?'" :color="$workspace_color ?? '#e53e2e'" :name="$workspace_name" role="New assignment" />
         @endif
 
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;">

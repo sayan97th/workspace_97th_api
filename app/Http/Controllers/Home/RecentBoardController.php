@@ -29,7 +29,7 @@ class RecentBoardController extends Controller
         $visits = BoardVisit::query()
             ->where('user_id', $user->id)
             ->whereHas('board', fn ($query) => VisibleBoards::withoutHiddenPrivate($query->where('is_archived', false), $user))
-            ->with('board.workspace:id,name,slug,color,mono')
+            ->with('board.workspace:id,name,slug,color,mono,avatar_path,avatar_thumbnail_path')
             ->orderByDesc('visited_at')
             ->limit(self::LIMIT)
             ->get();
@@ -50,6 +50,7 @@ class RecentBoardController extends Controller
                     'slug' => $visit->board->workspace->slug,
                     'color' => $visit->board->workspace->color,
                     'mono' => $visit->board->workspace->mono,
+                    'avatar_url' => $visit->board->workspace->avatar_thumbnail_url ?? $visit->board->workspace->avatar_url,
                 ] : null,
                 'preview' => $board_previews[(int) $visit->board->id] ?? null,
             ])->values(),

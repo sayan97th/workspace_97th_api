@@ -30,14 +30,14 @@ class FavoriteController extends Controller
         $favorites = UserFavoriteItem::query()
             ->where('user_id', $request->user()->id)
             ->whereHas('navigationItem', fn ($query) => VisibleBoards::withoutHiddenPrivate($query->where('is_archived', false), $request->user()))
-            ->with('navigationItem.workspace:id,name,slug,color,mono')
+            ->with('navigationItem.workspace:id,name,slug,color,mono,avatar_path,avatar_thumbnail_path')
             ->orderBy('position')
             ->orderBy('id')
             ->get();
 
         $favorite_workspaces = UserFavoriteWorkspace::query()
             ->where('user_id', $request->user()->id)
-            ->with('workspace:id,name,slug,color,mono')
+            ->with('workspace:id,name,slug,color,mono,avatar_path,avatar_thumbnail_path')
             ->orderBy('position')
             ->orderBy('id')
             ->get()
@@ -87,7 +87,7 @@ class FavoriteController extends Controller
     {
         $this->favorites->set($request->user(), $item->id, true);
 
-        return response()->json(['message' => 'Added to favorites.', 'item' => $this->present($item->load('workspace:id,name,slug,color,mono'))]);
+        return response()->json(['message' => 'Added to favorites.', 'item' => $this->present($item->load('workspace:id,name,slug,color,mono,avatar_path,avatar_thumbnail_path'))]);
     }
 
     /**
@@ -150,6 +150,7 @@ class FavoriteController extends Controller
             'slug' => $workspace->slug,
             'color' => $workspace->color,
             'mono' => $workspace->mono,
+            'avatar_url' => $workspace->avatar_thumbnail_url ?? $workspace->avatar_url,
         ];
     }
 }

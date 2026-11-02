@@ -42,6 +42,7 @@ class BoardInvitationMail extends Mailable
                 'workspace_name' => $this->invitation->board->workspace->name,
                 'workspace_mono' => $this->invitation->board->workspace->mono,
                 'workspace_color' => $this->invitation->board->workspace->color,
+                'workspace_avatar_url' => $this->invitation->board->workspace->avatar_url,
                 'inviter_name' => $this->invitation->inviter->full_name,
                 'invite_message' => $this->invitation->message,
                 'accept_url' => "{$frontend_url}/board-invitations/{$this->invitation->code}",

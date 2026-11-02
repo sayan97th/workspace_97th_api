@@ -40,6 +40,7 @@ class WorkspaceInvitationMail extends Mailable
                 'workspace_name' => $this->invitation->workspace->name,
                 'workspace_mono' => $this->invitation->workspace->mono,
                 'workspace_color' => $this->invitation->workspace->color,
+                'workspace_avatar_url' => $this->invitation->workspace->avatar_url,
                 'inviter_name' => $this->invitation->inviter->full_name,
                 'role_label' => WorkspacePermissionCatalog::labelFor($this->invitation->role),
                 'invite_message' => $this->invitation->message,

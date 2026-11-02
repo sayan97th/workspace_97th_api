@@ -37,6 +37,10 @@ class WorkspaceAvatarService
             config('filesystems.app_disk')
         );
 
+        if ($avatar_path === false) {
+            throw new RuntimeException('Unable to store the workspace avatar.');
+        }
+
         $thumbnail_path = self::DIRECTORY."/{$workspace->id}/thumbnails/".Str::uuid().'.webp';
         Storage::disk(config('filesystems.app_disk'))->put(
             $thumbnail_path,

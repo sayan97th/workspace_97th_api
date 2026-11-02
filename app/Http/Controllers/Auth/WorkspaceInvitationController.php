@@ -43,6 +43,7 @@ class WorkspaceInvitationController extends Controller
                 'name' => $invitation->workspace->name,
                 'mono' => $invitation->workspace->mono,
                 'color' => $invitation->workspace->color,
+                'avatar_url' => $invitation->workspace->avatar_thumbnail_url ?? $invitation->workspace->avatar_url,
             ],
             'inviter_name' => $invitation->inviter->full_name,
             'message' => $invitation->message,

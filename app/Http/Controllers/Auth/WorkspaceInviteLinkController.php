@@ -40,6 +40,7 @@ class WorkspaceInviteLinkController extends Controller
                 'name' => $workspace->name,
                 'mono' => $workspace->mono,
                 'color' => $workspace->color,
+                'avatar_url' => $workspace->avatar_thumbnail_url ?? $workspace->avatar_url,
             ],
             'role' => $workspace->invite_role,
             'role_label' => WorkspacePermissionCatalog::labelFor($workspace->invite_role),
