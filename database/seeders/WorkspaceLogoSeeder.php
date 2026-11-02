@@ -16,7 +16,7 @@ class WorkspaceLogoSeeder extends Seeder
 {
     private const COMPANY_MONOGRAM = '97';
 
-    private const LOGO_FILE_NAME = '97-logo-icon-red.png';
+    private const LOGO_FILE_NAME = '97-profile-primary.png';
 
     public function run(WorkspaceAvatarService $avatars): void
     {
