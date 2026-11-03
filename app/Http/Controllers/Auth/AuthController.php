@@ -3,23 +3,22 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Actions\Teams\CreateTeam;
+use App\Actions\Workspaces\JoinPendingWorkspaceInvitations;
 use App\Concerns\IssuesJwtTokens;
+use App\Concerns\StartsTwoFactorChallenges;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Requests\Auth\TwoFactorChallengeRequest;
 use App\Http\Resources\ProfileResource;
 use App\Jobs\SendEmailJob;
-use App\Mail\TwoFactorCodeMail;
 use App\Mail\WelcomeMail;
 use App\Models\User;
 use App\Models\UserSession;
-use App\Models\WorkspaceInvitation;
 use App\Services\Workspace\HomeWorkspaceEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Laravel\Fortify\Contracts\TwoFactorAuthenticationProvider;
 use Laravel\Fortify\Fortify;
 use PHPOpenSourceSaver\JWTAuth\Exceptions\JWTException;
@@ -27,17 +26,12 @@ use PHPOpenSourceSaver\JWTAuth\Facades\JWTAuth;
 
 class AuthController extends Controller
 {
-    use IssuesJwtTokens;
-
-    /**
-     * How long an emailed two factor code, and the matching pending login
-     * token, stay valid before the user has to sign in again.
-     */
-    private const TWO_FACTOR_EMAIL_CODE_TTL_MINUTES = 10;
+    use IssuesJwtTokens, StartsTwoFactorChallenges;
 
     public function __construct(
         private CreateTeam $createTeam,
-        private HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService
+        private HomeWorkspaceEnrollmentService $homeWorkspaceEnrollmentService,
+        private JoinPendingWorkspaceInvitations $joinPendingWorkspaceInvitations,
     ) {
         //
     }
@@ -62,7 +56,7 @@ class AuthController extends Controller
             $user->assignRole('client');
             $this->homeWorkspaceEnrollmentService->enroll($user);
 
-            $this->joinPendingWorkspaceInvitations($user);
+            $this->joinPendingWorkspaceInvitations->handle($user);
 
             SendEmailJob::dispatch(new WelcomeMail($user), $user->email);
 
@@ -72,29 +66,6 @@ class AuthController extends Controller
         $token = $this->issueToken($user);
 
         return $this->respondWithToken($token, $user);
-    }
-
-    /**
-     * Auto-joins a freshly registered user to every workspace they were
-     * invited to before they had an account, so people who sign up on their
-     * own (rather than through the emailed invitation link) still land in
-     * the workspace without needing to be re-invited. Mirrors the attach
-     * step in {@see WorkspaceInvitationController::accept()}.
-     */
-    private function joinPendingWorkspaceInvitations(User $user): void
-    {
-        $pending_invitations = WorkspaceInvitation::where('email', $user->email)
-            ->whereNull('accepted_at')
-            ->get()
-            ->filter(fn (WorkspaceInvitation $invitation) => $invitation->isPending());
-
-        foreach ($pending_invitations as $invitation) {
-            $invitation->workspace->users()->syncWithoutDetaching([
-                $user->id => ['role' => $invitation->role, 'is_recent' => true, 'invited_by' => $invitation->invited_by],
-            ]);
-
-            $invitation->update(['accepted_at' => now()]);
-        }
     }
 
     /**
@@ -129,30 +100,7 @@ class AuthController extends Controller
         $user = $this->guard()->getLastAttempted();
 
         if ($user->hasEnabledTwoFactorAuthentication()) {
-            $two_factor_token = Str::uuid()->toString();
-            $email_code = (string) random_int(100000, 999999);
-
-            Cache::put(
-                "two_factor_pending:{$two_factor_token}",
-                $user->id,
-                now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
-            );
-            Cache::put(
-                "two_factor_email_code:{$two_factor_token}",
-                $email_code,
-                now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
-            );
-            // The "Keep me logged in" choice waits here until the challenge is passed.
-            Cache::put(
-                "two_factor_remember:{$two_factor_token}",
-                $remember,
-                now()->addMinutes(self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
-            );
-
-            SendEmailJob::dispatch(
-                new TwoFactorCodeMail($user, $email_code, self::TWO_FACTOR_EMAIL_CODE_TTL_MINUTES),
-                $user->email,
-            );
+            $two_factor_token = $this->startTwoFactorChallenge($user, $remember);
 
             return response()->json([
                 'requires_two_factor' => true,

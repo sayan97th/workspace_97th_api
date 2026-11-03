@@ -157,9 +157,11 @@ Route::prefix('auth')->group(function () {
         Route::post('{invitation}/accept', [StaffInvitationController::class, 'accept']);
     });
 
+    // Sign in with Google, see `GoogleAuthController` for the full flow.
     Route::prefix('google')->group(function () {
-        Route::get('redirect', [GoogleAuthController::class, 'redirect']);
-        Route::get('callback', [GoogleAuthController::class, 'callback']);
+        Route::get('redirect', [GoogleAuthController::class, 'redirect'])->middleware('throttle:30,1');
+        Route::get('callback', [GoogleAuthController::class, 'callback'])->middleware('throttle:30,1');
+        Route::post('exchange', [GoogleAuthController::class, 'exchange'])->middleware('throttle:30,1');
     });
 
     // Not behind `auth:api`, so a token that expired while the browser was closed can

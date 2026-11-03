@@ -7,7 +7,7 @@ use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Laravel\Fortify\Contracts\TwoFactorAuthenticationProvider;
 use Laravel\Fortify\Fortify;
 use Laravel\Socialite\Facades\Socialite;
@@ -188,17 +188,13 @@ test('google sign in carries keep me logged in through the oauth state', functio
         'id' => 'google-remember',
         'name' => 'Jane Doe',
         'email' => 'jane.remember@example.com',
+        'email_verified' => true,
     ]));
 
-    $this->get('/api/auth/google/redirect?remember=1')->assertRedirect();
+    $response = googleSignIn(remember: true);
 
-    Cache::put('google_oauth_remember:test-state', true, now()->addMinutes(10));
-
-    $location = $this->get('/api/auth/google/callback?state=test-state')->headers->get('Location');
-    parse_str((string) parse_url($location, PHP_URL_QUERY), $query);
-
-    expect(Carbon::parse($query['session_expires_at'])->equalTo(now()->addDays(30)))->toBeTrue();
-    expect(Cache::has('google_oauth_remember:test-state'))->toBeFalse();
+    expect(Carbon::parse($response->json('session_expires_at'))->equalTo(now()->addDays(30)))->toBeTrue();
+    expect($response->json('remember'))->toBeTrue();
 });
 
 test('google sign in without keep me logged in lasts one day', function () {
@@ -208,10 +204,28 @@ test('google sign in without keep me logged in lasts one day', function () {
         'id' => 'google-normal',
         'name' => 'John Doe',
         'email' => 'john.normal@example.com',
+        'email_verified' => true,
     ]));
 
-    $location = $this->get('/api/auth/google/callback')->headers->get('Location');
+    $response = googleSignIn(remember: false);
+
+    expect(Carbon::parse($response->json('session_expires_at'))->equalTo(now()->addDay()))->toBeTrue();
+});
+
+/**
+ * Runs the whole Google round trip (redirect, callback, code exchange) and
+ * returns the exchange response.
+ */
+function googleSignIn(bool $remember)
+{
+    Str::createRandomStringsUsing(fn () => 'test-state');
+    test()->get('/api/auth/google/redirect'.($remember ? '?remember=1' : ''))->assertRedirect();
+    Str::createRandomStringsNormally();
+
+    $location = test()->get('/api/auth/google/callback?state=test-state')->headers->get('Location');
     parse_str((string) parse_url($location, PHP_URL_QUERY), $query);
 
-    expect(Carbon::parse($query['session_expires_at'])->equalTo(now()->addDay()))->toBeTrue();
-});
+    forgetJwtInstances();
+
+    return test()->postJson('/api/auth/google/exchange', ['login_code' => $query['login_code']])->assertOk();
+}
