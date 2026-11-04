@@ -212,7 +212,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     Route::put('favorites/order', [FavoriteController::class, 'reorder']);
     Route::put('favorites/workspaces/{workspace}', [FavoriteController::class, 'storeWorkspace']);
     Route::delete('favorites/workspaces/{workspace}', [FavoriteController::class, 'destroyWorkspace']);
-    Route::put('favorites/{item}', [FavoriteController::class, 'store']);
+    Route::put('favorites/{item}', [FavoriteController::class, 'store'])->middleware('board.visible');
     Route::delete('favorites/{item}', [FavoriteController::class, 'destroy']);
     Route::get('my-work', [MyWorkController::class, 'index']);
     Route::get('my-work/boards', [MyWorkController::class, 'boards']);
@@ -274,7 +274,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
     // Account teams a board's comment composers can group `@mention`, limited
     // to each team's members inside the board's workspace.
-    Route::get('people/boards/{board}/teams', [MentionTeamController::class, 'index']);
+    Route::get('people/boards/{board}/teams', [MentionTeamController::class, 'index'])->middleware('board.visible');
 
     // The current user's reusable update and reply templates.
     Route::apiResource('saved-replies', SavedReplyController::class)->except(['show']);
@@ -285,7 +285,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::get('updates', [FeedUpdateController::class, 'index']);
         Route::get('updates/export', [FeedUpdateController::class, 'export'])->middleware(['throttle:10,1', 'account.permission:export_data']);
         Route::get('boards', [FeedUpdateController::class, 'boards']);
-        Route::get('boards/{board}/people', [FeedUpdateController::class, 'people']);
+        Route::get('boards/{board}/people', [FeedUpdateController::class, 'people'])->middleware('board.visible');
         Route::get('unread-count', [FeedUpdateController::class, 'unreadCount']);
         Route::get('filters', [FeedUpdateController::class, 'filters']);
         Route::get('saved-views', [FeedUpdateController::class, 'savedViews']);
@@ -368,7 +368,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // ahead of the recipient's own per-type preferences.
     Route::get('boards/muted', [BoardNotificationMuteController::class, 'index']);
     Route::get('boards/muted-items', [BoardItemNotificationMuteController::class, 'index']);
-    Route::post('boards/{item}/mute', [BoardNotificationMuteController::class, 'store']);
+    Route::post('boards/{item}/mute', [BoardNotificationMuteController::class, 'store'])->middleware('board.visible');
     Route::delete('boards/{item}/mute', [BoardNotificationMuteController::class, 'destroy']);
 
     // Generic inline-image upload for content pasted/dropped directly into a
@@ -448,12 +448,12 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('templates/{template}/use', [WorkspaceNavigationItemController::class, 'useTemplate'])->whereNumber('template');
             Route::delete('templates/{template}', [WorkspaceNavigationItemController::class, 'destroyTemplate'])->whereNumber('template');
 
-            Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update']);
-            Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move']);
-            Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate']);
-            Route::patch('{item}/move-workspace', [WorkspaceNavigationItemController::class, 'moveToWorkspace']);
-            Route::post('{item}/template', [WorkspaceNavigationItemController::class, 'saveAsTemplate']);
-            Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy'])->middleware('account.permission:delete_boards');
+            Route::patch('{item}', [WorkspaceNavigationItemController::class, 'update'])->middleware('board.visible');
+            Route::patch('{item}/move', [WorkspaceNavigationItemController::class, 'move'])->middleware('board.visible');
+            Route::post('{item}/duplicate', [WorkspaceNavigationItemController::class, 'duplicate'])->middleware('board.visible');
+            Route::patch('{item}/move-workspace', [WorkspaceNavigationItemController::class, 'moveToWorkspace'])->middleware('board.visible');
+            Route::post('{item}/template', [WorkspaceNavigationItemController::class, 'saveAsTemplate'])->middleware('board.visible');
+            Route::delete('{item}', [WorkspaceNavigationItemController::class, 'destroy'])->middleware(['account.permission:delete_boards', 'board.visible']);
         });
     });
 
@@ -461,12 +461,12 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // globally-unique id, for id-based deep links like `/boards/{id}` on the
     // frontend. No workspace slug needed: the item's own row says which
     // workspace it belongs to.
-    Route::get('boards/{item}', [BoardController::class, 'show']);
+    Route::get('boards/{item}', [BoardController::class, 'show'])->middleware('board.visible');
 
     // Board invitations — email-invite a person to view a single board,
     // independent of full workspace membership. Powers the board header's
     // "Invite" dialog.
-    Route::prefix('boards/{item}')->group(function () {
+    Route::prefix('boards/{item}')->middleware('board.visible')->group(function () {
         Route::get('invitations', [BoardInvitationController::class, 'index']);
         Route::post('invitations', [BoardInvitationController::class, 'store'])->middleware('account.permission:invite_members');
         Route::delete('invitations/{invitation:id}', [BoardInvitationController::class, 'destroy']);
@@ -477,7 +477,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Board options menu ("...") — archive/unarchive the whole board, its
     // per-board archived/deleted-items panel, its activity log, and
     // exporting its primary (or a given) tab to Excel.
-    Route::prefix('boards/{item}')->group(function () {
+    Route::prefix('boards/{item}')->middleware('board.visible')->group(function () {
         Route::post('archive', [BoardController::class, 'archive']);
         Route::patch('permissions', [BoardController::class, 'updatePermission']);
         Route::post('unarchive', [BoardController::class, 'unarchive']);
@@ -495,7 +495,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
     // A Doc's body (`view_key = doc`): the Notion style editor's JSON document
     // and the images, videos and files embedded in it.
-    Route::prefix('boards/{item}')->group(function () {
+    Route::prefix('boards/{item}')->middleware('board.visible')->group(function () {
         Route::get('doc', [BoardDocController::class, 'show']);
         Route::put('doc', [BoardDocController::class, 'update']);
         Route::post('doc/files', [BoardDocController::class, 'storeFile']);
@@ -540,7 +540,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Board content — the reusable "table board" engine: any number of
     // tables (groups) per board, items (pulses) with typed column values,
     // and saved views/tabs that double as saved filter configurations.
-    Route::prefix('boards/{item}')->group(function () {
+    Route::prefix('boards/{item}')->middleware('board.visible')->group(function () {
         Route::prefix('columns')->group(function () {
             Route::get('/', [BoardColumnController::class, 'index']);
             Route::post('/', [BoardColumnController::class, 'store']);

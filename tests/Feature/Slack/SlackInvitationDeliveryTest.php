@@ -218,6 +218,7 @@ test('members added to a board from the share dialog are told on slack', functio
         'workspace_id' => $workspace->id,
         'label' => 'Launch plan',
         'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+        'created_by_id' => $owner->id,
     ]);
 
     $this->actingAs($owner, 'api')

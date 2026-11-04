@@ -9,8 +9,9 @@ use Database\Seeders\RolePermissionSeeder;
 
 /**
  * Private boards (the lock icon in the sidebar) follow monday.com: only the creator, the
- * owner, the people added to the board and account admins see them in the sidebar tree,
- * Favorites and Recent. Main and shareable boards stay visible to every workspace member.
+ * owner and the people added to the board see or open them, in the sidebar tree, Favorites,
+ * Recent, the Content list and by direct link. Account admins and workspace owners get no
+ * bypass. Main and shareable boards stay visible to every workspace member.
  */
 beforeEach(function () {
     $this->seed(RolePermissionSeeder::class);
@@ -112,14 +113,104 @@ test('the board owner sees a private board someone else created', function () {
     expect(collectTreeLabels($response->json('data')))->toContain('Private board');
 });
 
-test('an account admin sees every private board', function () {
+test('an account admin who was not added does not see someone else\'s private board', function () {
     $this->member->assignRole('admin');
 
     $response = $this->actingAs($this->member, 'api')
         ->getJson("/api/workspaces/{$this->workspace->slug}/navigation")
         ->assertOk();
 
-    expect(collectTreeLabels($response->json('data')))->toContain('Private board');
+    expect(collectTreeLabels($response->json('data')))->not->toContain('Private board');
+});
+
+test('a workspace owner who did not create the private board does not see it', function () {
+    $other_owner = User::factory()->create();
+    $this->workspace->users()->attach($other_owner->id, ['role' => 'owner']);
+
+    $response = $this->actingAs($other_owner, 'api')
+        ->getJson("/api/workspaces/{$this->workspace->slug}/navigation")
+        ->assertOk();
+
+    expect(collectTreeLabels($response->json('data')))->not->toContain('Private board');
+});
+
+test('opening a private board by direct link is blocked for people who were not added', function () {
+    $this->member->assignRole('admin');
+
+    $this->actingAs($this->member, 'api')
+        ->getJson("/api/boards/{$this->private_board->id}")
+        ->assertForbidden()
+        ->assertJsonPath('code', 'board_private');
+
+    $this->actingAs($this->member, 'api')
+        ->getJson("/api/boards/{$this->private_board->id}/columns")
+        ->assertForbidden();
+
+    $this->actingAs($this->member, 'api')
+        ->patchJson("/api/workspaces/{$this->workspace->slug}/navigation/{$this->private_board->id}", ['label' => 'Renamed'])
+        ->assertForbidden();
+
+    expect($this->private_board->fresh()->label)->toBe('Private board');
+});
+
+test('the creator and invited people can open a private board by direct link', function () {
+    $this->actingAs($this->creator, 'api')
+        ->getJson("/api/boards/{$this->private_board->id}")
+        ->assertOk();
+
+    $this->private_board->collaborators()->attach($this->member->id, ['invited_by' => $this->creator->id]);
+
+    $this->actingAs($this->member, 'api')
+        ->getJson("/api/boards/{$this->private_board->id}")
+        ->assertOk();
+});
+
+test('the Content list and its creators facet skip private boards the user cannot see', function () {
+    $this->member->assignRole('admin');
+
+    $response = $this->actingAs($this->member, 'api')->getJson('/api/content?per_page=100')->assertOk();
+    $labels = collect($response->json('data'))->pluck('label');
+    expect($labels)->toContain('Main board')->not->toContain('Private board');
+
+    $creators = collect($this->actingAs($this->member, 'api')->getJson('/api/content/creators')->json('data'));
+    expect($creators->firstWhere('id', $this->creator->id)['content_count'])->toBe(2);
+});
+
+test('only the creator or owner can switch a board to private', function () {
+    $this->member->assignRole('admin');
+
+    $this->actingAs($this->member, 'api')
+        ->patchJson("/api/workspaces/{$this->workspace->slug}/navigation/{$this->main_board->id}", [
+            'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+        ])
+        ->assertForbidden();
+
+    expect($this->main_board->fresh()->board_type)->toBe(WorkspaceNavigationItem::BOARD_TYPE_MAIN);
+
+    $this->actingAs($this->member, 'api')
+        ->getJson("/api/boards/{$this->main_board->id}")
+        ->assertJsonPath('can_make_private', false);
+
+    $this->main_board->update(['owner_id' => $this->member->id]);
+
+    $this->actingAs($this->member, 'api')
+        ->patchJson("/api/workspaces/{$this->workspace->slug}/navigation/{$this->main_board->id}", [
+            'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+        ])
+        ->assertOk()
+        ->assertJsonPath('item.can_make_private', true);
+});
+
+test('sidebar bulk actions skip private boards the user cannot see', function () {
+    $this->member->assignRole('admin');
+
+    $this->actingAs($this->member, 'api')
+        ->postJson("/api/workspaces/{$this->workspace->slug}/navigation/bulk", [
+            'action' => 'archive',
+            'item_ids' => [$this->private_board->id],
+        ]);
+
+    expect($this->private_board->fresh()->is_archived)->toBeFalse();
 });
 
 test('switching a board to private hides it from members right away', function () {

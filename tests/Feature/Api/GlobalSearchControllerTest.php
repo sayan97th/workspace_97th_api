@@ -155,7 +155,7 @@ test('archived and deleted items are excluded, subitems are flagged', function (
         ->and($items[$parent->id]['is_subitem'])->toBeFalse();
 });
 
-test('a private board and its items are only visible to its creator, owner, collaborators and admins', function () {
+test('a private board and its items are only visible to its creator, owner and collaborators, not to admins', function () {
     $this->seed(RolePermissionSeeder::class);
 
     $creator = User::factory()->create();
@@ -173,14 +173,16 @@ test('a private board and its items are only visible to its creator, owner, coll
     $board->collaborators()->attach($collaborator->id, ['invited_by' => $creator->id]);
     createSearchItem($board, 'Secret budget line');
 
-    foreach ([$creator, $owner, $collaborator, $admin] as $allowed_user) {
+    foreach ([$creator, $owner, $collaborator] as $allowed_user) {
         $response = $this->actingAs($allowed_user, 'api')->getJson('/api/search?q=secret');
         expect($response->json('data.boards'))->toHaveCount(1)
             ->and($response->json('data.items'))->toHaveCount(1);
     }
 
-    $response = $this->actingAs($outsider, 'api')->getJson('/api/search?q=secret');
-    $response->assertOk();
-    expect($response->json('data.boards'))->toBe([])
-        ->and($response->json('data.items'))->toBe([]);
+    foreach ([$admin, $outsider] as $hidden_user) {
+        $response = $this->actingAs($hidden_user, 'api')->getJson('/api/search?q=secret');
+        $response->assertOk();
+        expect($response->json('data.boards'))->toBe([])
+            ->and($response->json('data.items'))->toBe([]);
+    }
 });

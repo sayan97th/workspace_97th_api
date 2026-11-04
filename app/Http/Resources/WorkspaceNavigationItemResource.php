@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Favorite\UserFavoriteService;
+use App\Support\VisibleBoards;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -31,6 +32,8 @@ class WorkspaceNavigationItemResource extends JsonResource
             'href' => $this->href,
             'display_style' => $this->display_style,
             'board_type' => $this->board_type,
+            // Only the creator or owner may switch a board to private, see VisibleBoards::canMakePrivate().
+            'can_make_private' => $request->user() !== null && VisibleBoards::canMakePrivate($request->user(), $this->resource),
             'item_column_label' => $this->item_column_label,
             'item_column_width' => $this->item_column_width,
             'sub_item_column_width' => $this->sub_item_column_width,

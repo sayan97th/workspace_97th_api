@@ -183,6 +183,18 @@ class WorkspaceNavigationItemController extends Controller
         $previous_label = $item->label;
         $previous_board_type = $item->board_type;
 
+        // Like monday.com, a private board stays visible to its creator, its owner and the people
+        // added to it. Only the creator or owner may switch it to private, so nobody hides a board
+        // from the person who made it or locks themselves out of it.
+        if (($validated['board_type'] ?? null) === WorkspaceNavigationItem::BOARD_TYPE_PRIVATE
+            && $previous_board_type !== WorkspaceNavigationItem::BOARD_TYPE_PRIVATE
+            && ! VisibleBoards::canMakePrivate($request->user(), $item)) {
+            return response()->json([
+                'message' => "Only the board's creator or owner can make it private.",
+                'errors' => ['board_type' => ["Only the board's creator or owner can make it private."]],
+            ], 403);
+        }
+
         // Starring is personal: it lands in the caller's own Favorites and
         // never changes the item for anybody else.
         if (array_key_exists('is_favorite', $validated)) {
@@ -329,7 +341,8 @@ class WorkspaceNavigationItemController extends Controller
 
         $items = $this->withoutSelectedAncestors(
             $workspace,
-            $workspace->navigationItems()->whereIn('id', $validated['item_ids'])->get()
+            // Private boards the caller cannot see are skipped, the same way the sidebar hides them.
+            VisibleBoards::withoutHiddenPrivate($workspace->navigationItems()->whereIn('id', $validated['item_ids'])->getQuery(), $user)->get()
         );
 
         switch ($validated['action']) {

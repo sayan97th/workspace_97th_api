@@ -3,6 +3,7 @@
 use App\Http\Middleware\CheckPermission;
 use App\Http\Middleware\CheckRole;
 use App\Http\Middleware\EnsureAccountPermission;
+use App\Http\Middleware\EnsureBoardIsVisible;
 use App\Http\Middleware\EnsureIpIsAllowed;
 use App\Http\Middleware\EnsurePanicModeAllows;
 use App\Http\Middleware\EnsureSessionIsActive;
@@ -46,6 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'two_factor.enforced' => EnsureTwoFactorSetupWhenEnforced::class,
             'slack.signature' => VerifySlackSignature::class,
             'account.permission' => EnsureAccountPermission::class,
+            'board.visible' => EnsureBoardIsVisible::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

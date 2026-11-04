@@ -7,6 +7,7 @@ use App\Http\Resources\WorkspaceContentItemResource;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\VisibleBoards;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -46,6 +47,7 @@ class ContentController extends Controller
         $items = $workspace->navigationItems()
             ->where('type', WorkspaceNavigationItem::TYPE_LEAF)
             ->notArchived()
+            ->tap(fn (Builder $query) => VisibleBoards::withoutHiddenPrivate($query, $request->user()))
             ->with(['creator', 'workspace'])
             ->latest('created_at')
             ->limit($limit)
@@ -85,6 +87,7 @@ class ContentController extends Controller
             ->notArchived()
             ->where(fn (Builder $query) => $query->where('view_key', '!=', self::MANAGE_WORKSPACE_VIEW_KEY)
                 ->orWhereNull('view_key'))
+            ->tap(fn (Builder $query) => VisibleBoards::withoutHiddenPrivate($query, $user))
             ->with(['creator', 'workspace']);
 
         $this->applyFilters($query, $request, $user);
@@ -126,6 +129,7 @@ class ContentController extends Controller
                     ->orWhereNull('view_key');
             })
             ->whereNotNull('created_by_id')
+            ->tap(fn (Builder $query) => VisibleBoards::withoutHiddenPrivate($query, $user))
             ->selectRaw('created_by_id, count(*) as content_count')
             ->groupBy('created_by_id')
             ->pluck('content_count', 'created_by_id');

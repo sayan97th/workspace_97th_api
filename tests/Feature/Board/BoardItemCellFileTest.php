@@ -193,9 +193,13 @@ test('the doc option creates a doc next to the board and attaches it to the cell
 
 test('a doc created from a private board cell is private too', function () {
     [$board_item, $column] = createCellFileTestItem();
-    WorkspaceNavigationItem::query()->whereKey($board_item->board_id)->update(['board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE]);
+    $creator = User::factory()->create();
+    WorkspaceNavigationItem::query()->whereKey($board_item->board_id)->update([
+        'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+        'created_by_id' => $creator->id,
+    ]);
 
-    $doc_id = $this->actingAs(User::factory()->create(), 'api')
+    $doc_id = $this->actingAs($creator, 'api')
         ->postJson(cellFilesUrl($board_item, $column).'/doc', ['name' => 'Launch brief'])
         ->assertCreated()
         ->assertJsonPath('files.0.file_name', 'Launch brief')

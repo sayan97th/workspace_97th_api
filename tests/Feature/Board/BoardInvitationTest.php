@@ -132,7 +132,7 @@ test('an existing workspace member can still be invited to a private board', fun
     $workspace = Workspace::factory()->create();
     $workspace->users()->attach($owner->id, ['role' => 'owner']);
     $workspace->users()->attach($member->id, ['role' => 'member']);
-    $board = createInvitationTestBoard($workspace, null, WorkspaceNavigationItem::BOARD_TYPE_PRIVATE);
+    $board = createInvitationTestBoard($workspace, $owner, WorkspaceNavigationItem::BOARD_TYPE_PRIVATE);
 
     $response = $this->actingAs($owner, 'api')
         ->postJson("/api/boards/{$board->id}/invitations", [
