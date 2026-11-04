@@ -16,7 +16,9 @@ use Illuminate\Support\Collection;
  * in one of its People columns. Each row carries the item's first Status,
  * its Priority, its assignees, its update count and its first Date (or
  * Timeline end) so the page can bucket it by date and edit Status, Priority
- * and the date inline through the regular item values endpoint.
+ * and the date inline through the regular item values endpoint. Its first
+ * Timeline is sent on its own too, so long running work can show when it
+ * starts even when the due date comes from a Date column.
  */
 class MyWorkService
 {
@@ -72,6 +74,7 @@ class MyWorkService
             $priority_column = $status_like->first(fn (BoardColumn $column) => $this->isPriorityColumn($column));
             $status_column = $status_like->first(fn (BoardColumn $column) => ! $this->isPriorityColumn($column));
             $date_column = $columns->firstWhere('type', BoardColumn::TYPE_DATE) ?? $columns->firstWhere('type', BoardColumn::TYPE_TIMELINE);
+            $timeline_column = $columns->firstWhere('type', BoardColumn::TYPE_TIMELINE);
             $checkbox_column = $columns->firstWhere('type', BoardColumn::TYPE_CHECKBOX);
 
             $status = $this->registerStatusColumn($status_column, $values, $status_columns);
@@ -79,6 +82,7 @@ class MyWorkService
             $people = $this->assigneesOf($columns, $values, $user, $people_by_id);
 
             $date = $date_column ? $this->resolveDate($date_column, $values->get($date_column->id)?->value) : null;
+            $timeline = $timeline_column ? $this->resolveTimeline($values->get($timeline_column->id)?->value) : null;
             $is_checked = $checkbox_column ? $values->get($checkbox_column->id)?->value === true : false;
 
             return [
@@ -104,6 +108,7 @@ class MyWorkService
                 'updates_count' => (int) $item->comments_count,
                 'date_column' => $date_column ? ['id' => $date_column->id, 'type' => $date_column->type, 'label' => $date_column->label] : null,
                 'date' => $date,
+                'timeline' => $timeline,
                 'is_done' => $is_checked || ($status !== null && $this->isDoneStatus($status)),
                 // Every row here is assigned to the user, so even the
                 // "assigned items only" permission lets them edit it.
@@ -298,18 +303,31 @@ class MyWorkService
             return is_string($value) && $value !== '' ? ['value' => substr($value, 0, 10), 'start' => null] : null;
         }
 
-        if (is_array($value) && ! empty($value['end'])) {
-            return ['value' => (string) $value['end'], 'start' => $value['start'] ?? null];
-        }
+        $timeline = $this->resolveTimeline($value);
 
-        // Older Timeline values were stored as a "start..end" string.
-        if (is_string($value) && str_contains($value, '..')) {
-            [$start, $end] = explode('..', $value, 2);
+        return $timeline !== null && $timeline['end'] !== null
+            ? ['value' => $timeline['end'], 'start' => $timeline['start']]
+            : null;
+    }
 
-            return $end !== '' ? ['value' => $end, 'start' => $start ?: null] : null;
-        }
+    /**
+     * The start and end of a Timeline value, null when it has neither. Values
+     * are stored as `{start, end}`, older ones as a "start..end" string.
+     *
+     * @return array{start: string|null, end: string|null}|null
+     */
+    private function resolveTimeline(mixed $value): ?array
+    {
+        [$start, $end] = match (true) {
+            is_array($value) => [$value['start'] ?? null, $value['end'] ?? null],
+            is_string($value) && str_contains($value, '..') => explode('..', $value, 2),
+            default => [null, null],
+        };
 
-        return null;
+        $start = is_string($start) && $start !== '' ? substr($start, 0, 10) : null;
+        $end = is_string($end) && $end !== '' ? substr($end, 0, 10) : null;
+
+        return $start === null && $end === null ? null : ['start' => $start, 'end' => $end];
     }
 
     /**

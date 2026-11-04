@@ -192,7 +192,35 @@ test('my work reads the end of a timeline as the due date', function () {
 
     $this->actingAs($user, 'api')->getJson('/api/my-work')
         ->assertJsonPath('items.0.date.value', '2026-10-09')
-        ->assertJsonPath('items.0.date_column.type', 'timeline');
+        ->assertJsonPath('items.0.date.start', '2026-10-01')
+        ->assertJsonPath('items.0.date_column.type', 'timeline')
+        ->assertJsonPath('items.0.timeline', ['start' => '2026-10-01', 'end' => '2026-10-09']);
+});
+
+test('my work sends the timeline start and end next to a date column due date', function () {
+    $user = User::factory()->create();
+    $board = createPersonalBoard();
+    $group = BoardGroup::factory()->create(['board_id' => $board->id]);
+    $people = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_PEOPLE, 'position' => 0]);
+    $date = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_DATE, 'position' => 1]);
+    $timeline = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $group->board_view_id, 'type' => BoardColumn::TYPE_TIMELINE, 'position' => 2]);
+    $long_item = BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $group->id, 'name' => 'Site migration']);
+    $long_item->values()->createMany([
+        ['column_id' => $people->id, 'value' => [$user->id]],
+        ['column_id' => $date->id, 'value' => '2026-12-04'],
+        ['column_id' => $timeline->id, 'value' => '2026-11-02..2026-12-04'],
+    ]);
+    $short_item = BoardItem::factory()->create(['board_id' => $board->id, 'group_id' => $group->id, 'name' => 'Quick fix']);
+    $short_item->values()->createMany([
+        ['column_id' => $people->id, 'value' => [$user->id]],
+        ['column_id' => $date->id, 'value' => '2026-11-06'],
+    ]);
+
+    $items = collect($this->actingAs($user, 'api')->getJson('/api/my-work')->assertOk()->json('items'))->keyBy('name');
+
+    expect($items['Site migration']['date'])->toBe(['value' => '2026-12-04', 'start' => null]);
+    expect($items['Site migration']['timeline'])->toBe(['start' => '2026-11-02', 'end' => '2026-12-04']);
+    expect($items['Quick fix']['timeline'])->toBeNull();
 });
 
 test('my work returns the priority, the assignees and the update count of each item', function () {
