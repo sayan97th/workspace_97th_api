@@ -342,3 +342,61 @@ test('a plain member cannot give other people access to a board', function () {
         ->postJson("/api/boards/{$board->id}/collaborators", ['user_ids' => [$other->id]])
         ->assertForbidden();
 });
+
+test('the roster lists workspace members who can open a main board apart from the people added to it', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $viewer = User::factory()->create();
+    $guest = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+    $workspace->users()->attach($viewer->id, ['role' => 'viewer']);
+    $board = createInvitationTestBoard($workspace, $owner);
+    $board->collaborators()->attach($guest->id, ['invited_by' => $owner->id]);
+
+    $response = $this->actingAs($owner, 'api')->getJson("/api/boards/{$board->id}/invitations");
+
+    $response->assertOk()
+        ->assertJsonCount(2, 'data')
+        ->assertJsonPath('data.0.access_via', 'owner')
+        ->assertJsonPath('data.0.workspace_role', 'owner')
+        ->assertJsonPath('data.1.id', $guest->id)
+        ->assertJsonPath('data.1.is_guest', true)
+        ->assertJsonPath('workspace_access.applies', true)
+        ->assertJsonPath('workspace_access.total', 2);
+
+    $workspace_members = collect($response->json('workspace_access.members'))->keyBy('id');
+    expect($workspace_members->keys()->all())->toEqualCanonicalizing([$member->id, $viewer->id])
+        ->and($workspace_members[$member->id]['kind'])->toBe('member')
+        ->and($workspace_members[$member->id]['removable'])->toBeFalse()
+        ->and($workspace_members[$member->id]['is_guest'])->toBeFalse()
+        ->and($workspace_members[$viewer->id]['is_guest'])->toBeTrue();
+});
+
+test('a private board roster only lists the people who can open it', function () {
+    $creator = User::factory()->create();
+    $workspace_owner = User::factory()->create();
+    $member = User::factory()->create();
+    $workspace = Workspace::factory()->create();
+    $workspace->users()->attach($workspace_owner->id, ['role' => 'owner']);
+    $workspace->users()->attach($creator->id, ['role' => 'member']);
+    $workspace->users()->attach($member->id, ['role' => 'member']);
+    $board = createInvitationTestBoard($workspace, $creator, WorkspaceNavigationItem::BOARD_TYPE_PRIVATE);
+    $invitation = BoardInvitation::factory()->create([
+        'board_id' => $board->id,
+        'email' => 'pending@example.com',
+        'invited_by' => $creator->id,
+    ]);
+
+    $response = $this->actingAs($creator, 'api')->getJson("/api/boards/{$board->id}/invitations");
+
+    $response->assertOk()
+        ->assertJsonCount(2, 'data')
+        ->assertJsonPath('data.0.id', $creator->id)
+        ->assertJsonPath('data.1.id', $invitation->id)
+        ->assertJsonPath('data.1.access_via', 'invitation')
+        ->assertJsonPath('data.1.invited_by_name', $creator->full_name)
+        ->assertJsonPath('workspace_access.applies', false)
+        ->assertJsonCount(0, 'workspace_access.members');
+});

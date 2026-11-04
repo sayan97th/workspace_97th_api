@@ -13,6 +13,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Slack\SlackNotifier;
 use App\Support\BoardEditGate;
 use App\Support\BoardManagementGate;
+use App\Support\VisibleBoards;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -31,26 +32,46 @@ class BoardInvitationController extends Controller
     /**
      * GET /api/boards/{item}/invitations
      *
-     * Everyone who already has access to the board (workspace owners, then
-     * explicit board collaborators), followed by anyone with a still-pending
+     * Everyone who was given access to the board (its owners, then explicit
+     * board members and guests), followed by anyone with a still-pending
      * invitation. Powers the "Invite to this board" dialog's roster.
+     *
+     * `workspace_access` lists the people who can also open the board only
+     * because they belong to its workspace (every board except a private
+     * one), kept apart from `data` so the header's invite count and the
+     * Permissions panel keep counting just the people added on purpose.
+     *
+     * Like {@see VisibleBoards}, a private board is never visible through a
+     * workspace role, so workspace owners are only listed as owners of a
+     * main or shareable board.
      */
     public function index(WorkspaceNavigationItem $item): JsonResponse
     {
-        $item->load(['creator', 'workspace.owners', 'collaborators']);
+        $item->load(['creator', 'owner', 'workspace.owners', 'collaborators']);
+
+        $is_private = $item->board_type === WorkspaceNavigationItem::BOARD_TYPE_PRIVATE;
+
+        /** @var array<int, string> $workspace_roles user id => workspace role */
+        $workspace_roles = DB::table('workspace_user')
+            ->where('workspace_id', $item->workspace_id)
+            ->pluck('role', 'user_id')
+            ->all();
 
         $known_emails = collect();
         $people = collect();
 
         // The board's creator leads the roster as an owner, the way monday's Share dialog shows it.
-        $owners = collect([$item->creator])->filter()->merge($item->workspace->owners);
+        $owners = collect([$item->creator, $item->owner])->filter();
+        if (! $is_private) {
+            $owners = $owners->merge($item->workspace->owners);
+        }
 
         foreach ($owners as $owner) {
             if ($known_emails->contains(strtolower($owner->email))) {
                 continue;
             }
             $known_emails->push(strtolower($owner->email));
-            $people->push($this->userEntry('owner', $owner, false));
+            $people->push($this->userEntry('owner', $owner, false, $workspace_roles[$owner->id] ?? null));
         }
 
         foreach ($item->collaborators as $collaborator) {
@@ -58,10 +79,11 @@ class BoardInvitationController extends Controller
                 continue;
             }
             $known_emails->push(strtolower($collaborator->email));
-            $people->push($this->userEntry('collaborator', $collaborator, true));
+            $people->push($this->userEntry('collaborator', $collaborator, true, $workspace_roles[$collaborator->id] ?? null));
         }
 
         $pending_invitations = $item->invitations()
+            ->with('inviter')
             ->whereNull('accepted_at')
             ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))
             ->latest()
@@ -72,11 +94,27 @@ class BoardInvitationController extends Controller
                 continue;
             }
             $known_emails->push(strtolower($invitation->email));
-            $people->push($this->personEntry('invitation', $invitation->id, null, $invitation->email, null, 'pending', true));
+            $people->push($this->invitationEntry($invitation));
+        }
+
+        $workspace_members = collect();
+        if (! $is_private) {
+            $workspace_members = $item->workspace->users()
+                ->orderBy('first_name')
+                ->orderBy('last_name')
+                ->get()
+                ->reject(fn (User $member) => $member->is_deactivated || $known_emails->contains(strtolower($member->email)))
+                ->map(fn (User $member) => $this->userEntry('member', $member, false, $member->pivot->role ?? null))
+                ->values();
         }
 
         return response()->json([
             'data' => $people->values(),
+            'workspace_access' => [
+                'applies' => ! $is_private,
+                'total' => $workspace_members->count(),
+                'members' => $workspace_members,
+            ],
         ]);
     }
 
@@ -157,9 +195,7 @@ class BoardInvitationController extends Controller
             'message' => $invitations->isEmpty()
                 ? 'No new invitations were sent.'
                 : 'Invitations sent successfully.',
-            'data' => $invitations->map(fn (BoardInvitation $invitation) => $this->personEntry(
-                'invitation', $invitation->id, null, $invitation->email, null, 'pending', true
-            ))->values(),
+            'data' => $invitations->map(fn (BoardInvitation $invitation) => $this->invitationEntry($invitation->loadMissing('inviter')))->values(),
             'skipped' => $skipped->values(),
         ], 201);
     }
@@ -210,7 +246,7 @@ class BoardInvitationController extends Controller
 
         return response()->json([
             'message' => $new_members->isEmpty() ? 'Everyone already has access.' : 'Access granted.',
-            'data' => $new_members->map(fn (User $member) => $this->userEntry('collaborator', $member, true))->values(),
+            'data' => $new_members->map(fn (User $member) => $this->userEntry('collaborator', $member, true, $member->pivot->role ?? null))->values(),
         ], 201);
     }
 
@@ -262,18 +298,41 @@ class BoardInvitationController extends Controller
     }
 
     /**
-     * A roster row for someone with an account.
+     * A roster row for someone with an account. `$workspace_role` is their
+     * role in the board's workspace, null when they are not a member of it.
      *
      * @return array<string, mixed>
      */
-    private function userEntry(string $kind, User $person, bool $removable): array
+    private function userEntry(string $kind, User $person, bool $removable, ?string $workspace_role = null): array
     {
-        return $this->personEntry($kind, $person->id, $person->full_name, $person->email, $person->profile_photo_url, 'accepted', $removable, $person->job_title);
+        return $this->personEntry($kind, $person->id, $person->full_name, $person->email, $person->profile_photo_url, 'accepted', $removable, $person->job_title) + [
+            'workspace_role' => $workspace_role,
+            // Accepted board invitees join the workspace as a viewer, someone outside it is a guest too.
+            'is_guest' => $workspace_role === null || $workspace_role === 'viewer',
+        ];
+    }
+
+    /**
+     * A roster row for a still-pending invitation, with when it was last
+     * sent (a resend refreshes it) and when its link stops working.
+     *
+     * @return array<string, mixed>
+     */
+    private function invitationEntry(BoardInvitation $invitation): array
+    {
+        return $this->personEntry('invitation', $invitation->id, null, $invitation->email, null, 'pending', true) + [
+            'workspace_role' => null,
+            'is_guest' => true,
+            'invited_at' => $invitation->updated_at?->toIso8601String(),
+            'expires_at' => $invitation->expires_at?->toIso8601String(),
+            'invited_by_name' => $invitation->inviter?->full_name,
+        ];
     }
 
     /**
      * Shapes one row of the board's "people with access" roster consistently
-     * across the owner/collaborator/pending-invitation cases.
+     * across the owner, collaborator, workspace member and pending invitation
+     * cases. `access_via` says where the access comes from.
      *
      * @return array<string, mixed>
      */
@@ -297,6 +356,12 @@ class BoardInvitationController extends Controller
             'job_title' => $job_title,
             'status' => $status,
             'removable' => $removable,
+            'access_via' => match ($kind) {
+                'owner' => 'owner',
+                'member' => 'workspace',
+                'invitation' => 'invitation',
+                default => 'board',
+            },
         ];
     }
 }
