@@ -244,3 +244,65 @@ test('favorites and recent boards drop private boards the user can no longer see
         ->assertJsonCount(1, 'data')
         ->assertJsonPath('data.0.label', 'Main board');
 });
+
+test('a board created as private from the sidebar is only visible to its creator', function () {
+    $response = $this->actingAs($this->creator, 'api')
+        ->postJson("/api/workspaces/{$this->workspace->slug}/navigation", [
+            'type' => WorkspaceNavigationItem::TYPE_LEAF,
+            'label' => 'Created private',
+            'view_key' => 'board',
+            'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+        ])
+        ->assertCreated()
+        ->assertJsonPath('item.board_type', WorkspaceNavigationItem::BOARD_TYPE_PRIVATE)
+        ->assertJsonPath('item.can_make_private', true);
+
+    $board_id = $response->json('item.id');
+    expect(WorkspaceNavigationItem::find($board_id)->created_by_id)->toBe($this->creator->id);
+
+    $creator_tree = $this->actingAs($this->creator, 'api')
+        ->getJson("/api/workspaces/{$this->workspace->slug}/navigation")
+        ->assertOk();
+    expect(collectTreeLabels($creator_tree->json('data')))->toContain('Created private');
+
+    $member_tree = $this->actingAs($this->member, 'api')
+        ->getJson("/api/workspaces/{$this->workspace->slug}/navigation")
+        ->assertOk();
+    expect(collectTreeLabels($member_tree->json('data')))->not->toContain('Created private');
+
+    $this->actingAs($this->member, 'api')->getJson("/api/boards/{$board_id}")->assertForbidden();
+});
+
+test('a new board defaults to main when no privacy is sent', function () {
+    $this->actingAs($this->creator, 'api')
+        ->postJson("/api/workspaces/{$this->workspace->slug}/navigation", [
+            'type' => WorkspaceNavigationItem::TYPE_LEAF,
+            'label' => 'Created main',
+            'view_key' => 'board',
+        ])
+        ->assertCreated()
+        ->assertJsonPath('item.board_type', WorkspaceNavigationItem::BOARD_TYPE_MAIN);
+});
+
+test('a folder is never stored as private', function () {
+    $this->actingAs($this->creator, 'api')
+        ->postJson("/api/workspaces/{$this->workspace->slug}/navigation", [
+            'type' => WorkspaceNavigationItem::TYPE_GROUP,
+            'label' => 'Created folder',
+            'board_type' => WorkspaceNavigationItem::BOARD_TYPE_PRIVATE,
+        ])
+        ->assertCreated()
+        ->assertJsonPath('item.board_type', WorkspaceNavigationItem::BOARD_TYPE_MAIN);
+});
+
+test('an unknown privacy is rejected when creating a board', function () {
+    $this->actingAs($this->creator, 'api')
+        ->postJson("/api/workspaces/{$this->workspace->slug}/navigation", [
+            'type' => WorkspaceNavigationItem::TYPE_LEAF,
+            'label' => 'Bad privacy',
+            'view_key' => 'board',
+            'board_type' => 'secret',
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('board_type');
+});

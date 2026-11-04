@@ -11,30 +11,28 @@ use App\Models\UserSession;
 use App\Support\AuditLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use PHPOpenSourceSaver\JWTAuth\Facades\JWTAuth;
 
 /**
- * Lets a `super_admin` or `admin` briefly sign in as another account to reproduce and
- * troubleshoot what that person sees, without knowing or resetting their password.
- * Deliberately narrow in scope: {@see store()} mints a short-lived JWT for the target that
- * carries `impersonator_id`/`impersonation_session_id` custom claims on top of the target's
- * normal claims, and {@see stop()} blacklists that token and closes the
- * {@see ImpersonationSession} row it opened. Both ends of every session are written to the
- * account-wide audit trail via {@see AuditLogger}.
+ * Lets a `super_admin` briefly sign in as another account to reproduce and troubleshoot what
+ * that person sees, without knowing or resetting their password. Deliberately narrow in scope:
+ * {@see store()} mints a short lived JWT for the target that carries
+ * `impersonator_id`/`impersonation_session_id` custom claims on top of the target's normal
+ * claims, and {@see stop()} blacklists that token and closes the {@see ImpersonationSession}
+ * row it opened. Both ends of every session are written to the account wide audit trail via
+ * {@see AuditLogger}.
  *
- * Route-level `role:super_admin,admin` middleware (see routes/api.php) already keeps `staff`
- * and `client` accounts out of {@see store()} entirely; the checks in here layer the
- * finer-grained "who can impersonate whom" boundary on top of that floor.
+ * Route level `role:super_admin` middleware (see routes/api.php) already keeps every other role
+ * out of {@see store()}, the checks in here repeat that and add the "who can be impersonated"
+ * boundary on top.
  */
 class ImpersonationController extends Controller
 {
     use IssuesJwtTokens;
 
-    /** Nobody may impersonate an account holding this role, not even another super_admin. */
-    private const PROTECTED_ROLE = 'super_admin';
-
-    /** Roles a plain `admin` (i.e. not a `super_admin`) is not allowed to impersonate. */
-    private const STAFF_ROLES = ['super_admin', 'admin', 'staff'];
+    /** The only role allowed to impersonate, and also the one role nobody may impersonate. */
+    private const IMPERSONATOR_ROLE = 'super_admin';
 
     /**
      * Impersonation tokens are intentionally shorter-lived than a normal login and, unlike a
@@ -52,8 +50,8 @@ class ImpersonationController extends Controller
         /** @var User $actor */
         $actor = $request->user();
 
-        // Defense in depth: the route's `role:super_admin,admin` middleware already keeps a
-        // plain client/staff token out, but if the *current* token is itself an impersonation
+        // Defense in depth: the route's `role:super_admin` middleware already keeps every other
+        // role out, but if the *current* token is itself an impersonation
         // token (however that happened), refuse to chain a second session on top of it.
         if ($this->guard()->payload()->get('impersonator_id')) {
             return response()->json([
@@ -73,26 +71,36 @@ class ImpersonationController extends Controller
             return response()->json(['message' => 'You do not have permission to impersonate this account.'], 403);
         }
 
-        $session = ImpersonationSession::create([
-            'admin_id' => $actor->id,
-            'target_user_id' => $user->id,
-            'admin_session_jti' => $this->guard()->payload()->get('jti'),
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-            'started_at' => now(),
-        ]);
+        $admin_session_jti = $this->guard()->payload()->get('jti');
 
-        $this->guard()->factory()->setTTL(self::IMPERSONATION_TTL_MINUTES);
+        $this->closeStaleSessions($actor);
 
-        $token = $this->guard()->claims([
-            'impersonator_id' => $actor->id,
-            'impersonation_session_id' => $session->id,
-        ])->login($user);
+        // The whole impersonation lives inside one transaction so a failure while minting the
+        // token or recording the session never leaves an orphaned, never-ending session row.
+        [$session, $token, $payload] = DB::transaction(function () use ($actor, $user, $request, $admin_session_jti) {
+            $session = ImpersonationSession::create([
+                'admin_id' => $actor->id,
+                'target_user_id' => $user->id,
+                'admin_session_jti' => $admin_session_jti,
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'started_at' => now(),
+            ]);
+
+            $token = $this->issueImpersonationToken($actor, $user, $session);
+            $payload = JWTAuth::setToken($token)->getPayload();
+
+            $session->update(['impersonation_jti' => $payload->get('jti')]);
+
+            return [$session, $token, $payload];
+        });
 
         $user->load('roles:id,name,display_name');
-        $this->recordSession($token, $user, null);
 
-        $session->update(['impersonation_jti' => JWTAuth::setToken($token)->getPayload()->get('jti')]);
+        // Listed in the target's Session history like any other device, so the impersonation
+        // token can also be revoked from there and is rejected by `EnsureSessionIsActive`.
+        $session_expires_at = $this->sessionExpiresAt($payload);
+        $this->recordSession($payload, $session_expires_at, $user, null);
 
         AuditLogger::log(
             'user.impersonation_started',
@@ -104,7 +112,9 @@ class ImpersonationController extends Controller
         return response()->json([
             'access_token' => $token,
             'token_type' => 'bearer',
-            'expires_in' => $this->guard()->factory()->getTTL() * 60,
+            'expires_in' => self::IMPERSONATION_TTL_MINUTES * 60,
+            'remember' => false,
+            'session_expires_at' => $session_expires_at->toIso8601String(),
             'user' => new ProfileResource($user),
             'impersonation' => [
                 'session_id' => $session->id,
@@ -152,7 +162,7 @@ class ImpersonationController extends Controller
         AuditLogger::log(
             'user.impersonation_ended',
             "Stopped impersonating {$target->full_name}.",
-            User::find($admin_id),
+            is_numeric($admin_id) ? User::find((int) $admin_id) : null,
             ['target_user_id' => $target->id, 'impersonation_session_id' => $session_id],
         );
 
@@ -163,20 +173,58 @@ class ImpersonationController extends Controller
     }
 
     /**
-     * Mirrors {@see \App\Http\Controllers\Admin\User\UserController::actorCanManage()}'s
-     * role-hierarchy boundary: a plain `admin` may only impersonate client-tier accounts, while
-     * a `super_admin` may impersonate anyone except another `super_admin`.
+     * An impersonation token that simply ran out (or a tab that was closed mid session) never
+     * reaches {@see stop()}, so its row would stay open forever. Any session this admin still has
+     * open when starting a new one is by definition abandoned, since chaining is refused above.
+     */
+    private function closeStaleSessions(User $actor): void
+    {
+        ImpersonationSession::where('admin_id', $actor->id)
+            ->whereNull('ended_at')
+            ->get()
+            ->each(function (ImpersonationSession $stale_session) {
+                $expires_at = $stale_session->started_at->copy()->addMinutes(self::IMPERSONATION_TTL_MINUTES);
+                $is_expired = $expires_at->isPast();
+
+                $stale_session->update([
+                    'ended_at' => $is_expired ? $expires_at : now(),
+                    'ended_reason' => $is_expired ? 'expired' : 'superseded',
+                ]);
+
+                if ($stale_session->impersonation_jti) {
+                    UserSession::where('jti', $stale_session->impersonation_jti)
+                        ->whereNull('revoked_at')
+                        ->update(['revoked_at' => now()]);
+                }
+            });
+    }
+
+    /**
+     * Mints the target's short lived impersonation token. It carries the usual
+     * `session_expires_at`/`remember` claims (see {@see IssuesJwtTokens::issueToken()}) capped at
+     * the impersonation window, plus the `impersonator_id`/`impersonation_session_id` claims
+     * that {@see stop()} and `AuthController::refresh()` rely on.
+     */
+    private function issueImpersonationToken(User $actor, User $target, ImpersonationSession $session): string
+    {
+        $this->guard()->factory()->setTTL(self::IMPERSONATION_TTL_MINUTES);
+
+        return $this->guard()
+            ->claims([
+                'remember' => false,
+                'session_expires_at' => now()->addMinutes(self::IMPERSONATION_TTL_MINUTES)->timestamp,
+                'impersonator_id' => $actor->id,
+                'impersonation_session_id' => $session->id,
+            ])
+            ->login($target);
+    }
+
+    /**
+     * Only a `super_admin` may impersonate, and never another `super_admin`. Repeats the route
+     * middleware on purpose so the rule holds even if the route is ever regrouped.
      */
     private function actorCanImpersonate(User $actor, User $target): bool
     {
-        if ($target->hasRole(self::PROTECTED_ROLE)) {
-            return false;
-        }
-
-        if ($actor->hasRole('super_admin')) {
-            return true;
-        }
-
-        return $target->roles->pluck('name')->intersect(self::STAFF_ROLES)->isEmpty();
+        return $actor->hasRole(self::IMPERSONATOR_ROLE) && ! $target->hasRole(self::IMPERSONATOR_ROLE);
     }
 }

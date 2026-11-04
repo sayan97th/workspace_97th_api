@@ -831,10 +831,10 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('users/{user}/password', [AdminUserController::class, 'setPassword']);
             Route::post('users/{user}/send-password-reset-link', [AdminUserController::class, 'sendPasswordResetLink']);
 
-            // Sign in as another account to troubleshoot what they see. Further restricted
-            // inside the controller: a plain admin may only impersonate client-tier accounts,
-            // and nobody may impersonate a super_admin.
-            Route::post('users/{user}/impersonate', [ImpersonationController::class, 'store']);
+            // Sign in as another account to troubleshoot what they see. Super admins only, on
+            // top of this group's admin floor, and nobody may impersonate another super_admin.
+            Route::post('users/{user}/impersonate', [ImpersonationController::class, 'store'])
+                ->middleware('role:super_admin');
         });
 
         // Role management — super_admin only

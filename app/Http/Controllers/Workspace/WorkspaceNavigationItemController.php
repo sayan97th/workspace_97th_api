@@ -110,6 +110,12 @@ class WorkspaceNavigationItemController extends Controller
             AccountPermissions::authorize($request->user(), AccountPermissions::CREATE_BOARDS);
         }
 
+        // Privacy only applies to boards, docs and dashboards. A folder is always "main", so a
+        // private flag sent with one can never hide a whole folder from its workspace.
+        $board_type = $validated['type'] === WorkspaceNavigationItem::TYPE_LEAF
+            ? ($validated['board_type'] ?? WorkspaceNavigationItem::BOARD_TYPE_MAIN)
+            : WorkspaceNavigationItem::BOARD_TYPE_MAIN;
+
         $item = $workspace->navigationItems()->create([
             'parent_id' => $parent_id,
             'type' => $validated['type'],
@@ -121,7 +127,7 @@ class WorkspaceNavigationItemController extends Controller
             'view_key' => $validated['view_key'] ?? null,
             'href' => $validated['href'] ?? null,
             'display_style' => $validated['display_style'] ?? null,
-            'board_type' => $validated['board_type'] ?? WorkspaceNavigationItem::BOARD_TYPE_MAIN,
+            'board_type' => $board_type,
             'is_priority' => $validated['is_priority'] ?? false,
             'position' => $validated['position'] ?? $this->nextPosition($workspace, $parent_id),
             'created_by_id' => $request->user()?->id,
