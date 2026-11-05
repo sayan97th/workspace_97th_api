@@ -124,6 +124,15 @@ class UpdateBoardColumnRequest extends FormRequest
             'config.reminder' => ['sometimes', 'nullable', 'array'],
             'config.reminder.enabled' => ['sometimes', 'boolean'],
             'config.reminder.days_before' => ['sometimes', 'integer', 'min:0', 'max:365'],
+            // Date columns only: fill new items with their creation date, see BoardDateAutoFiller.
+            'config.auto_fill' => ['sometimes', 'nullable', 'array'],
+            'config.auto_fill.enabled' => ['sometimes', 'boolean'],
+            'config.auto_fill.include_time' => ['sometimes', 'boolean'],
+            // Date, Creation log and Last updated columns: how the cells show their dates. Display only, values never change.
+            'config.date_display' => ['sometimes', 'nullable', 'array'],
+            'config.date_display.format' => ['required_with:config.date_display', 'string', Rule::in(BoardColumn::DATE_DISPLAY_FORMATS)],
+            'config.date_display.time_format' => ['sometimes', 'string', Rule::in(['12', '24'])],
+            'config.date_display.show_time' => ['sometimes', 'boolean'],
             'hideable' => ['sometimes', 'boolean'],
             'pinnable' => ['sometimes', 'boolean'],
         ];

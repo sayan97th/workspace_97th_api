@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Concerns\BelongsToBoardView;
+use App\Services\Board\BoardDateAutoFiller;
 use App\Services\Board\MirrorColumnResolver;
 use App\Support\FormulaReferences;
 use Database\Factories\BoardColumnFactory;
@@ -76,6 +77,11 @@ class BoardColumn extends Model
 
     public const TYPE_PEOPLE = 'people';
 
+    /**
+     * A single date, stored as `Y-m-d`, or `Y-m-d\TH:i` when a time is set.
+     * `config.auto_fill` (`{enabled, include_time}`) makes it fill itself with
+     * each new item's creation date, see {@see dateAutoFill()} and {@see BoardDateAutoFiller}.
+     */
     public const TYPE_DATE = 'date';
 
     public const TYPE_TAGS = 'tags';
@@ -202,6 +208,14 @@ class BoardColumn extends Model
     public const TYPE_PROGRESS_TRACKING = 'progress_tracking';
 
     /**
+     * How a Date, Creation log or Last updated column may show its dates (`config.date_display.format`).
+     * `auto` is each type's own default. Display only, a stored date never changes with it.
+     *
+     * @var array<int, string>
+     */
+    public const DATE_DISPLAY_FORMATS = ['auto', 'month_day_year', 'day_month_year', 'weekday_month_day', 'month_day', 'us_numeric', 'eu_numeric', 'iso'];
+
+    /**
      * Column types whose value is computed rather than written by a user (or, for a button, never
      * stored at all), so no edit can ever "change" them and they are not offered to a
      * `column_changed` automation.
@@ -238,6 +252,22 @@ class BoardColumn extends Model
         $mode = $this->config['dependency_mode'] ?? null;
 
         return in_array($mode, self::DEPENDENCY_MODES, true) ? $mode : self::DEPENDENCY_MODE_NONE;
+    }
+
+    /**
+     * A Date column's auto fill settings. A column saved before auto fill
+     * existed has none and is off. The time is included unless turned off.
+     *
+     * @return array{enabled: bool, include_time: bool}
+     */
+    public function dateAutoFill(): array
+    {
+        $auto_fill = is_array($this->config['auto_fill'] ?? null) ? $this->config['auto_fill'] : [];
+
+        return [
+            'enabled' => $this->type === self::TYPE_DATE && ($auto_fill['enabled'] ?? false) === true,
+            'include_time' => ($auto_fill['include_time'] ?? true) !== false,
+        ];
     }
 
     /**

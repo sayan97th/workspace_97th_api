@@ -14,6 +14,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
+use App\Services\Board\BoardDateAutoFiller;
 use App\Services\Board\BoardItemIdAssigner;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\ColumnPermissionService;
@@ -30,6 +31,7 @@ class BoardColumnController extends Controller
         private readonly BoardViewResolver $view_resolver,
         private readonly ColumnPermissionService $column_permissions,
         private readonly BoardItemIdAssigner $item_id_assigner,
+        private readonly BoardDateAutoFiller $date_auto_filler,
     ) {}
 
     /**
@@ -134,18 +136,67 @@ class BoardColumnController extends Controller
             $validated['config'] = $this->withDependencyDefaults(BoardColumn::TYPE_DEPENDENCY, $validated['config'] ?? $column->config, $column->board_view_id, $column->scope);
         }
 
-        $was_item_id = $column->type === BoardColumn::TYPE_AUTO_NUMBER;
-        $column->fill($validated)->save();
+        // A Creation log or Last updated column turned back into a Date column keeps the dates it showed.
+        $date_source = ($validated['type'] ?? null) === BoardColumn::TYPE_DATE ? $this->computedDateSource($column->type) : null;
 
-        // A column turned into an Item ID column swaps its old values for the item ids.
-        if (! $was_item_id) {
-            $this->item_id_assigner->backfillColumn($column);
+        // From a Creation log it also keeps filling new items, unless the request says otherwise.
+        if ($date_source === BoardDateAutoFiller::SOURCE_CREATED && ! is_array($validated['config']['auto_fill'] ?? null)) {
+            $validated['config'] = [...($validated['config'] ?? $column->config ?? []), 'auto_fill' => ['enabled' => true, 'include_time' => true]];
         }
+
+        $was_item_id = $column->type === BoardColumn::TYPE_AUTO_NUMBER;
+        $filled_values = DB::transaction(function () use ($column, $validated, $was_item_id, $date_source) {
+            $column->fill($validated)->save();
+
+            // A column turned into an Item ID column swaps its old values for the item ids.
+            if (! $was_item_id) {
+                $this->item_id_assigner->backfillColumn($column);
+            }
+
+            return $date_source !== null ? $this->date_auto_filler->fillEmptyCells($column, $date_source) : [];
+        });
 
         return response()->json([
             'message' => 'Column updated successfully.',
             'column' => new BoardColumnResource($column->fresh()),
+            // Item id => the date written into its empty cell, so the client can patch its rows without a reload.
+            'filled_values' => (object) $filled_values,
         ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/columns/{column}/fill-dates
+     *
+     * A Date column's "Fill empty cells": writes each item's creation date
+     * into the cells that are still empty, leaving every date already set.
+     */
+    public function fillDates(Request $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
+    {
+        $this->ensureColumnBelongsToBoard($item, $column);
+        BoardEditGate::authorizeStructure($item, $request->user());
+
+        if ($column->type !== BoardColumn::TYPE_DATE) {
+            throw ValidationException::withMessages(['column' => 'Only Date columns can be filled with creation dates.']);
+        }
+
+        $filled_values = DB::transaction(fn () => $this->date_auto_filler->fillEmptyCells($column, BoardDateAutoFiller::SOURCE_CREATED));
+
+        return response()->json([
+            'message' => count($filled_values) === 1 ? '1 empty cell filled.' : count($filled_values).' empty cells filled.',
+            'filled_values' => (object) $filled_values,
+        ]);
+    }
+
+    /**
+     * Where a read only date column type gets its date from, null for any other type.
+     */
+    private function computedDateSource(string $type): ?string
+    {
+        return match ($type) {
+            BoardColumn::TYPE_CREATION_LOG => BoardDateAutoFiller::SOURCE_CREATED,
+            BoardColumn::TYPE_LAST_UPDATED => BoardDateAutoFiller::SOURCE_LAST_UPDATED,
+            default => null,
+        };
     }
 
     /**

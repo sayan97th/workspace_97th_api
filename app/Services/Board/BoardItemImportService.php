@@ -457,6 +457,9 @@ class BoardItemImportService
         $caster = new ImportedCellValueCaster($board, $users);
         $item_id_column_ids = $this->itemIdColumnIds($view, BoardColumn::SCOPE_ITEM);
         $subitem_id_column_ids = $subitems_by_row === [] ? [] : $this->itemIdColumnIds($view, BoardColumn::SCOPE_SUBITEM);
+        $date_auto_filler = app(BoardDateAutoFiller::class);
+        $auto_fill_columns = $date_auto_filler->autoFillColumns($view->id, BoardColumn::SCOPE_ITEM)->all();
+        $subitem_auto_fill_columns = $subitems_by_row === [] ? [] : $date_auto_filler->autoFillColumns($view->id, BoardColumn::SCOPE_SUBITEM)->all();
         $created = 0;
         $updated = 0;
         $skipped = 0;
@@ -476,6 +479,7 @@ class BoardItemImportService
             DB::transaction(function () use (
                 $chunk, $board, $row_groups, $groups_by_name, $default_group, $name_index, $index_to_column, $duplicate_mode, $match_index,
                 &$existing_by_key, $caster, $item_id_column_ids, $subitem_id_column_ids, $subitems_by_row, $subitem_definitions, $subitem_columns,
+                $date_auto_filler, $auto_fill_columns, $subitem_auto_fill_columns,
                 &$created, &$updated, &$skipped, &$subitems_created, &$next_positions,
             ) {
                 foreach ($chunk as $row_index => $row) {
@@ -525,6 +529,8 @@ class BoardItemImportService
                         $values[] = ['column_id' => $column_id, 'value' => $item->id];
                     }
 
+                    $values = $this->withAutoFilledDates($values, $item, $auto_fill_columns, $date_auto_filler);
+
                     if ($values !== []) {
                         $item->values()->createMany($values);
                     }
@@ -536,7 +542,7 @@ class BoardItemImportService
                     // A new item is also the only one its subitems are added to: an updated
                     // item keeps the subitems it already has rather than getting a second copy.
                     foreach (array_values($subitems_by_row[$row_index] ?? []) as $position => $subitem_row) {
-                        $this->createSubitem($board, $item, $position, $subitem_row, $subitem_definitions, $subitem_columns, $subitem_id_column_ids, $caster);
+                        $this->createSubitem($board, $item, $position, $subitem_row, $subitem_definitions, $subitem_columns, $subitem_id_column_ids, $caster, $subitem_auto_fill_columns, $date_auto_filler);
                         $subitems_created++;
                     }
 
@@ -1026,6 +1032,8 @@ class BoardItemImportService
         array $columns,
         array $item_id_column_ids,
         ImportedCellValueCaster $caster,
+        array $auto_fill_columns,
+        BoardDateAutoFiller $date_auto_filler,
     ): void {
         [$name, $overflow] = $this->splitOverflowingName($subitem_row['name']);
 
@@ -1062,9 +1070,35 @@ class BoardItemImportService
             }
         }
 
+        $values = $this->withAutoFilledDates($values, $subitem, $auto_fill_columns, $date_auto_filler);
+
         if ($values !== []) {
             $subitem->values()->createMany($values);
         }
+    }
+
+    /**
+     * Adds the creation date for every auto fill Date column the imported row
+     * left empty, see {@see BoardDateAutoFiller}. A date from the file wins.
+     *
+     * @param  array<int, array{column_id: int, value: mixed}>  $values
+     * @param  array<int, BoardColumn>  $auto_fill_columns
+     * @return array<int, array{column_id: int, value: mixed}>
+     */
+    private function withAutoFilledDates(array $values, BoardItem $item, array $auto_fill_columns, BoardDateAutoFiller $date_auto_filler): array
+    {
+        $filled_column_ids = array_column(
+            array_filter($values, fn (array $entry) => ! BoardDateAutoFiller::isEmptyValue($entry['value'])),
+            'column_id',
+        );
+
+        foreach ($auto_fill_columns as $column) {
+            if (! in_array($column->id, $filled_column_ids, true)) {
+                $values[] = ['column_id' => $column->id, 'value' => $date_auto_filler->valueFor($item, $column)];
+            }
+        }
+
+        return $values;
     }
 
     /**

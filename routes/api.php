@@ -555,6 +555,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('{column}/permissions', [BoardColumnController::class, 'updatePermissions']);
             Route::patch('{column}/move', [BoardColumnController::class, 'move']);
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
+            // Date columns only: "Fill empty cells" with each item's creation date.
+            Route::post('{column}/fill-dates', [BoardColumnController::class, 'fillDates']);
             // Connect boards column: the cell picker's boards, groups and items, and its "Boards settings".
             Route::get('{column}/connect-items', [BoardColumnConnectController::class, 'items']);
             Route::get('{column}/connect-settings', [BoardColumnConnectController::class, 'settings']);

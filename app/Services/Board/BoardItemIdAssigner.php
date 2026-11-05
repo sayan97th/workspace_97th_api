@@ -15,12 +15,20 @@ use App\Models\BoardItemValue;
  */
 class BoardItemIdAssigner
 {
+    public function __construct(private readonly BoardDateAutoFiller $date_auto_filler) {}
+
     /**
      * Writes the item's id into every Item ID column of the tab and scope it
      * lives in, replacing a value carried over from somewhere else.
+     *
+     * Every path that lands an item on a tab (create, duplicate, forms,
+     * recurring items, automations, moves) calls this, so it is also where an
+     * auto fill Date column gets the item's creation date, see {@see BoardDateAutoFiller}.
      */
     public function assignToItem(BoardItem $board_item, int $board_view_id, string $scope): void
     {
+        $this->date_auto_filler->fillItem($board_item, $board_view_id, $scope);
+
         $column_ids = BoardColumn::where('board_view_id', $board_view_id)
             ->where('scope', $scope)
             ->where('type', BoardColumn::TYPE_AUTO_NUMBER)
