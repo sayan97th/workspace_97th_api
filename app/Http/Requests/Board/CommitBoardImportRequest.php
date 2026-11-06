@@ -39,7 +39,7 @@ class CommitBoardImportRequest extends FormRequest
             'group_mode' => ['sometimes', 'string', Rule::in([BoardItemImportService::GROUP_MODE_SINGLE, BoardItemImportService::GROUP_MODE_FILE])],
             'import_subitems' => ['sometimes', 'boolean'],
 
-            'mappings' => ['required', 'array', 'min:1'],
+            'mappings' => ['required', 'array', 'min:1', 'max:500'],
             'mappings.*.source_index' => ['required', 'integer', 'min:0'],
             'mappings.*.mode' => ['required', 'string', Rule::in(['name', 'map', 'create', 'skip'])],
             'mappings.*.target_column_id' => ['sometimes', 'nullable', 'integer'],

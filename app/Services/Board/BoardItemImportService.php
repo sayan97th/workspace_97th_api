@@ -921,7 +921,7 @@ class BoardItemImportService
         [$groups_by_name, $default_group, $groups_created] = DB::transaction(fn () => $uses_file_groups
             ? $this->resolveFileGroups($board, $view, $row_groups, $options['new_group_name'] ?? null)
             : [[], ...$this->resolveSingleTargetGroup($board, $view, $options)]);
-        [$name_index, $index_to_column, $columns_created] = DB::transaction(
+        [$name_index, $column_targets, $columns_created] = DB::transaction(
             fn () => $this->resolveMappings($board, $view, $headers, $rows, $options['mappings'], $parsed['column_options'] ?? [])
         );
         $cell_assets = $parsed['cell_assets'] ?? [];
@@ -937,7 +937,7 @@ class BoardItemImportService
         $match_index = $options['match_source_index'] ?? $name_index;
         $lookup_group_ids = $uses_file_groups ? $view->groups()->pluck('id')->all() : [$default_group->id];
         $existing_by_key = $duplicate_mode !== 'add'
-            ? $this->buildExistingItemLookup($board, $lookup_group_ids, $match_index, $name_index, $index_to_column)
+            ? $this->buildExistingItemLookup($board, $lookup_group_ids, $match_index, $name_index, $column_targets)
             : [];
 
         $caster = new ImportedCellValueCaster($board, $users);
@@ -963,7 +963,7 @@ class BoardItemImportService
             }
 
             DB::transaction(function () use (
-                $chunk, $board, $row_groups, $groups_by_name, $default_group, $name_index, $index_to_column, $duplicate_mode, $match_index,
+                $chunk, $board, $row_groups, $groups_by_name, $default_group, $name_index, $column_targets, $duplicate_mode, $match_index,
                 &$existing_by_key, $caster, $item_id_column_ids, $subitem_id_column_ids, $subitems_by_row, $subitem_definitions, $subitem_columns,
                 $date_auto_filler, $auto_fill_columns, $subitem_auto_fill_columns, $cell_assets, $image_variants,
                 &$created, &$updated, &$skipped, &$subitems_created, &$next_positions,
@@ -972,7 +972,7 @@ class BoardItemImportService
                     $name_raw = trim($row[$name_index] ?? '');
                     [$name, $overflow] = $this->splitOverflowingName($name_raw !== '' ? $name_raw : 'Untitled item');
 
-                    [$values, $linked_cells] = $this->castRowValues($index_to_column, $row, $caster);
+                    [$values, $linked_cells] = $this->castRowValues($column_targets, $row, $caster);
 
                     $match_raw = $match_index === $name_index ? $name_raw : trim($row[$match_index] ?? '');
                     $match_key = $this->normalizeForMatch($match_raw);
@@ -986,7 +986,7 @@ class BoardItemImportService
 
                     if ($existing_item !== null && $duplicate_mode === 'update') {
                         $existing_item->fill(['name' => $name, 'description' => $overflow])->save();
-                        $values = $this->withEmbeddedFiles($values, $cell_assets[$row_index] ?? [], $index_to_column, $existing_item->id, $image_variants);
+                        $values = $this->withEmbeddedFiles($values, $cell_assets[$row_index] ?? [], $column_targets, $existing_item->id, $image_variants);
 
                         foreach ($values as $entry) {
                             $existing_item->values()->updateOrCreate(['column_id' => $entry['column_id']], ['value' => $entry['value']]);
@@ -1011,7 +1011,7 @@ class BoardItemImportService
                         'position' => $next_positions[$group->id]++,
                     ]);
 
-                    $values = $this->withEmbeddedFiles($values, $cell_assets[$row_index] ?? [], $index_to_column, $item->id, $image_variants);
+                    $values = $this->withEmbeddedFiles($values, $cell_assets[$row_index] ?? [], $column_targets, $item->id, $image_variants);
 
                     // Like monday.com, an item's Item ID is the item's own id.
                     foreach ($item_id_column_ids as $column_id) {
@@ -1628,19 +1628,20 @@ class BoardItemImportService
      * Each staged file is copied into the item's own folder, exactly where an
      * upload from the cell lands, with the same thumbnail and preview
      * variants (see {@see CellImageVariantService}). Files of a cell mapped
-     * to any other type, or not imported, are left out.
+     * to any other type, or not imported, are left out. A file column mapped
+     * to several Files columns gives each one its own copy of every file.
      *
      * @param  array<int, array{column_id: int, value: mixed}>  $values
      * @param  array<int, array<int, StagedAsset>>  $row_assets  column index => staged files
-     * @param  array<int, BoardColumn>  $index_to_column
+     * @param  array<int, array{0: int, 1: BoardColumn}>  $column_targets
      * @return array<int, array{column_id: int, value: mixed}>
      */
-    private function withEmbeddedFiles(array $values, array $row_assets, array $index_to_column, int $item_id, CellImageVariantService $image_variants): array
+    private function withEmbeddedFiles(array $values, array $row_assets, array $column_targets, int $item_id, CellImageVariantService $image_variants): array
     {
-        foreach ($row_assets as $column_index => $assets) {
-            $column = $index_to_column[$column_index] ?? null;
+        foreach ($column_targets as [$column_index, $column]) {
+            $assets = $row_assets[$column_index] ?? [];
 
-            if ($column === null || $column->type !== BoardColumn::TYPE_FILES) {
+            if ($assets === [] || $column->type !== BoardColumn::TYPE_FILES) {
                 continue;
             }
 
@@ -1750,16 +1751,23 @@ class BoardItemImportService
      * {@see MondayBoardImportService::inferColumns()}'s option-building), and
      * `"skip"` drops the column from the import entirely.
      *
+     * The same source column may appear in several rows (the wizard's
+     * "Duplicate" action), each one feeding its own board column, so the
+     * result is a list of `[source index, column]` pairs in the order the
+     * rows were given rather than a map keyed by source index. The name row
+     * can also be duplicated into a regular column.
+     *
      * @param  array<int, string>  $headers
      * @param  array<int, array<int, string>>  $rows
      * @param  array<int, array{source_index: int, mode: string, target_column_id: int|null, new_label: string|null, new_type: string|null}>  $mappings
      * @param  array<int, array<int, string>>  $column_options  the dropdown list each source column's cells picked from, see {@see readSpreadsheet()}
-     * @return array{0: int, 1: array<int, BoardColumn>, 2: int}
+     * @return array{0: int, 1: array<int, array{0: int, 1: BoardColumn}>, 2: int}
      */
     private function resolveMappings(WorkspaceNavigationItem $board, BoardView $view, array $headers, array $rows, array $mappings, array $column_options = []): array
     {
         $name_index = null;
-        $index_to_column = [];
+        $column_targets = [];
+        $mapped_column_ids = [];
         $columns_created = 0;
         $next_position = (int) $view->columns()->where('scope', BoardColumn::SCOPE_ITEM)->max('position') + 1;
 
@@ -1782,8 +1790,10 @@ class BoardItemImportService
                     ->whereNotIn('type', BoardColumn::READ_ONLY_TYPES)
                     ->first();
 
-                if ($column !== null) {
-                    $index_to_column[$index] = $column;
+                // A board column holds one value per item, so only the first row mapped to it writes into it.
+                if ($column !== null && ! isset($mapped_column_ids[$column->id])) {
+                    $mapped_column_ids[$column->id] = true;
+                    $column_targets[] = [$index, $column];
                 }
 
                 continue;
@@ -1813,12 +1823,12 @@ class BoardItemImportService
                     'config' => $this->initialColumnConfig($type, $option_labels, $values, $preset),
                 ]);
 
-                $index_to_column[$index] = $column;
+                $column_targets[] = [$index, $column];
                 $columns_created++;
             }
         }
 
-        return [$name_index ?? 0, $index_to_column, $columns_created];
+        return [$name_index ?? 0, $column_targets, $columns_created];
     }
 
     /**
@@ -1829,12 +1839,22 @@ class BoardItemImportService
      * actually mapped to a real column (nothing to compare against).
      *
      * @param  array<int, int>  $group_ids  the tables whose items count as "already on the board"
-     * @param  array<int, BoardColumn>  $index_to_column
+     * @param  array<int, array{0: int, 1: BoardColumn}>  $column_targets
      * @return array<string, BoardItem>
      */
-    private function buildExistingItemLookup(WorkspaceNavigationItem $board, array $group_ids, int $match_index, int $name_index, array $index_to_column): array
+    private function buildExistingItemLookup(WorkspaceNavigationItem $board, array $group_ids, int $match_index, int $name_index, array $column_targets): array
     {
-        $match_column = $match_index === $name_index ? null : ($index_to_column[$match_index] ?? null);
+        // A duplicated source column compares against the first board column it was mapped to.
+        $match_column = null;
+        if ($match_index !== $name_index) {
+            foreach ($column_targets as [$index, $column]) {
+                if ($index === $match_index) {
+                    $match_column = $column;
+
+                    break;
+                }
+            }
+        }
 
         if ($match_index !== $name_index && $match_column === null) {
             return [];
@@ -1865,16 +1885,16 @@ class BoardItemImportService
      * separately, raw, since they can only be linked once the row's own item
      * exists (see {@see ImportedCellValueCaster::deferLinkedItems()}).
      *
-     * @param  array<int, BoardColumn>  $index_to_column
+     * @param  array<int, array{0: int, 1: BoardColumn}>  $column_targets
      * @param  array<int, string>  $row
      * @return array{0: array<int, array{column_id: int, value: mixed}>, 1: array<int, array{0: BoardColumn, 1: string}>}
      */
-    private function castRowValues(array $index_to_column, array $row, ImportedCellValueCaster $caster): array
+    private function castRowValues(array $column_targets, array $row, ImportedCellValueCaster $caster): array
     {
         $values = [];
         $linked_cells = [];
 
-        foreach ($index_to_column as $index => $column) {
+        foreach ($column_targets as [$index, $column]) {
             $raw = $row[$index] ?? '';
 
             if ($caster->defersLinkedItems($column)) {
