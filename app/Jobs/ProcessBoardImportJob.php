@@ -64,6 +64,7 @@ class ProcessBoardImportJob implements ShouldQueue
         }
 
         if ($import_job->cancel_requested) {
+            $importer->discardStagedAssets($import_job->parsed_payload);
             $import_job->update(['status' => BoardImportJob::STATUS_CANCELLED, 'parsed_payload' => null, 'finished_at' => now()]);
             broadcast(new BoardImportProgressUpdated($import_job));
 
@@ -97,6 +98,7 @@ class ProcessBoardImportJob implements ShouldQueue
             );
         } catch (Throwable $exception) {
             Log::error('Board import failed', ['import_job_id' => $import_job->id, 'exception' => $exception->getMessage()]);
+            $importer->discardStagedAssets($parsed);
             $this->markFailed($import_job, 'The import failed partway through — rows already imported were kept.');
 
             return;

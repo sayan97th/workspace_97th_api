@@ -50,13 +50,25 @@ class BoardImportController extends Controller
      * also reports the groups its rows sat under (`file_groups`) and how many
      * subitem rows it lists (`subitem_count`), so the wizard can offer to keep
      * both.
+     *
+     * A workbook with several sheets lists them (`sheets`) and reads the one
+     * `sheet_index` names, the first by default. Switching sheets uploads the
+     * file again with the new index and the previous `import_token` as
+     * `discard_token`, so the abandoned parse and its staged files are
+     * dropped right away. Embedded files are staged with the parse, their
+     * previews come back on the source columns.
      */
     public function analyze(AnalyzeBoardImportRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $view = $this->view_resolver->resolveForWrite($item, $request->validated('view_id'));
 
         $file = $request->file('file');
-        $parsed = $this->importer->readSpreadsheet($file);
+
+        if ($request->filled('discard_token')) {
+            $this->importer->discardParsedImport((string) $request->validated('discard_token'));
+        }
+
+        $parsed = $this->importer->readSpreadsheet($file, (int) ($request->validated('sheet_index') ?? 0));
 
         if (count($parsed['rows']) === 0) {
             return response()->json([
@@ -70,15 +82,23 @@ class BoardImportController extends Controller
             ], 422);
         }
 
-        $import_token = $this->importer->storeParsedImport($file->getClientOriginalName(), $parsed);
+        $staged = $this->importer->stageParsedImport($file->getClientOriginalName(), $parsed);
 
         $existing_columns = $view->columns()->where('scope', BoardColumn::SCOPE_ITEM)->orderBy('position')->get();
         $groups = $view->groups()->orderBy('position')->get();
-        $source_columns = $this->importer->buildSourceColumns($parsed['headers'], $parsed['rows'], $parsed['combined_from']);
+        $source_columns = $this->importer->buildSourceColumns(
+            $parsed['headers'],
+            $parsed['rows'],
+            $parsed['combined_from'],
+            $staged['payload']['column_options'],
+            $staged['payload']['cell_assets'],
+        );
 
         return response()->json([
-            'import_token' => $import_token,
+            'import_token' => $staged['token'],
             'file_name' => $file->getClientOriginalName(),
+            'sheets' => $parsed['sheets'],
+            'sheet_index' => $parsed['sheet_index'],
             'row_count' => count($parsed['rows']),
             'source_columns' => $source_columns,
             'suggested_mappings' => $this->importer->suggestMappings($source_columns, $existing_columns),

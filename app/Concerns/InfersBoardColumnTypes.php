@@ -63,7 +63,51 @@ trait InfersBoardColumnTypes
         'high' => '#e2445c',
         'medium' => '#fdab3d',
         'low' => '#579bfc',
+        'open' => '#c4c4c4',
+        'to do' => '#c4c4c4',
+        'blocked' => '#e2445c',
+        'closed' => '#9d99b9',
+        'cancelled' => '#797e93',
+        'canceled' => '#797e93',
+        'completed' => '#00c875',
+        'approved' => '#00c875',
+        'needs approval' => '#a25ddc',
+        'in review' => '#a25ddc',
+        'review' => '#a25ddc',
+        'feedback needed' => '#ff642e',
     ];
+
+    /**
+     * The board's own "Priority" column preset (`PRIORITY_PRESET_OPTIONS` on
+     * the frontend), so an imported priority looks like one added from the
+     * column gallery.
+     */
+    private const PRIORITY_OPTION_COLORS = [
+        'critical' => '#333333',
+        'urgent' => '#333333',
+        'highest' => '#333333',
+        'p0' => '#333333',
+        'high' => '#401694',
+        'p1' => '#401694',
+        'medium' => '#5559df',
+        'normal' => '#5559df',
+        'p2' => '#5559df',
+        'low' => '#579bfc',
+        'lowest' => '#579bfc',
+        'p3' => '#579bfc',
+        'p4' => '#579bfc',
+        'best effort' => '#579bfc',
+    ];
+
+    /** Labels that read as a workflow status, so a dropdown list holding them becomes a Status column. */
+    private const STATUS_VOCABULARY = [
+        'done', 'stuck', 'working on it', 'in progress', 'not started', 'on hold', 'blocked', 'open', 'closed', 'to do', 'todo',
+        'completed', 'complete', 'pending', 'in review', 'review', 'approved', 'needs approval', 'cancelled', 'canceled', 'backlog',
+        'ready', 'ready to start', 'waiting', 'feedback needed', 'on track', 'at risk', 'off track', 'new', 'resolved',
+    ];
+
+    /** The option preset a priority column gets, see {@see optionPresetFor()}. */
+    public const OPTION_PRESET_PRIORITY = 'priority';
 
     /**
      * Header labels (case-insensitive, exact) that suggest "this column names
@@ -74,6 +118,7 @@ trait InfersBoardColumnTypes
     private const PEOPLE_LABELS = [
         'owner', 'owners', 'assignee', 'assignees', 'assigned to', 'person', 'people', 'reporter', 'developer',
         'interviewer', 'designer', 'epic owner', 'creative owner', 'expert', 'members', 'team members',
+        'reported by', 'requested by', 'submitted by', 'requester', 'responsible', 'assigned', 'assigned by',
     ];
 
     /**
@@ -162,6 +207,11 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_CHECKBOX, [], $hint === BoardColumn::TYPE_CHECKBOX ? 'Header names a checkbox' : "All {$count} values are checkmarks"];
         }
 
+        // A spreadsheet checkbox exports as TRUE/FALSE.
+        if ($this->shareMatching($values, fn (string $value) => in_array(mb_strtolower($value), ['true', 'false'], true)) === 1.0) {
+            return [BoardColumn::TYPE_CHECKBOX, [], 'Values are TRUE/FALSE checkboxes'];
+        }
+
         $checklist_share = $this->shareMatching($values, fn (string $value) => $this->isChecklistCell($value));
         if ($checklist_share >= self::DETECTION_THRESHOLD) {
             return [BoardColumn::TYPE_CHECKLIST, [], 'Values are checklists of done/not done sub-tasks'];
@@ -228,7 +278,7 @@ trait InfersBoardColumnTypes
             return [BoardColumn::TYPE_CHECKLIST, [], 'Header names a checklist, each line or comma-separated entry becomes a sub-task'];
         }
 
-        if ($this->shareMatching($values, fn (string $value) => $this->parseLinks($value) !== null) >= 0.8) {
+        if ($this->shareMatching($values, fn (string $value) => $this->parseLinks($value) !== null) >= 0.8 && ! $this->isProseWithLinks($values)) {
             return $this->detectLinkColumn($values, $hint);
         }
 
@@ -260,8 +310,8 @@ trait InfersBoardColumnTypes
             return $this->detectTextColumn($values, 'Cells repeat values from linked items (a mirror or rollup), kept as text');
         }
 
-        if ($hint === BoardColumn::TYPE_LABEL) {
-            return [BoardColumn::TYPE_LABEL, $distinct, 'Header names a priority'];
+        if ($this->isPriorityLabel($label_lower) && count($distinct) <= 20 && $this->maxLength($distinct) <= 60) {
+            return [BoardColumn::TYPE_STATUS, $distinct, 'Header names a priority'];
         }
 
         if ($hint === BoardColumn::TYPE_STATUS && count($distinct) <= 50 && $this->maxLength($distinct) <= 60) {
@@ -379,8 +429,7 @@ trait InfersBoardColumnTypes
             BoardColumn::TYPE_LINK => ['link', 'url', 'website'],
             BoardColumn::TYPE_DROPDOWN => ['dropdown'],
             BoardColumn::TYPE_TAGS => ['tags', 'tag'],
-            BoardColumn::TYPE_LABEL => ['priority'],
-            BoardColumn::TYPE_STATUS => ['status', 'stage'],
+            BoardColumn::TYPE_STATUS => ['status', 'stage', 'priority', 'priorities', 'urgency', 'severity'],
             BoardColumn::TYPE_TIMELINE => ['timeline'],
             BoardColumn::TYPE_COUNTRY => ['country', 'countries'],
             BoardColumn::TYPE_LOCATION => ['location', 'address'],
@@ -599,6 +648,23 @@ trait InfersBoardColumnTypes
         }
 
         return null;
+    }
+
+    /**
+     * True when the cells are sentences that merely mention a link ("The
+     * favicon is distorted. Use this: https://..."), not links with a short
+     * label: most run long or span several lines once their URLs are taken
+     * out. Those stay text, so no word of them is lost.
+     *
+     * @param  array<int, string>  $values
+     */
+    private function isProseWithLinks(array $values): bool
+    {
+        return $this->shareMatching($values, function (string $value) {
+            $text = trim((string) preg_replace('#\s*-?\s*https?://\S+#i', '', $value));
+
+            return str_contains($text, "\n") || mb_strlen($text) > 80;
+        }) >= 0.5;
     }
 
     /**
@@ -1124,16 +1190,22 @@ trait InfersBoardColumnTypes
         return ['ids' => array_values(array_unique($ids)), 'unmatched' => $unmatched];
     }
 
-    private function optionColor(string $label, int $index): string
+    private function optionColor(string $label, int $index, ?string $preset = null): string
     {
-        return self::KNOWN_OPTION_COLORS[mb_strtolower(trim($label))] ?? self::OPTION_COLOR_PALETTE[$index % count(self::OPTION_COLOR_PALETTE)];
+        $key = mb_strtolower(trim($label));
+
+        if ($preset === self::OPTION_PRESET_PRIORITY && isset(self::PRIORITY_OPTION_COLORS[$key])) {
+            return self::PRIORITY_OPTION_COLORS[$key];
+        }
+
+        return self::KNOWN_OPTION_COLORS[$key] ?? self::OPTION_COLOR_PALETTE[$index % count(self::OPTION_COLOR_PALETTE)];
     }
 
     /**
      * @param  array<int, string>  $labels
      * @return array<int, array{id: string, label: string, color: string, is_active: bool}>
      */
-    private function buildOptions(array $labels): array
+    private function buildOptions(array $labels, ?string $preset = null): array
     {
         $options = [];
 
@@ -1141,12 +1213,87 @@ trait InfersBoardColumnTypes
             $options[] = [
                 'id' => (string) Str::uuid(),
                 'label' => $label,
-                'color' => $this->optionColor($label, $index),
+                'color' => $this->optionColor($label, $index, $preset),
                 'is_active' => true,
             ];
         }
 
         return $options;
+    }
+
+    /** True for a header naming a priority ("Priority", "Urgency", "Severity"). */
+    private function isPriorityLabel(string $label_lower): bool
+    {
+        return preg_match('/\b(priority|priorities|urgency|severity|importance)\b/u', $label_lower) === 1;
+    }
+
+    /**
+     * {@see self::OPTION_PRESET_PRIORITY} when a column holds priorities: its
+     * header names one, or every label is a priority level ("High", "P1").
+     * The preset gives the labels the board's own Priority column colors.
+     *
+     * @param  array<int, string>  $option_labels
+     */
+    private function optionPresetFor(string $label, array $option_labels): ?string
+    {
+        if ($this->isPriorityLabel(mb_strtolower(trim($label)))) {
+            return self::OPTION_PRESET_PRIORITY;
+        }
+
+        $labels = array_values(array_unique(array_map(fn (string $option) => mb_strtolower(trim($option)), $option_labels)));
+
+        if (count($labels) >= 2 && array_diff($labels, array_keys(self::PRIORITY_OPTION_COLORS)) === []) {
+            return self::OPTION_PRESET_PRIORITY;
+        }
+
+        return null;
+    }
+
+    /**
+     * The type a column gets when the file itself declares its choices (a
+     * spreadsheet dropdown list), or null when its values mostly ignore the
+     * list. Priorities and workflow statuses become Status columns, a list
+     * cells pick several entries from becomes a Dropdown, a yes/no list a
+     * Checkbox, and any other list a Dropdown with every declared option.
+     *
+     * @param  array<int, string>  $options  the declared list, in file order
+     * @param  array<int, string>  $raw_values  the cells under the column
+     * @return array{0: string, 1: string}|null `[type, human-readable reason]`
+     */
+    private function inferFromDeclaredOptions(string $label, array $options, array $raw_values): ?array
+    {
+        $values = array_values(array_filter(array_map('trim', $raw_values), fn (string $value) => $value !== ''));
+        $known = array_flip(array_map(fn (string $option) => mb_strtolower(trim($option)), $options));
+        $count = count($options);
+        $is_known = fn (string $token) => isset($known[mb_strtolower(trim($token))]);
+        $is_multi = fn (string $value) => ! $is_known($value) && count($this->splitList($value)) > 1
+            && array_filter($this->splitList($value), fn (string $token) => ! $is_known($token)) === [];
+
+        if ($values !== [] && $this->shareMatching($values, fn (string $value) => $is_known($value) || $is_multi($value)) < 0.7) {
+            return null;
+        }
+
+        $label_lower = mb_strtolower(trim($label));
+        $has_multi = $values !== [] && $this->shareMatching($values, $is_multi) > 0;
+
+        if ($this->optionPresetFor($label, $options) === self::OPTION_PRESET_PRIORITY && ! $has_multi) {
+            return [BoardColumn::TYPE_STATUS, "Dropdown list of {$count} priority levels"];
+        }
+
+        if (array_diff(array_keys($known), ['yes', 'no', 'true', 'false']) === [] && $count === 2) {
+            return [BoardColumn::TYPE_CHECKBOX, 'Dropdown list of yes/no answers'];
+        }
+
+        $status_words = count(array_intersect(array_keys($known), self::STATUS_VOCABULARY));
+
+        if (! $has_multi && ($this->labelTypeHint($label_lower) === BoardColumn::TYPE_STATUS || $status_words >= 2)) {
+            return [BoardColumn::TYPE_STATUS, "Dropdown list of {$count} statuses"];
+        }
+
+        return [
+            BoardColumn::TYPE_DROPDOWN,
+            $has_multi ? "Cells pick several options from a list of {$count}" : "Dropdown list of {$count} options",
+        ];
     }
 
     /**
@@ -1158,9 +1305,10 @@ trait InfersBoardColumnTypes
      *
      * @param  array<int, string>  $option_labels
      * @param  array<int, string>  $values  the raw cells collected under the column
+     * @param  string|null  $preset  {@see optionPresetFor()}
      * @return array<string, mixed>|null
      */
-    private function initialColumnConfig(string $type, array $option_labels, array $values = []): ?array
+    private function initialColumnConfig(string $type, array $option_labels, array $values = [], ?string $preset = null): ?array
     {
         if ($type === BoardColumn::TYPE_RATING) {
             $highest = array_reduce($values, fn (float $max, string $value) => max($max, (float) ($this->parseNumber($value) ?? 0)), 0.0);
@@ -1180,7 +1328,29 @@ trait InfersBoardColumnTypes
             return null;
         }
 
-        return ['options' => $this->buildOptions(array_slice(array_values(array_unique($option_labels)), 0, 60))];
+        return ['options' => $this->buildOptions(array_slice($this->uniqueLabels($option_labels), 0, 60), $preset)];
+    }
+
+    /**
+     * Labels deduplicated case-insensitively, first spelling wins, so
+     * "Needs Approval" and "Needs approval" become one option.
+     *
+     * @param  array<int, string>  $labels
+     * @return array<int, string>
+     */
+    private function uniqueLabels(array $labels): array
+    {
+        $unique = [];
+
+        foreach ($labels as $label) {
+            $label = trim($label);
+
+            if ($label !== '') {
+                $unique[mb_strtolower($label)] ??= $label;
+            }
+        }
+
+        return array_values($unique);
     }
 
     private function widthForType(string $type): int

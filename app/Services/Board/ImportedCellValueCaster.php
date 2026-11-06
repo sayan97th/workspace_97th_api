@@ -83,10 +83,7 @@ class ImportedCellValueCaster
             BoardColumn::TYPE_TIMELINE => $this->castTimeline($raw),
             BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_VOTE => $this->castPeople($raw),
             BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL => $this->resolveOptionId($column, $raw),
-            BoardColumn::TYPE_DROPDOWN => $this->nonEmpty(array_values(array_unique(array_map(
-                fn (string $label) => $this->resolveOptionId($column, $label),
-                $this->splitList($raw),
-            )))),
+            BoardColumn::TYPE_DROPDOWN => $this->castDropdown($column, $raw),
             BoardColumn::TYPE_TAGS => $this->nonEmpty(array_values(array_unique(array_map(
                 fn (string $label) => $this->resolveTagId($label),
                 $this->splitList($raw),
@@ -370,8 +367,42 @@ class ImportedCellValueCaster
     }
 
     /**
+     * The whole cell when it names one option (a label may contain a comma
+     * itself, "Yes, approved"), otherwise each comma-separated choice.
+     *
+     * @return array<int, string>|null
+     */
+    private function castDropdown(BoardColumn $column, string $raw): ?array
+    {
+        $whole_match = $this->existingOptionId($column, $raw);
+
+        if ($whole_match !== null) {
+            return [$whole_match];
+        }
+
+        return $this->nonEmpty(array_values(array_unique(array_map(
+            fn (string $label) => $this->resolveOptionId($column, $label),
+            $this->splitList($raw),
+        ))));
+    }
+
+    private function existingOptionId(BoardColumn $column, string $label): ?string
+    {
+        $label = mb_strtolower(trim($label));
+
+        foreach (data_get($column->config, 'options', []) as $option) {
+            if (mb_strtolower((string) $option['label']) === $label) {
+                return (string) $option['id'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The id of the column's option labeled `$label` (case-insensitive),
-     * appending a new option first when the column doesn't have one yet.
+     * appending a new option first when the column doesn't have one yet. A
+     * priority column's new labels get the Priority colors.
      */
     private function resolveOptionId(BoardColumn $column, string $label): ?string
     {
@@ -392,7 +423,7 @@ class ImportedCellValueCaster
         $option = [
             'id' => (string) Str::uuid(),
             'label' => Str::limit($label, 255, ''),
-            'color' => $this->optionColor($label, count($options)),
+            'color' => $this->optionColor($label, count($options), $this->optionPresetFor($column->label, array_column($options, 'label'))),
             'is_active' => true,
         ];
 

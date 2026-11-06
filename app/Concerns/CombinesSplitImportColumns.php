@@ -254,7 +254,7 @@ trait CombinesSplitImportColumns
                 'options' => $options,
                 'source' => [$column['key']],
                 'reason' => $reason,
-                'config' => $this->initialColumnConfig($type, $options, $values),
+                'config' => $this->initialColumnConfig($type, $options, $values, $this->optionPresetFor($column['label'], $options)),
             ];
         }
 
