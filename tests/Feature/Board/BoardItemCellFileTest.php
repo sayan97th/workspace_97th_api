@@ -300,3 +300,90 @@ test('renaming an unknown entry or a doc entry fails', function () {
         ->patchJson(cellFilesUrl($board_item, $column)."/{$doc['id']}", ['file_name' => 'New name'])
         ->assertUnprocessable();
 });
+
+test('an uploaded image gets its size, a webp thumbnail and a preview when it is big', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+
+    $file = $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->image('wide_screenshot.png', 3000, 1000)]])
+        ->assertCreated()
+        ->json('files.0');
+
+    expect($file['width'])->toBe(3000)
+        ->and($file['height'])->toBe(1000)
+        ->and($file['thumb_path'])->toEndWith('.webp')
+        ->and($file['preview_path'])->toEndWith('.webp')
+        ->and($file['preview_width'])->toBe(2048);
+
+    $disk = Storage::disk(config('filesystems.app_disk'));
+    $thumb_size = getimagesizefromstring($disk->get($file['thumb_path']));
+    expect($thumb_size[0])->toBe(480)
+        ->and($thumb_size[1])->toBe(160)
+        ->and($thumb_size['mime'])->toBe('image/webp');
+});
+
+test('a small image gets a thumbnail but keeps its original as the preview', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+
+    $file = $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->image('icon.png', 300, 200)]])
+        ->json('files.0');
+
+    expect($file['thumb_url'])->not->toBeNull()
+        ->and($file['preview_url'])->toBeNull()
+        ->and($file['width'])->toBe(300);
+});
+
+test('a non image upload gets no image variants', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+
+    $file = $this->actingAs(User::factory()->create(), 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->create('brief.pdf', 100, 'application/pdf')]])
+        ->json('files.0');
+
+    expect($file)->not->toHaveKey('thumb_url')
+        ->and($file)->not->toHaveKey('width');
+});
+
+test('removing an image deletes its original and its variants', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $file = $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->image('wide.png', 2600, 1200)]])
+        ->json('files.0');
+
+    $this->actingAs($user, 'api')->deleteJson(cellFilesUrl($board_item, $column)."/{$file['id']}")->assertOk();
+
+    $disk = Storage::disk(config('filesystems.app_disk'));
+    expect($disk->exists($file['path']))->toBeFalse()
+        ->and($disk->exists($file['thumb_path']))->toBeFalse()
+        ->and($disk->exists($file['preview_path']))->toBeFalse();
+});
+
+test('the backfill command adds variants to images stored before them and is safe to run twice', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+    $disk = Storage::disk(config('filesystems.app_disk'));
+    $path = "board-cell-files/{$board_item->id}/old.png";
+    $original = UploadedFile::fake()->image('old.png', 1200, 900);
+    $disk->put($path, file_get_contents($original->getRealPath()));
+
+    $board_item->values()->create(['column_id' => $column->id, 'value' => [
+        ['id' => 'old', 'kind' => 'file', 'file_name' => 'old.png', 'path' => $path, 'url' => $disk->url($path), 'mime_type' => 'image/png', 'size_bytes' => 1000],
+        ['id' => 'doc', 'kind' => 'file', 'file_name' => 'brief.pdf', 'path' => 'x.pdf', 'url' => '/x.pdf', 'mime_type' => 'application/pdf', 'size_bytes' => 10],
+    ]]);
+
+    $this->artisan('board:generate-cell-image-variants')->expectsOutputToContain('Processed 1 image(s)')->assertSuccessful();
+
+    $stored = $board_item->values()->where('column_id', $column->id)->first()->value;
+    expect($stored[0]['width'])->toBe(1200)
+        ->and($disk->exists($stored[0]['thumb_path']))->toBeTrue()
+        ->and($stored[1])->not->toHaveKey('thumb_url');
+
+    $this->artisan('board:generate-cell-image-variants')->expectsOutputToContain('Processed 0 image(s)')->assertSuccessful();
+});

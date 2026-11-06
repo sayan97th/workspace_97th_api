@@ -12,6 +12,7 @@ use App\Models\BoardItem;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
+use App\Services\Board\CellImageVariantService;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\AccountPermissions;
 use App\Support\BoardEditGate;
@@ -35,6 +36,9 @@ use Illuminate\Support\Str;
  * naming the menu option that added it, "link" or a cloud provider) or a Doc
  * created from the cell (`kind: doc`, with the Doc's `doc_id`). Entries saved
  * before `kind` existed have none and are treated as uploaded files.
+ *
+ * An uploaded image also carries its `width`, `height` and light WebP copies
+ * (`thumb_url`, and `preview_url` for a big one), see {@see CellImageVariantService}.
  */
 class BoardItemCellFileController extends Controller
 {
@@ -53,27 +57,30 @@ class BoardItemCellFileController extends Controller
      * Appends one or more freshly uploaded files onto the column's existing
      * list for this item.
      */
-    public function store(StoreBoardItemCellFileRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column): JsonResponse
+    public function store(StoreBoardItemCellFileRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, CellImageVariantService $image_variants): JsonResponse
     {
         $this->authorizeCellEdit($request, $item, $board_item, $column);
 
-        $uploaded = collect($request->file('files', []))->map(function ($file) use ($board_item) {
+        $uploaded = collect($request->file('files', []))->map(function ($file) use ($board_item, $image_variants) {
+            $directory = "board-cell-files/{$board_item->id}";
             $extension = $file->getClientOriginalExtension();
-            $path = $file->storeAs(
-                "board-cell-files/{$board_item->id}",
-                Str::uuid().'.'.$extension,
-                config('filesystems.app_disk')
-            );
+            $path = $file->storeAs($directory, Str::uuid().'.'.$extension, config('filesystems.app_disk'));
+            $mime_type = $file->getMimeType() ?? 'application/octet-stream';
 
-            return [
+            $entry = [
                 'id' => (string) Str::uuid(),
                 'kind' => self::KIND_FILE,
                 'file_name' => $file->getClientOriginalName(),
                 'path' => $path,
                 'url' => Storage::disk(config('filesystems.app_disk'))->url($path),
-                'mime_type' => $file->getMimeType() ?? 'application/octet-stream',
+                'mime_type' => $mime_type,
                 'size_bytes' => $file->getSize() ?? 0,
             ];
+
+            // Read from the upload's temp file, the original is not downloaded back from the disk.
+            $variants = CellImageVariantService::supports($mime_type) ? $image_variants->generate($file->getRealPath(), $directory) : null;
+
+            return $variants ? [...$entry, ...$variants] : $entry;
         });
 
         $next_files = $this->currentFiles($board_item, $column)->concat($uploaded)->values();
@@ -206,7 +213,7 @@ class BoardItemCellFileController extends Controller
     /**
      * DELETE /api/boards/{item}/items/{board_item}/columns/{column}/files/{file_id}
      */
-    public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, string $file_id): JsonResponse
+    public function destroy(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, string $file_id, CellImageVariantService $image_variants): JsonResponse
     {
         $this->authorizeCellEdit($request, $item, $board_item, $column);
 
@@ -218,6 +225,9 @@ class BoardItemCellFileController extends Controller
         $target_path = is_array($target) ? (string) ($target['path'] ?? '') : '';
         if ($target_path !== '' && Storage::disk(config('filesystems.app_disk'))->exists($target_path)) {
             Storage::disk(config('filesystems.app_disk'))->delete($target_path);
+        }
+        if (is_array($target)) {
+            $image_variants->deleteVariants($target);
         }
 
         $next_files = $existing->reject(fn (array $file) => ($file['id'] ?? null) === $file_id)->values();
