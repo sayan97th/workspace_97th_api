@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Concerns\BelongsToBoardView;
 use App\Services\Board\BoardDateAutoFiller;
+use App\Services\Board\BoardPeopleAutoAssigner;
 use App\Services\Board\MirrorColumnResolver;
 use App\Support\FormulaReferences;
 use Database\Factories\BoardColumnFactory;
@@ -75,6 +76,12 @@ class BoardColumn extends Model
 
     public const TYPE_STATUS = 'status';
 
+    /**
+     * An array of user ids, stored as strings (`["12", "40"]`).
+     * `config.auto_assign_creator` makes it start out with each new item's
+     * creator, like a "Reporter" column, see {@see autoAssignsCreator()} and
+     * {@see BoardPeopleAutoAssigner}. The cell stays editable.
+     */
     public const TYPE_PEOPLE = 'people';
 
     /**
@@ -268,6 +275,15 @@ class BoardColumn extends Model
             'enabled' => $this->type === self::TYPE_DATE && ($auto_fill['enabled'] ?? false) === true,
             'include_time' => ($auto_fill['include_time'] ?? true) !== false,
         ];
+    }
+
+    /**
+     * Whether a People column assigns each new item's creator (the column
+     * gallery's "Reporter"). A column saved before the setting existed is off.
+     */
+    public function autoAssignsCreator(): bool
+    {
+        return $this->type === self::TYPE_PEOPLE && ($this->config['auto_assign_creator'] ?? false) === true;
     }
 
     /**

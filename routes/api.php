@@ -557,6 +557,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{column}/duplicate', [BoardColumnController::class, 'duplicate']);
             // Date columns only: "Fill empty cells" with each item's creation date.
             Route::post('{column}/fill-dates', [BoardColumnController::class, 'fillDates']);
+            // People columns only: "Fill empty cells" with each item's creator (Reporter).
+            Route::post('{column}/fill-creators', [BoardColumnController::class, 'fillCreators']);
             // Connect boards column: the cell picker's boards, groups and items, and its "Boards settings".
             Route::get('{column}/connect-items', [BoardColumnConnectController::class, 'items']);
             Route::get('{column}/connect-settings', [BoardColumnConnectController::class, 'settings']);
@@ -703,6 +705,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('/', [BoardItemCellFileController::class, 'store']);
                 Route::post('link', [BoardItemCellFileController::class, 'storeLink']);
                 Route::post('doc', [BoardItemCellFileController::class, 'storeDoc']);
+                Route::patch('{file_id}', [BoardItemCellFileController::class, 'update']);
                 Route::delete('{file_id}', [BoardItemCellFileController::class, 'destroy']);
             });
         });

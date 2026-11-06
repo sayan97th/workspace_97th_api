@@ -221,3 +221,82 @@ test('removing a doc entry keeps the doc itself', function () {
 
     expect(WorkspaceNavigationItem::query()->find($created['doc_id']))->not->toBeNull();
 });
+
+test('an uploaded file can be renamed and keeps its storage path', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $uploaded = $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->image('screenshot_111.png')]])
+        ->json('files.0');
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column)."/{$uploaded['id']}", ['file_name' => '  menu_request_1.png  '])
+        ->assertOk()
+        ->assertJsonCount(1, 'files')
+        ->assertJsonPath('files.0.file_name', 'menu_request_1.png')
+        ->assertJsonPath('files.0.url', $uploaded['url']);
+
+    $stored = $board_item->values()->where('column_id', $column->id)->first()->value;
+    expect($stored[0]['path'])->toBe($uploaded['path']);
+});
+
+test('a renamed upload without an extension keeps the original one', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $uploaded = $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->image('screenshot_111.png')]])
+        ->json('files.0');
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column)."/{$uploaded['id']}", ['file_name' => 'menu_request_1'])
+        ->assertOk()
+        ->assertJsonPath('files.0.file_name', 'menu_request_1.png');
+});
+
+test('a link display text can be renamed', function () {
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $link = $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => 'https://www.figma.com/file/abc'])
+        ->json('files.0');
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column)."/{$link['id']}", ['file_name' => 'Design file'])
+        ->assertOk()
+        ->assertJsonPath('files.0.file_name', 'Design file')
+        ->assertJsonPath('files.0.url', 'https://www.figma.com/file/abc');
+});
+
+test('a rename with an empty name or a slash is rejected', function (string $file_name) {
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $link = $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => 'https://example.com'])
+        ->json('files.0');
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column)."/{$link['id']}", ['file_name' => $file_name])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('file_name');
+})->with(['empty' => '   ', 'slash' => 'reports/q1.pdf', 'backslash' => 'reports\\q1.pdf']);
+
+test('renaming an unknown entry or a doc entry fails', function () {
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column).'/missing-id', ['file_name' => 'New name'])
+        ->assertNotFound();
+
+    $doc = $this->actingAs($user, 'api')->postJson(cellFilesUrl($board_item, $column).'/doc')->json('files.0');
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column)."/{$doc['id']}", ['file_name' => 'New name'])
+        ->assertUnprocessable();
+});

@@ -16,6 +16,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardDateAutoFiller;
 use App\Services\Board\BoardItemIdAssigner;
+use App\Services\Board\BoardPeopleAutoAssigner;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
@@ -32,6 +33,7 @@ class BoardColumnController extends Controller
         private readonly ColumnPermissionService $column_permissions,
         private readonly BoardItemIdAssigner $item_id_assigner,
         private readonly BoardDateAutoFiller $date_auto_filler,
+        private readonly BoardPeopleAutoAssigner $people_auto_assigner,
     ) {}
 
     /**
@@ -108,9 +110,14 @@ class BoardColumnController extends Controller
         // An Item ID column shows every existing item's id right away.
         $this->item_id_assigner->backfillColumn($column);
 
+        // A new Reporter column (People with auto assign) shows who created each existing item right away.
+        $filled_values = $column->autoAssignsCreator() ? $this->people_auto_assigner->fillEmptyCells($column) : [];
+
         return response()->json([
             'message' => 'Column created successfully.',
             'column' => new BoardColumnResource($column),
+            // Item id => the people written into its cell, so the client can patch its rows without a reload.
+            'filled_values' => (object) $filled_values,
         ], 201);
     }
 
@@ -144,13 +151,24 @@ class BoardColumnController extends Controller
             $validated['config'] = [...($validated['config'] ?? $column->config ?? []), 'auto_fill' => ['enabled' => true, 'include_time' => true]];
         }
 
+        // A Creation log turned into a People column keeps each item's creator and keeps assigning it,
+        // unless the request says otherwise. This is how a monday.com style "Reporter" is made editable.
+        $assigns_creators = ($validated['type'] ?? null) === BoardColumn::TYPE_PEOPLE && $column->type === BoardColumn::TYPE_CREATION_LOG;
+        if ($assigns_creators && ! array_key_exists('auto_assign_creator', $validated['config'] ?? [])) {
+            $validated['config'] = [...($validated['config'] ?? $column->config ?? []), 'auto_assign_creator' => true];
+        }
+
         $was_item_id = $column->type === BoardColumn::TYPE_AUTO_NUMBER;
-        $filled_values = DB::transaction(function () use ($column, $validated, $was_item_id, $date_source) {
+        $filled_values = DB::transaction(function () use ($column, $validated, $was_item_id, $date_source, $assigns_creators) {
             $column->fill($validated)->save();
 
             // A column turned into an Item ID column swaps its old values for the item ids.
             if (! $was_item_id) {
                 $this->item_id_assigner->backfillColumn($column);
+            }
+
+            if ($assigns_creators) {
+                return $this->people_auto_assigner->fillEmptyCells($column);
             }
 
             return $date_source !== null ? $this->date_auto_filler->fillEmptyCells($column, $date_source) : [];
@@ -159,7 +177,7 @@ class BoardColumnController extends Controller
         return response()->json([
             'message' => 'Column updated successfully.',
             'column' => new BoardColumnResource($column->fresh()),
-            // Item id => the date written into its empty cell, so the client can patch its rows without a reload.
+            // Item id => the date (or people) written into its empty cell, so the client can patch its rows without a reload.
             'filled_values' => (object) $filled_values,
         ]);
     }
@@ -180,6 +198,30 @@ class BoardColumnController extends Controller
         }
 
         $filled_values = DB::transaction(fn () => $this->date_auto_filler->fillEmptyCells($column, BoardDateAutoFiller::SOURCE_CREATED));
+
+        return response()->json([
+            'message' => count($filled_values) === 1 ? '1 empty cell filled.' : count($filled_values).' empty cells filled.',
+            'filled_values' => (object) $filled_values,
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/columns/{column}/fill-creators
+     *
+     * A People column's "Fill empty cells with item creator": assigns each
+     * item's creator in the cells that are still empty, leaving every person
+     * already assigned.
+     */
+    public function fillCreators(Request $request, WorkspaceNavigationItem $item, BoardColumn $column): JsonResponse
+    {
+        $this->ensureColumnBelongsToBoard($item, $column);
+        BoardEditGate::authorizeStructure($item, $request->user());
+
+        if ($column->type !== BoardColumn::TYPE_PEOPLE) {
+            throw ValidationException::withMessages(['column' => 'Only People columns can be filled with item creators.']);
+        }
+
+        $filled_values = DB::transaction(fn () => $this->people_auto_assigner->fillEmptyCells($column));
 
         return response()->json([
             'message' => count($filled_values) === 1 ? '1 empty cell filled.' : count($filled_values).' empty cells filled.',

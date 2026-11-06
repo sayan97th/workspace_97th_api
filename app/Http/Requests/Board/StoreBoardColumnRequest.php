@@ -90,6 +90,8 @@ class StoreBoardColumnRequest extends FormRequest
             'config.rating_max' => ['sometimes', 'integer', 'min:1', 'max:'.BoardColumn::RATING_MAX_LIMIT],
             'config.rating_icon' => ['sometimes', Rule::in(BoardColumn::RATING_ICONS)],
             'config.description' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            // People columns only: new items start with their creator assigned (Reporter), see BoardPeopleAutoAssigner.
+            'config.auto_assign_creator' => ['sometimes', 'boolean'],
             'config.validation' => ['sometimes', 'nullable', 'array'],
             'config.validation.required' => ['sometimes', 'boolean'],
             'config.validation.min' => ['sometimes', 'nullable', 'numeric'],

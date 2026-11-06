@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Board;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\RenameBoardItemCellFileRequest;
 use App\Http\Requests\Board\StoreBoardItemCellFileDocRequest;
 use App\Http\Requests\Board\StoreBoardItemCellFileLinkRequest;
 use App\Http\Requests\Board\StoreBoardItemCellFileRequest;
@@ -152,6 +153,54 @@ class BoardItemCellFileController extends Controller
             'message' => 'Doc created successfully.',
             'files' => $next_files,
         ], 201);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/{board_item}/columns/{column}/files/{file_id}
+     *
+     * Renames one entry, e.g. "screenshot_111.png" to "menu_request_1.png".
+     * Only the display name changes, the stored file keeps its storage path.
+     * An upload renamed without an extension keeps its original one, so
+     * "menu_request_1" still downloads as "menu_request_1.png". A Doc entry is
+     * named after its Doc and is renamed from the Doc itself.
+     */
+    public function update(RenameBoardItemCellFileRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardColumn $column, string $file_id): JsonResponse
+    {
+        $this->authorizeCellEdit($request, $item, $board_item, $column);
+
+        $existing = $this->currentFiles($board_item, $column);
+        $target = $existing->firstWhere('id', $file_id);
+        abort_unless(is_array($target), 404);
+        abort_if(($target['kind'] ?? self::KIND_FILE) === self::KIND_DOC, 422, 'A Doc is renamed from the Doc itself.');
+
+        $file_name = $this->keepExtension($target, $request->validated('file_name'));
+
+        $next_files = $existing
+            ->map(fn (array $file) => ($file['id'] ?? null) === $file_id ? [...$file, 'file_name' => $file_name] : $file)
+            ->values();
+        $this->saveFiles($board_item, $column, $next_files, $request->user());
+
+        return response()->json([
+            'message' => 'File renamed successfully.',
+            'files' => $next_files,
+        ]);
+    }
+
+    /**
+     * Gives an upload's new name the original extension back when it has none.
+     *
+     * @param  array<string, mixed>  $file
+     */
+    private function keepExtension(array $file, string $file_name): string
+    {
+        if (($file['kind'] ?? self::KIND_FILE) !== self::KIND_FILE || pathinfo($file_name, PATHINFO_EXTENSION) !== '') {
+            return $file_name;
+        }
+
+        $extension = pathinfo((string) ($file['file_name'] ?? ''), PATHINFO_EXTENSION)
+            ?: pathinfo((string) ($file['path'] ?? ''), PATHINFO_EXTENSION);
+
+        return $extension !== '' ? Str::limit($file_name, 250 - strlen($extension), '').'.'.$extension : $file_name;
     }
 
     /**
