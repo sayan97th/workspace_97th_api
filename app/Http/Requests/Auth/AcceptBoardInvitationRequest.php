@@ -17,7 +17,8 @@ class AcceptBoardInvitationRequest extends FormRequest
      *
      * Accepting an invitation for an email that already has an account only
      * needs that account's password (to authenticate it); an unknown email
-     * creates the account inline, so it needs a full name too.
+     * creates the account inline, so it needs a full name too. Emails match
+     * regardless of letter case, like the accept endpoint itself.
      *
      * @return array<string, ValidationRule|array<mixed>|string>
      */
@@ -27,7 +28,7 @@ class AcceptBoardInvitationRequest extends FormRequest
 
         abort_if(! $invitation instanceof BoardInvitation, 404);
 
-        if (User::where('email', $invitation->email)->exists()) {
+        if (User::query()->whereRaw('LOWER(email) = ?', [mb_strtolower($invitation->email)])->exists()) {
             return [
                 'password' => ['required', 'string'],
             ];

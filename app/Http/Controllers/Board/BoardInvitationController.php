@@ -123,9 +123,9 @@ class BoardInvitationController extends Controller
      *
      * Bulk-invites one or more email addresses to view this board,
      * resending (rather than duplicating) any invitation still pending for
-     * an address. Skips anyone who already has access, whether as a
-     * workspace owner, an existing collaborator, or (for a "main" board
-     * visible to the whole workspace) any existing workspace member.
+     * an address. Skips anyone who already has access ({@see userIdsWithAccess()}),
+     * or, for a "main" board visible to the whole workspace, any existing
+     * workspace member.
      * Each invitation also goes out as a Slack direct message when the
      * invited email belongs to someone in the connected Slack workspace.
      */
@@ -143,10 +143,9 @@ class BoardInvitationController extends Controller
         $submitted_emails = $validated['emails'];
         $emails = collect($submitted_emails)->unique(fn (string $email) => strtolower($email));
 
-        $already_has_access = collect();
-        $already_has_access = $already_has_access
-            ->merge($item->workspace->owners()->whereIn('email', $emails)->pluck('email'))
-            ->merge($item->collaborators()->whereIn('email', $emails)->pluck('email'));
+        $already_has_access = User::query()
+            ->whereIn('id', $this->userIdsWithAccess($item))
+            ->pluck('email');
 
         if ($item->board_type === WorkspaceNavigationItem::BOARD_TYPE_MAIN) {
             $already_has_access = $already_has_access->merge(
@@ -207,7 +206,8 @@ class BoardInvitationController extends Controller
      * trip: the Share dialog's search picks a person, or every member of a
      * team. Their workspace role is untouched, so what they may edit still
      * follows the board's permission ({@see BoardEditGate}).
-     * Anyone who already has access is skipped. Everyone added is told on
+     * Anyone who already has access is skipped ({@see userIdsWithAccess()}),
+     * so a workspace owner is still added to a private board. Everyone added is told on
      * Slack, since no email goes out for this.
      */
     public function storeCollaborators(StoreBoardCollaboratorsRequest $request, WorkspaceNavigationItem $item): JsonResponse
@@ -228,11 +228,7 @@ class BoardInvitationController extends Controller
             ]);
         }
 
-        $existing_ids = $item->collaborators()->pluck('users.id')
-            ->merge($item->workspace->owners()->pluck('users.id'))
-            ->push($item->created_by_id)
-            ->filter()
-            ->all();
+        $existing_ids = $this->userIdsWithAccess($item);
 
         $new_members = $members->reject(fn (User $member) => in_array($member->id, $existing_ids, true))->values();
 
@@ -295,6 +291,28 @@ class BoardInvitationController extends Controller
         return response()->json([
             'message' => 'Access removed.',
         ]);
+    }
+
+    /**
+     * Ids of the people who can already open the board without being added again: its creator,
+     * its owner and its collaborators, plus the workspace owners for a main or shareable board.
+     *
+     * A private board is never visible through a workspace role ({@see VisibleBoards}), so a
+     * workspace owner must still be added to it. Treating them as "already has access" there
+     * skipped them with no collaborator row, and they got "This board is private".
+     *
+     * @return array<int, int>
+     */
+    private function userIdsWithAccess(WorkspaceNavigationItem $item): array
+    {
+        $user_ids = $item->collaborators()->pluck('users.id')
+            ->push($item->created_by_id, $item->owner_id);
+
+        if ($item->board_type !== WorkspaceNavigationItem::BOARD_TYPE_PRIVATE) {
+            $user_ids = $user_ids->merge($item->workspace->owners()->pluck('users.id'));
+        }
+
+        return $user_ids->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
     }
 
     /**

@@ -55,7 +55,7 @@ class BoardInvitationController extends Controller
             'inviter_name' => $invitation->inviter->full_name,
             'message' => $invitation->message,
             'status' => $invitation->isAccepted() ? 'accepted' : ($invitation->isExpired() ? 'expired' : 'pending'),
-            'account_exists' => User::where('email', $invitation->email)->exists(),
+            'account_exists' => $this->findInvitee($invitation) !== null,
         ]);
     }
 
@@ -76,7 +76,7 @@ class BoardInvitationController extends Controller
         }
 
         $validated = $request->validated();
-        $existing_user = User::where('email', $invitation->email)->first();
+        $existing_user = $this->findInvitee($invitation);
 
         if ($existing_user) {
             if (! Hash::check($validated['password'], $existing_user->password)) {
@@ -126,6 +126,16 @@ class BoardInvitationController extends Controller
         $token = $this->issueToken($user);
 
         return $this->respondWithToken($token, $user);
+    }
+
+    /**
+     * The account the invitation was sent to. Emails are matched regardless of letter case, so
+     * an invitation typed as "Rachel@company.com" reaches the "rachel@company.com" account
+     * instead of trying to create a second one.
+     */
+    private function findInvitee(BoardInvitation $invitation): ?User
+    {
+        return User::query()->whereRaw('LOWER(email) = ?', [mb_strtolower($invitation->email)])->first();
     }
 
     /**
