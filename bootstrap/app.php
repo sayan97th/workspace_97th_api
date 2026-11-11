@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AttachAutomationEffects;
 use App\Http\Middleware\CheckPermission;
 use App\Http\Middleware\CheckRole;
 use App\Http\Middleware\EnsureAccountPermission;
@@ -48,6 +49,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'slack.signature' => VerifySlackSignature::class,
             'account.permission' => EnsureAccountPermission::class,
             'board.visible' => EnsureBoardIsVisible::class,
+            'automation.effects' => AttachAutomationEffects::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

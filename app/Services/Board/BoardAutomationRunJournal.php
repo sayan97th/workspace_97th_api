@@ -16,7 +16,10 @@ use Throwable;
  */
 class BoardAutomationRunJournal
 {
-    public function __construct(private readonly AutomationRunContext $run_context) {}
+    public function __construct(
+        private readonly AutomationRunContext $run_context,
+        private readonly AutomationEffectCollector $effects,
+    ) {}
 
     public function valueChanged(BoardItem $item, int $column_id, mixed $before, mixed $after): void
     {
@@ -60,6 +63,10 @@ class BoardAutomationRunJournal
      */
     public function reordered(int $board_id, ?int $item_id, array $before, array $after): void
     {
+        // Every reordered row has a new position, the board reloads all of them.
+        foreach ($after as $reordered_id) {
+            $this->effects->recordItem($board_id, (int) $reordered_id);
+        }
         $this->write(BoardAutomationRunChange::KIND_REORDERED, $board_id, $item_id, null, ['order' => array_values($before)], ['order' => array_values($after)]);
     }
 
@@ -82,6 +89,8 @@ class BoardAutomationRunJournal
         if ($run_uuid === null || $this->run_context->isDryRun()) {
             return;
         }
+
+        $this->effects->recordItem($board_id, $item_id);
 
         try {
             BoardAutomationRunChange::create([

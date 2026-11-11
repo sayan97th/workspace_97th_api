@@ -103,6 +103,7 @@ class BoardAutomationService
         private readonly BoardAutomationHealthChecker $health_checker,
         private readonly AutomationConditionEvaluator $condition_evaluator,
         private readonly AutomationUsageMeter $usage_meter,
+        private readonly AutomationEffectCollector $effects,
     ) {}
 
     // ── Column triggers ───────────────────────────────────────────────────────
@@ -1294,6 +1295,11 @@ class BoardAutomationService
             $this->run_context->leave();
             $this->depth--;
             unset($this->running[$key]);
+
+            // The whole chain finished: everyone with the board open sees its result now.
+            if ($this->depth === 0 && ! $this->run_context->isDryRun()) {
+                $this->effects->broadcastPending();
+            }
         }
     }
 
@@ -1726,8 +1732,9 @@ class BoardAutomationService
             $this->run_outcomes[$run_uuid] = $outcome->status;
         }
 
+        $run_log = null;
         try {
-            BoardAutomationRunLog::create([
+            $run_log = BoardAutomationRunLog::create([
                 'automation_id' => $automation->id,
                 'board_id' => $automation->board_id,
                 'board_view_id' => $automation->board_view_id,
@@ -1749,6 +1756,8 @@ class BoardAutomationService
             // Keeping the history is best effort, it must never break the change that triggered the automation.
             report($exception);
         }
+
+        $this->effects->recordRun($automation, $item, $actor?->id, $action_type, $outcome->status, $outcome->message, $run_log?->id, $run_uuid);
     }
 
     /**

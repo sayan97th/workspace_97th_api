@@ -3,6 +3,7 @@
 use App\Models\BoardItem;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\VisibleBoards;
 use Illuminate\Support\Facades\Broadcast;
 
 /*
@@ -42,6 +43,17 @@ Broadcast::channel('board-import.{user_id}', function ($user, $user_id) {
 // receives BoardExportProgressUpdated broadcasts from ProcessBoardExportJob.
 Broadcast::channel('board-export.{user_id}', function ($user, $user_id) {
     return (int) $user->id === (int) $user_id;
+});
+
+// Private per-board channel of BoardAutomationsRan: every open view of a board reloads the
+// rows an automation changed. Open to whoever may see the board, the same rule as its endpoints.
+Broadcast::channel('board-automations.{board_id}', function (User $user, int $board_id) {
+    $board = WorkspaceNavigationItem::find($board_id);
+    if (! $board || ! $user->workspaces()->where('workspaces.id', $board->workspace_id)->exists()) {
+        return false;
+    }
+
+    return VisibleBoards::canView($user, $board);
 });
 
 // Presence channel powering the Table view's face-pile: every workspace

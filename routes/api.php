@@ -211,7 +211,8 @@ Route::prefix('public')->group(function () {
     Route::get('branding', [PublicBrandingController::class, 'showPublic'])->middleware('throttle:60,1');
 });
 
-Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced'])->group(function () {
+// `automation.effects` adds what the automations a request set off changed to its JSON response.
+Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.allowed', 'two_factor.enforced', 'automation.effects'])->group(function () {
 
     // Personal navigation: the sidebar's Favorites, My Work, and the Home
     // page's recently visited boards.

@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\Board\AutomationEffectCollector;
 use App\Services\Board\AutomationRunContext;
 use App\Services\Board\BoardAutomationHealthChecker;
 use App\Services\Board\BoardAutomationService;
@@ -35,6 +36,9 @@ class AppServiceProvider extends ServiceProvider
         // activity log and by every action that reaches outside the app.
         $this->app->scoped(AutomationRunContext::class);
         $this->app->scoped(BoardAutomationHealthChecker::class);
+        // What the automations of one request or job changed, sent back with the response and
+        // over the board's socket so the board shows it without a refresh.
+        $this->app->scoped(AutomationEffectCollector::class);
     }
 
     /**

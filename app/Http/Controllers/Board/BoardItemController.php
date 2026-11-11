@@ -72,6 +72,9 @@ class BoardItemController extends Controller
      *
      * Optionally narrowed by the toolbar's filters via `filter_state` (JSON),
      * `today` (`YYYY-MM-DD`) and `timezone` (IANA), see {@see BoardItemFilterService::applyFilterState()}.
+     *
+     * Optionally narrowed to specific root items via `item_ids[]` (at most 500), how a board
+     * reloads the rows an automation changed without reloading whole tables.
      */
     public function index(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
@@ -108,6 +111,12 @@ class BoardItemController extends Controller
 
         if ($group_ids = $this->groupIdsParam($request)) {
             $query->whereIn('group_id', $group_ids);
+        }
+
+        // Only these rows, the ones an automation just changed (see AutomationEffectCollector).
+        // A requested row that does not come back was archived, deleted or moved out of the tab.
+        if ($item_ids = $this->itemIdsParam($request)) {
+            $query->whereIn('id', $item_ids);
         }
 
         $query = $this->filter_service->applyFilterState(
@@ -871,5 +880,17 @@ class BoardItemController extends Controller
         $group_ids = $request->query('group_ids');
 
         return is_array($group_ids) ? array_map('intval', $group_ids) : [];
+    }
+
+    /**
+     * Reads `item_ids[]` from the query string, see `index()`. Empty or absent returns `[]`.
+     *
+     * @return array<int, int>
+     */
+    private function itemIdsParam(Request $request): array
+    {
+        $item_ids = $request->query('item_ids');
+
+        return is_array($item_ids) ? array_slice(array_values(array_unique(array_map('intval', $item_ids))), 0, 500) : [];
     }
 }
