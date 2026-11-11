@@ -366,6 +366,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
+     * Boards this user hid from their Update Feed, see {@see FeedHiddenBoard}.
+     *
+     * @return HasMany<FeedHiddenBoard, $this>
+     */
+    public function feedHiddenBoards(): HasMany
+    {
+        return $this->hasMany(FeedHiddenBoard::class);
+    }
+
+    /**
      * The {@see Department} this user is assigned to, if any.
      *
      * @return BelongsTo<Department, $this>

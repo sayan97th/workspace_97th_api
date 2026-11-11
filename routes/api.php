@@ -304,6 +304,12 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('follows', [FeedUpdateController::class, 'follow']);
         Route::delete('follows/{type}/{id}', [FeedUpdateController::class, 'unfollow'])->whereIn('type', ['board', 'item'])->whereNumber('id');
         Route::post('updates/read-all', [FeedUpdateController::class, 'markAllSeen']);
+        Route::get('hidden-boards', [FeedUpdateController::class, 'hiddenBoards']);
+        Route::post('hidden-boards', [FeedUpdateController::class, 'hideBoard']);
+        Route::delete('hidden-boards/{board_id}', [FeedUpdateController::class, 'showBoard'])->whereNumber('board_id');
+        Route::patch('updates/{id}', [FeedUpdateController::class, 'update']);
+        Route::delete('updates/{id}', [FeedUpdateController::class, 'destroy']);
+        Route::post('updates/{id}/restore', [FeedUpdateController::class, 'restore']);
         Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
         Route::post('updates/{id}/pin', [FeedUpdateController::class, 'togglePin']);
         Route::post('updates/{id}/like', [FeedUpdateController::class, 'toggleLike']);

@@ -9,6 +9,7 @@ use App\Models\BoardComment;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
 use App\Models\FeedFollow;
+use App\Models\FeedHiddenBoard;
 use App\Models\FeedSavedView;
 use App\Models\Notification;
 use App\Models\User;
@@ -16,6 +17,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Rules\ValidEmojiReaction;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemActivityService;
+use App\Services\Board\CommentThreadActionsService;
 use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
@@ -72,6 +74,7 @@ class FeedUpdateController extends Controller
         private readonly FeedService $feed_service,
         private readonly BoardItemActivityService $activity_service,
         private readonly BoardAutomationService $automation_service,
+        private readonly CommentThreadActionsService $thread_actions,
     ) {}
 
     /**
@@ -199,6 +202,9 @@ class FeedUpdateController extends Controller
                 $combined[$board_id] = ($combined[$board_id] ?? 0) + $count;
             }
         }
+
+        $hidden_ids = $this->hiddenBoardIds($user);
+        $combined = array_diff_key($combined, array_flip($hidden_ids));
 
         $unread_by_board = $this->unreadCountsByBoard($user);
 
@@ -348,7 +354,16 @@ class FeedUpdateController extends Controller
     public function markUnseen(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
-        $comment->views()->where('user_id', $request->user()->id)->delete();
+        $user_id = $request->user()->id;
+        $comment->views()->where('user_id', $user_id)->delete();
+
+        // With `thread`, the replies under a top-level update come back as unread too (the inbox "Undo").
+        if ($request->boolean('thread') && $comment->parent_id === null) {
+            DB::table($comment->views()->getRelated()->getTable())
+                ->where('user_id', $user_id)
+                ->whereIn('comment_id', $comment->replies()->select('id'))
+                ->delete();
+        }
 
         return response()->json(['data' => $this->cardResource($comment)]);
     }
@@ -474,6 +489,107 @@ class FeedUpdateController extends Controller
         $request->user()->feedFollows()->where('target_type', $type)->where('target_id', $id)->delete();
 
         return response()->json(['data' => ['type' => $type, 'id' => $id, 'following' => false]]);
+    }
+
+    /**
+     * GET /api/feed/hidden-boards
+     *
+     * The boards the viewer hid from their inbox, for Feed settings.
+     */
+    public function hiddenBoards(Request $request): JsonResponse
+    {
+        $rows = $request->user()->feedHiddenBoards()->with('board:id,label')->latest()->get();
+
+        return response()->json(['data' => $rows->map(fn (FeedHiddenBoard $row) => [
+            'id' => (string) $row->board_id,
+            'name' => $row->board?->label ?? __('Deleted board'),
+        ])->values()]);
+    }
+
+    /**
+     * POST /api/feed/hidden-boards {board_id}
+     *
+     * "Hide board updates from inbox": the board's updates leave every tab but
+     * Bookmarked, the board list and the unread counts.
+     */
+    public function hideBoard(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'board_id' => ['required', 'integer', 'exists:workspace_navigation_items,id'],
+        ]);
+        $board = WorkspaceNavigationItem::findOrFail($validated['board_id']);
+        abort_unless($request->user()->workspaces()->where('workspaces.id', $board->workspace_id)->exists(), 403);
+
+        $request->user()->feedHiddenBoards()->firstOrCreate(['board_id' => $board->id]);
+
+        return response()->json(['data' => ['id' => (string) $board->id, 'name' => $board->label]], 201);
+    }
+
+    /**
+     * DELETE /api/feed/hidden-boards/{board_id}
+     *
+     * Shows a hidden board's updates in the inbox again.
+     */
+    public function showBoard(Request $request, int $board_id): JsonResponse
+    {
+        $request->user()->feedHiddenBoards()->where('board_id', $board_id)->delete();
+
+        return response()->json(['data' => ['id' => (string) $board_id]]);
+    }
+
+    /**
+     * PATCH /api/feed/updates/{id} {body}
+     *
+     * "Edit update" from the card menu. Author only, the previous body is kept
+     * as a revision exactly like an edit made in the item drawer.
+     */
+    public function update(Request $request, string $id): JsonResponse
+    {
+        $comment = $this->resolveComment($id);
+        $this->ensureViewerCanAccess($comment, $request->user());
+        abort_if($comment->user_id !== $request->user()->id, 403);
+
+        $validated = $request->validate([
+            'body' => ['required', 'string', 'max:5000'],
+        ]);
+
+        $this->thread_actions->editBody($comment, trim($validated['body']), $request->user());
+
+        return response()->json(['data' => $this->cardResource($comment)]);
+    }
+
+    /**
+     * DELETE /api/feed/updates/{id}
+     *
+     * "Delete update for everyone". Author only. The row is soft deleted, so
+     * {@see restore()} can bring it back inside the undo window.
+     */
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        $comment = $this->resolveComment($id);
+        abort_if($comment->user_id !== $request->user()->id, 403);
+
+        $comment->delete();
+
+        return response()->json(['data' => ['id' => $id]]);
+    }
+
+    /**
+     * POST /api/feed/updates/{id}/restore
+     *
+     * The "Undo" after a delete. Author only and only inside the undo window.
+     */
+    public function restore(Request $request, string $id): JsonResponse
+    {
+        $comment = $this->resolveComment($id, true);
+        abort_if($comment->user_id !== $request->user()->id, 403);
+        abort_if($comment->deleted_at === null, 422, 'This update was not deleted.');
+        abort_if($comment->deleted_at->lt(now()->subDays(CommentThreadActionsService::UNDO_WINDOW_DAYS)), 410, 'This update can no longer be restored.');
+        abort_if($comment->parent_id !== null && $comment->parent === null, 409, 'The update this reply belongs to was deleted.');
+
+        $comment->restore();
+
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
@@ -866,10 +982,16 @@ class FeedUpdateController extends Controller
             default => $query->where($this->allScopeClosure($user)),
         };
 
-        $query->whereHas($board_relation, function (Builder $q) use ($workspace_ids, $board_id) {
+        // A hidden board leaves the inbox, its bookmarked updates stay reachable from Bookmarked.
+        $hidden_ids = $tab === 'bookmarked' ? [] : $this->hiddenBoardIds($user);
+
+        $query->whereHas($board_relation, function (Builder $q) use ($workspace_ids, $board_id, $hidden_ids) {
             $q->whereIn('workspace_id', $workspace_ids);
             if ($board_id) {
                 $q->where('id', $board_id);
+            }
+            if ($hidden_ids !== []) {
+                $q->whereNotIn('id', $hidden_ids);
             }
         });
 
@@ -896,6 +1018,25 @@ class FeedUpdateController extends Controller
         }
 
         return $request->attributes->get('feed_follow_ids');
+    }
+
+    /**
+     * The boards the viewer hid from their inbox, read once per request like {@see followIds()}.
+     *
+     * @return array<int, int>
+     */
+    private function hiddenBoardIds(User $user): array
+    {
+        $request = request();
+
+        if (! $request->attributes->has('feed_hidden_board_ids')) {
+            $request->attributes->set(
+                'feed_hidden_board_ids',
+                $user->feedHiddenBoards()->pluck('board_id')->map(fn ($id) => (int) $id)->all()
+            );
+        }
+
+        return $request->attributes->get('feed_hidden_board_ids');
     }
 
     /**
@@ -1051,7 +1192,9 @@ class FeedUpdateController extends Controller
                 $q->whereHas('mentions', fn (Builder $mq) => $mq->where('user_id', $user->id))
                     ->orWhereHas('parent', fn (Builder $pq) => $pq->where('user_id', $user->id));
             })
-            ->whereHas($is_item ? 'item.board' : 'board', fn (Builder $q) => $q->whereIn('workspace_id', $workspace_ids))
+            ->whereHas($is_item ? 'item.board' : 'board', fn (Builder $q) => $q
+                ->whereIn('workspace_id', $workspace_ids)
+                ->whereNotIn('id', $this->hiddenBoardIds($user)))
             ->whereDoesntHave('views', fn (Builder $q) => $q->where('user_id', $user->id));
     }
 
@@ -1067,14 +1210,14 @@ class FeedUpdateController extends Controller
      * Resolves the opaque feed id ("ic-{id}" | "bc-{id}") back to its model —
      * disambiguates the two source tables without a shared id space.
      */
-    private function resolveComment(string $id): BoardItemComment|BoardComment
+    private function resolveComment(string $id, bool $with_trashed = false): BoardItemComment|BoardComment
     {
         if (str_starts_with($id, 'ic-')) {
-            return BoardItemComment::findOrFail((int) substr($id, 3));
+            return BoardItemComment::query()->when($with_trashed, fn (Builder $q) => $q->withTrashed())->findOrFail((int) substr($id, 3));
         }
 
         if (str_starts_with($id, 'bc-')) {
-            return BoardComment::findOrFail((int) substr($id, 3));
+            return BoardComment::query()->when($with_trashed, fn (Builder $q) => $q->withTrashed())->findOrFail((int) substr($id, 3));
         }
 
         abort(404);
