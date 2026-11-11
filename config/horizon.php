@@ -222,6 +222,21 @@ return [
             'timeout' => 75,
             'nice' => 0,
         ],
+        // Board exports on their own workers, so a large export never delays automations,
+        // notifications or emails. Lower priority (`nice`) keeps web requests snappy while
+        // one runs, and the process count caps how many exports run at once.
+        'supervisor-exports' => [
+            'connection' => 'redis-exports',
+            'queue' => ['exports'],
+            'balance' => 'simple',
+            'maxProcesses' => 1,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 512,
+            'tries' => 1,
+            'timeout' => 1800,
+            'nice' => 10,
+        ],
     ],
 
     'environments' => [
@@ -234,6 +249,9 @@ return [
             'supervisor-emails' => [
                 'maxProcesses' => 3,
             ],
+            'supervisor-exports' => [
+                'maxProcesses' => 2,
+            ],
         ],
 
         'local' => [
@@ -241,6 +259,9 @@ return [
                 'maxProcesses' => 3,
             ],
             'supervisor-emails' => [
+                'maxProcesses' => 1,
+            ],
+            'supervisor-exports' => [
                 'maxProcesses' => 1,
             ],
         ],

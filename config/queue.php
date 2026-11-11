@@ -73,6 +73,18 @@ return [
             'after_commit' => false,
         ],
 
+        // Long running board exports (see ProcessBoardExportJob, timeout 1800s). `retry_after`
+        // must outlast the job's timeout, or Redis would hand a still running export to a
+        // second worker after 90 seconds.
+        'redis-exports' => [
+            'driver' => 'redis',
+            'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
+            'queue' => 'exports',
+            'retry_after' => (int) env('REDIS_EXPORTS_RETRY_AFTER', 1900),
+            'block_for' => null,
+            'after_commit' => true,
+        ],
+
         'deferred' => [
             'driver' => 'deferred',
         ],

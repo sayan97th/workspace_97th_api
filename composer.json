@@ -24,6 +24,7 @@
         "league/html-to-markdown": "^5.1",
         "maatwebsite/excel": "^4.0",
         "mews/purifier": "^3.4",
+        "openspout/openspout": "^5.13",
         "php-open-source-saver/jwt-auth": "^2.9",
         "predis/predis": "^3.5",
         "symfony/http-client": "^8.1",

@@ -38,3 +38,6 @@ Schedule::command('notifications:send-digests daily')->dailyAt('08:00');
 Schedule::command('notifications:send-digests weekly')->weeklyOn(1, '08:00');
 
 Schedule::command('comments:purge-deleted')->dailyAt('03:30');
+
+// Finished board exports stay downloadable for a day, then their files are deleted.
+Schedule::command('board-exports:prune')->hourly()->withoutOverlapping();

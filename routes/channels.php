@@ -38,6 +38,12 @@ Broadcast::channel('board-import.{user_id}', function ($user, $user_id) {
     return (int) $user->id === (int) $user_id;
 });
 
+// Private per-user channel of the "Export board to Excel" dialog's progress bar,
+// receives BoardExportProgressUpdated broadcasts from ProcessBoardExportJob.
+Broadcast::channel('board-export.{user_id}', function ($user, $user_id) {
+    return (int) $user->id === (int) $user_id;
+});
+
 // Presence channel powering the Table view's face-pile: every workspace
 // member who joins is broadcast to every other joiner via here/joining/
 // leaving, so the UI shows who else is currently on this board.

@@ -188,6 +188,13 @@ Route::post('integrations/slack/events', SlackEventController::class)->middlewar
 // `ExternalAccountService::consumeState()`.
 Route::get('integrations/accounts/callback', ExternalOAuthCallbackController::class)->middleware('throttle:30,1');
 
+// A finished board export. No JWT, the browser opens the short lived signed link the export
+// dialog received, see `BoardExportJobResource::download_url`. Relative signature, so a proxy
+// or another public host name doesn't break it.
+Route::get('board-exports/{export_job}/download', [BoardExportController::class, 'download'])
+    ->middleware(['signed:relative', 'throttle:30,1'])
+    ->name('board-exports.download');
+
 // ─── Authenticated routes ───────────────────────────────────────────────────
 // Public, no account needed: a board form's respondents and the people a
 // board view was shared with through its read only link. Every token is an
@@ -492,7 +499,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::patch('trash/groups/{group}/restore', [BoardTrashController::class, 'restoreGroup']);
         Route::delete('trash/groups/{group}', [BoardTrashController::class, 'forceDeleteGroup']);
 
-        Route::get('export', [BoardExportController::class, 'export'])->middleware('account.permission:export_data');
+        // "Export board to Excel": queued in the background, see BoardExportController.
+        Route::prefix('exports')->middleware('account.permission:export_data')->group(function () {
+            Route::get('summary', [BoardExportController::class, 'summary']);
+            Route::post('/', [BoardExportController::class, 'store'])->middleware('throttle:10,1');
+            Route::get('{export_job}', [BoardExportController::class, 'show']);
+            Route::post('{export_job}/cancel', [BoardExportController::class, 'cancel']);
+        });
     });
 
     // A Doc's body (`view_key = doc`): the Notion style editor's JSON document
