@@ -23,7 +23,10 @@ use Illuminate\Support\Carbon;
  * @property int $item_id
  * @property int|null $parent_id
  * @property int|null $user_id
+ * @property string $sender_type
+ * @property int|null $automation_id
  * @property string $body
+ * @property string|null $text_body
  * @property Carbon|null $scheduled_at
  * @property Carbon|null $edited_at
  * @property bool $pinned
@@ -44,7 +47,7 @@ use Illuminate\Support\Carbon;
  * @property-read Collection<int, BoardItemCommentAttachment> $attachments
  * @property-read Collection<int, BoardItemCommentBookmark> $bookmarks
  */
-#[Fillable(['item_id', 'parent_id', 'user_id', 'body', 'scheduled_at', 'edited_at', 'pinned', 'resolved_at', 'resolved_by_id'])]
+#[Fillable(['item_id', 'parent_id', 'user_id', 'sender_type', 'automation_id', 'body', 'scheduled_at', 'edited_at', 'pinned', 'resolved_at', 'resolved_by_id'])]
 class BoardItemComment extends Model
 {
     use HasCommentThread, HasFactory, SoftDeletes;

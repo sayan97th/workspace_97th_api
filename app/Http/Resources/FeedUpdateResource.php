@@ -33,7 +33,7 @@ use Illuminate\Support\Collection;
 class FeedUpdateResource extends JsonResource
 {
     /** What a payload reads off an item update, eager loaded by every caller. */
-    public const ITEM_LOADS = ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'item.board.parent'];
+    public const ITEM_LOADS = ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'item.board.parent', 'item.group'];
 
     /** What a payload reads off a board discussion update. */
     public const BOARD_LOADS = ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'board.parent'];
@@ -218,13 +218,25 @@ class FeedUpdateResource extends JsonResource
             'id' => $prefix.$comment->id,
             // The card this update shows in: its own id for a top-level update, its parent's for a reply.
             'thread_id' => $prefix.($comment->parent_id ?? $comment->id),
-            'actor' => [
+            // monday's `creator`: "Automations" with the app logo for what an automation posted, otherwise the author.
+            'actor' => $comment->isFromAutomations() ? [
+                'id' => null,
+                'name' => 'Automations',
+                'avatar_url' => null,
+                'is_deactivated' => false,
+                'is_system' => true,
+            ] : [
                 'id' => $comment->author?->id,
                 'name' => $comment->author !== null ? $comment->author->full_name : __('Deleted user'),
                 'avatar_url' => $comment->author?->profile_photo_url,
                 'is_deactivated' => $comment->author?->is_deactivated ?? true,
+                'is_system' => false,
             ],
+            'sender_type' => $comment->sender_type ?? 'user',
+            'automation_id' => $comment->automation_id,
             'body' => $comment->body,
+            // monday's `text_body`, the plain text twin of `body`.
+            'text_body' => $comment->text_body,
             'created_at' => $comment->created_at,
             'edited_at' => $comment->edited_at,
             'board' => [
@@ -233,6 +245,10 @@ class FeedUpdateResource extends JsonResource
                 'parent_name' => $board->parent !== null ? $board->parent->label : null,
             ],
             'item' => $item,
+            // The group the item sits in, the middle crumb of monday's board > group > item trail.
+            'group' => $is_item_comment && $comment->item->group !== null
+                ? ['id' => $comment->item->group->id, 'name' => $comment->item->group->name]
+                : null,
             'link' => $link,
             // A reply to another update rather than a top-level one, for the feed's "Replies" filter.
             'is_reply' => $comment->parent_id !== null,

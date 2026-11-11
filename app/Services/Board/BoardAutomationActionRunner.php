@@ -589,7 +589,14 @@ class BoardAutomationActionRunner
             return BoardAutomationActionOutcome::skipped('The update is empty.');
         }
 
-        $comment = BoardItemComment::create(['item_id' => $item->id, 'user_id' => $author->id, 'body' => $body]);
+        // Posted under the owner's account, but credited to "Automations" in the feed and the bell, like monday.
+        $comment = BoardItemComment::create([
+            'item_id' => $item->id,
+            'user_id' => $author->id,
+            'sender_type' => Notification::SENDER_AUTOMATIONS,
+            'automation_id' => $automation->id,
+            'body' => $body,
+        ]);
         $this->log($automation, $item, $actor, "posted an update on \"{$item->name}\"");
         $this->automationService()->handleUpdatePosted($item, $comment, $author);
 

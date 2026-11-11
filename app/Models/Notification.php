@@ -25,15 +25,19 @@ use Illuminate\Support\Str;
  * @property int|null $actor_id
  * @property string $sender_type
  * @property string $type
+ * @property string|null $title
  * @property int|null $board_id
  * @property int|null $board_item_id
  * @property int|null $comment_id
  * @property string|null $comment_kind
+ * @property int|null $thread_id
+ * @property int|null $group_id
  * @property string|null $target_type
  * @property int|null $target_id
  * @property string|null $preview
  * @property string|null $item_name
  * @property string|null $board_name
+ * @property string|null $group_name
  * @property string $action_label
  * @property string $action_target
  * @property string|null $link
@@ -49,7 +53,7 @@ use Illuminate\Support\Str;
  * @property-read WorkspaceNavigationItem|null $board
  * @property-read BoardItem|null $boardItem
  */
-#[Fillable(['user_id', 'actor_id', 'sender_type', 'type', 'board_id', 'board_item_id', 'comment_id', 'comment_kind', 'target_type', 'target_id', 'action_label', 'action_target', 'preview', 'item_name', 'board_name', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until', 'saved_at'])]
+#[Fillable(['user_id', 'actor_id', 'sender_type', 'type', 'title', 'board_id', 'board_item_id', 'group_id', 'comment_id', 'comment_kind', 'thread_id', 'target_type', 'target_id', 'action_label', 'action_target', 'preview', 'item_name', 'board_name', 'group_name', 'link', 'is_read', 'read_at', 'dismissed_at', 'snoozed_until', 'saved_at'])]
 class Notification extends Model
 {
     use HasFactory;
@@ -194,13 +198,15 @@ class Notification extends Model
      * The snapshot columns a new notification is stored with, so the row alone
      * holds everything the bell card shows, like a monday.com notification: its
      * target (the comment when there is one, otherwise the item, otherwise the
-     * board), the plain text preview of the message and the item and board
-     * names at the time it was sent.
+     * board), the plain text preview of the message, the board > group > item
+     * names at the time it was sent and, for an update or reply, the top level
+     * update of its thread (monday's `Notification.update`), so the bell can
+     * open the same thread card the Update feed shows.
      *
      * `$message` is a message written for the notification itself (an
      * automation's "notify" text), stored as the preview when there is no comment.
      *
-     * @return array{target_type: string|null, target_id: int|null, preview: string|null, item_name: string|null, board_name: string|null}
+     * @return array{target_type: string|null, target_id: int|null, thread_id: int|null, preview: string|null, item_name: string|null, board_name: string|null, group_id: int|null, group_name: string|null}
      */
     public static function snapshotAttributes(
         ?WorkspaceNavigationItem $board,
@@ -215,13 +221,28 @@ class Notification extends Model
             default => [null, null],
         };
 
+        $group = $board_item?->group;
+
         return [
             'target_type' => $target_type,
             'target_id' => $target_id,
+            'thread_id' => $comment !== null ? ($comment->parent_id ?? $comment->id) : null,
             'preview' => self::previewFrom($comment?->body ?? $message),
             'item_name' => $board_item?->name,
             'board_name' => $board?->label,
+            'group_id' => $group?->id,
+            'group_name' => $group?->name,
         ];
+    }
+
+    /**
+     * monday's notification `title`: the whole sentence the bell shows, e.g.
+     * "Lindy mentioned you on Jelly Fish Season", stored so the row reads on
+     * its own even after the sender is renamed or deleted.
+     */
+    public static function titleFor(string $sender_name, string $action_label, string $action_target): string
+    {
+        return Str::limit(trim(implode(' ', array_filter([$sender_name, trim($action_label), trim($action_target)]))), 497);
     }
 
     /**

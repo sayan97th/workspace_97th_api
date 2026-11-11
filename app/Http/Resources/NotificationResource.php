@@ -44,6 +44,8 @@ class NotificationResource extends JsonResource
                 'is_system' => false,
             ],
             'sender_type' => $this->sender_type,
+            // monday's notification `title`, the whole sentence stored when it was sent.
+            'title' => $this->title,
             // An automation message replaces the sentence in the bell, like
             // monday: "Automations" over the message, nothing in between.
             'action_label' => $shows_message_only ? '' : $this->action_label,
@@ -58,6 +60,15 @@ class NotificationResource extends JsonResource
             'target' => $this->target_type !== null ? ['type' => $this->target_type, 'id' => $this->target_id] : null,
             // Snapshots stored with the row, see Notification::snapshotAttributes().
             'item_name' => $this->item_name,
+            // monday's board > group > item trail, as it was when the notification was sent.
+            'item' => $this->board_item_id !== null ? ['id' => $this->board_item_id, 'name' => $this->item_name] : null,
+            'group' => $this->group_name !== null ? ['id' => $this->group_id, 'name' => $this->group_name] : null,
+            // monday's `Notification.update`: the update or reply it is about and the top level
+            // update of its thread, the card the Update feed shows (feed ids, `ic-` or `bc-`).
+            'update' => $this->comment_id !== null && $this->comment_kind !== null ? [
+                'id' => ($this->comment_kind === 'item' ? 'ic-' : 'bc-').$this->comment_id,
+                'thread_id' => ($this->comment_kind === 'item' ? 'ic-' : 'bc-').($this->thread_id ?? $this->comment_id),
+            ] : null,
             // Plain text excerpt of the comment behind it (mentions, replies,
             // reactions, notify), what the card shows under the sentence.
             'preview' => $this->preview,

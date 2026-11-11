@@ -105,11 +105,16 @@ class NotificationService
             return null;
         }
 
+        // An update an automation posted reaches people as "Automations", the way monday credits it.
+        $sender_type = $comment?->isFromAutomations() ? Notification::SENDER_AUTOMATIONS : Notification::senderTypeOf($type);
+        $sender_name = $sender_type === Notification::SENDER_AUTOMATIONS ? 'Automations' : ($actor?->full_name ?? __('Deleted user'));
+
         $notification = Notification::create([
             'user_id' => $recipient->id,
             'actor_id' => $actor?->id,
-            'sender_type' => Notification::senderTypeOf($type),
+            'sender_type' => $sender_type,
             'type' => $type,
+            'title' => Notification::titleFor($sender_name, $action_label, $action_target),
             'board_id' => $board?->id,
             'board_item_id' => $board_item?->id,
             'comment_id' => $comment?->id,

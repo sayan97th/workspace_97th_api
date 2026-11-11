@@ -2,6 +2,7 @@
 
 namespace App\Concerns;
 
+use App\Models\BoardAutomation;
 use App\Models\BoardComment;
 use App\Models\BoardCommentAttachment;
 use App\Models\BoardCommentBookmark;
@@ -23,6 +24,7 @@ use App\Models\BoardItemCommentView;
 use App\Models\Notification;
 use App\Models\User;
 use App\Services\Board\CommentThreadActionsService;
+use App\Services\Search\Everything\PlainText;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -47,6 +49,14 @@ trait HasCommentThread
      */
     public static function bootHasCommentThread(): void
     {
+        // monday's `text_body`: the plain text twin of the formatted body, kept in step on every save.
+        static::saving(function (BoardItemComment|BoardComment $comment) {
+            if ($comment->isDirty('body') || ($comment->text_body === null && $comment->body !== null)) {
+                $text = PlainText::fromMarkdown($comment->body);
+                $comment->text_body = $text === '' ? null : $text;
+            }
+        });
+
         static::updated(function (BoardItemComment|BoardComment $comment) {
             if ($comment->wasChanged('body')) {
                 Notification::forComment($comment)->update(['preview' => Notification::previewFrom($comment->body)]);
@@ -69,6 +79,25 @@ trait HasCommentThread
             'pinned' => 'boolean',
             'resolved_at' => 'datetime',
         ];
+    }
+
+    /**
+     * The automation that posted this update, set together with
+     * `sender_type = automations` (monday credits such updates to "Automations").
+     *
+     * @return BelongsTo<BoardAutomation, $this>
+     */
+    public function automation(): BelongsTo
+    {
+        return $this->belongsTo(BoardAutomation::class);
+    }
+
+    /**
+     * Whether an automation posted this update rather than a person.
+     */
+    public function isFromAutomations(): bool
+    {
+        return $this->sender_type === Notification::SENDER_AUTOMATIONS;
     }
 
     /**

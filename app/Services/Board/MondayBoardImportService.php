@@ -11,6 +11,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
 use App\Models\BoardView;
+use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use Database\Seeders\BoardContentSeeder;
@@ -412,13 +413,16 @@ class MondayBoardImportService
      */
     private function createComment(int $item_id, ?int $parent_id, array $row, string $body, Collection $users, array &$unmatched): BoardItemComment
     {
-        $resolved = $this->resolvePersonIds($row['author'], $users);
+        // monday exports what its automations posted under the author "Automations", which is no person to match.
+        $is_from_automations = preg_match('/^\s*automations?\s*$/i', $row['author']) === 1;
+        $resolved = $is_from_automations ? ['ids' => [], 'unmatched' => []] : $this->resolvePersonIds($row['author'], $users);
         array_push($unmatched, ...$resolved['unmatched']);
 
         $comment = BoardItemComment::create([
             'item_id' => $item_id,
             'parent_id' => $parent_id,
             'user_id' => $resolved['ids'][0] ?? null,
+            'sender_type' => $is_from_automations ? Notification::SENDER_AUTOMATIONS : Notification::SENDER_USER,
             'body' => $body,
         ]);
 
