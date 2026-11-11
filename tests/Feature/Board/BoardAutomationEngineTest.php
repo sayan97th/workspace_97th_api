@@ -60,6 +60,7 @@ test('a person_assigned automation sets a status column once someone is newly as
     [$board, $view, $group] = createAutomationTestBoard();
     $actor = User::factory()->create();
     $assignee = User::factory()->create();
+    addBoardMembers($board, $actor, $assignee);
 
     $people_column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'type' => BoardColumn::TYPE_PEOPLE]);
     $status_column = BoardColumn::factory()->create([

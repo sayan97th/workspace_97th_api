@@ -243,6 +243,7 @@ test('round robin assigns in turn and cascades reach subitems, the parent and ch
     [$board, $view, $group, $status] = roundThreeBoard();
     $actor = User::factory()->create();
     [$ada, $grace] = User::factory()->count(2)->create()->all();
+    addBoardMembers($board, $actor, $ada, $grace);
     $owner = roundThreeColumn($board, $view, BoardColumn::TYPE_PEOPLE, 'Owner');
     $sub_status = roundThreeColumn($board, $view, BoardColumn::TYPE_STATUS, 'Sub status', ['options' => [['id' => 'sub_done', 'label' => 'Done', 'color' => '#00c875']]], BoardColumn::SCOPE_SUBITEM);
     $list = roundThreeColumn($board, $view, BoardColumn::TYPE_CHECKLIST, 'Steps');

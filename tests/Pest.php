@@ -1,6 +1,9 @@
 <?php
 
 use App\Models\SlackAppSetting;
+use App\Models\User;
+use App\Models\WorkspaceNavigationItem;
+use App\Support\BoardMembers;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -64,4 +67,15 @@ function saveSlackAppCredentials(array $overrides = []): SlackAppSetting
         'signing_secret' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
         'redirect_uri' => 'https://api.example.com/api/integrations/slack/callback',
     ], $overrides));
+}
+
+/**
+ * Adds people to a board's workspace, so they count as added to the (non private) board and
+ * can be assigned, mentioned and notified on it, see {@see BoardMembers}.
+ */
+function addBoardMembers(WorkspaceNavigationItem $board, User ...$users): void
+{
+    $board->workspace->users()->syncWithoutDetaching(
+        collect($users)->mapWithKeys(fn (User $user) => [$user->id => ['role' => 'member']])->all()
+    );
 }

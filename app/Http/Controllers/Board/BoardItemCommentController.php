@@ -21,6 +21,7 @@ use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
 use App\Support\BoardEditGate;
+use App\Support\BoardMembers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -78,7 +79,8 @@ class BoardItemCommentController extends Controller
             'scheduled_at' => $scheduled_at,
         ]);
 
-        $mentioned_user_ids = collect($validated['mentioned_user_ids'] ?? [])->unique();
+        // Only people added to the board can be mentioned or notified, see BoardMembers.
+        $mentioned_user_ids = BoardMembers::onlyMembers($item, $validated['mentioned_user_ids'] ?? []);
         if ($mentioned_user_ids->isNotEmpty()) {
             $comment->mentions()->createMany(
                 $mentioned_user_ids->map(fn ($user_id) => ['user_id' => $user_id])->all()
@@ -86,7 +88,7 @@ class BoardItemCommentController extends Controller
         }
 
         $actor = $request->user();
-        $notified_user_ids = collect($validated['notified_user_ids'] ?? []);
+        $notified_user_ids = BoardMembers::onlyMembers($item, $validated['notified_user_ids'] ?? []);
 
         if ($scheduled_at !== null) {
             // Nothing is sent yet, ScheduledCommentService notifies and broadcasts once it goes live.
@@ -465,7 +467,7 @@ class BoardItemCommentController extends Controller
      */
     private function eagerLoads(bool $with_replies = true): array
     {
-        $own = ['author', 'resolvedBy', 'likes', 'reactions.user', 'views.user', 'bookmarks', 'mentions', 'notifiedUsers', 'attachments'];
+        $own = ['author', 'resolvedBy', 'likes.user', 'reactions.user', 'views.user', 'bookmarks', 'mentions', 'notifiedUsers', 'attachments'];
 
         return $with_replies
             ? [...$own, ...array_map(fn ($relation) => "replies.{$relation}", $own)]

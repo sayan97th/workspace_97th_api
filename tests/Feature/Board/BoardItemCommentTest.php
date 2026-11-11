@@ -30,6 +30,7 @@ test('a comment can be posted with mentions and an attachment', function () {
     $item = createCommentTestItem();
     $user = User::factory()->create();
     $mentioned = User::factory()->create();
+    addBoardMembers($item->board, $mentioned);
 
     $response = $this->actingAs($user, 'api')->post(
         "/api/boards/{$item->board_id}/items/{$item->id}/comments",
@@ -388,6 +389,7 @@ test('notifying someone directly on a comment creates a Notification::TYPE_NOTIF
     $item = createCommentTestItem();
     $actor = User::factory()->create();
     $notified = User::factory()->create();
+    addBoardMembers($item->board, $notified);
 
     $this->actingAs($actor, 'api')->post(
         "/api/boards/{$item->board_id}/items/{$item->id}/comments",

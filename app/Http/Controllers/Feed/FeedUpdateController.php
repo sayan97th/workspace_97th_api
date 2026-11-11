@@ -19,6 +19,7 @@ use App\Services\Board\ScheduledCommentService;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
 use App\Support\BoardEditGate;
+use App\Support\BoardMembers;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -222,17 +223,16 @@ class FeedUpdateController extends Controller
     /**
      * GET /api/feed/boards/{board}/people
      *
-     * The workspace members that can be `@mentioned` in a reply to an update
-     * on `{board}`, for the feed card's reply composer (the item drawer gets
+     * The people added to `{board}`, the only ones that can be `@mentioned` in
+     * a reply to one of its updates, for the feed card's reply composer (the item drawer gets
      * the same roster from its board's own people list).
      */
     public function people(Request $request, WorkspaceNavigationItem $board): JsonResponse
     {
         abort_unless($request->user()->workspaces()->where('workspaces.id', $board->workspace_id)->exists(), 403);
 
-        // Deactivated accounts stay out: they cannot see the mention, so there is nobody to notify.
-        $people = $board->workspace->users()
-            ->where('users.is_active', true)
+        // Only the people added to the board, deactivated accounts never count, see BoardMembers.
+        $people = BoardMembers::query($board)
             ->orderBy('first_name')
             ->orderBy('last_name')
             ->get()
@@ -541,6 +541,7 @@ class FeedUpdateController extends Controller
             'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
         ]);
+        $validated['mentioned_user_ids'] = $this->boardMemberIds($comment, $validated['mentioned_user_ids'] ?? []);
 
         $reply = $this->createReply($comment, $validated, null);
 
@@ -566,6 +567,7 @@ class FeedUpdateController extends Controller
             'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
             'scheduled_at' => ['required', 'date', 'after:now'],
         ]);
+        $validated['mentioned_user_ids'] = $this->boardMemberIds($comment, $validated['mentioned_user_ids'] ?? []);
 
         $reply = $this->createReply($comment, $validated, $validated['scheduled_at']);
 
@@ -974,6 +976,18 @@ class FeedUpdateController extends Controller
     private function boardFor(BoardItemComment|BoardComment $comment): WorkspaceNavigationItem
     {
         return $comment instanceof BoardItemComment ? $comment->item->board : $comment->board;
+    }
+
+    /**
+     * The mentioned ids a reply keeps: only people added to the comment's board can be mentioned
+     * and notified, see {@see BoardMembers}.
+     *
+     * @param  array<int, mixed>  $user_ids
+     * @return array<int, int>
+     */
+    private function boardMemberIds(BoardItemComment|BoardComment $comment, array $user_ids): array
+    {
+        return BoardMembers::onlyMembers($this->boardFor($comment), $user_ids)->all();
     }
 
     /**

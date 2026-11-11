@@ -31,6 +31,7 @@ test('assigning a new person on a people column creates a notification linked to
     [$board, , $column, $item] = createPeopleAssignmentTestBoard();
     $actor = User::factory()->create();
     $assignee = User::factory()->create();
+    addBoardMembers($board, $assignee);
 
     $this->actingAs($actor, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/values", [
         'values' => [(string) $column->id => [$assignee->id]],
@@ -117,6 +118,7 @@ test('saving a confirmed people selection in one request stores it and only noti
     $removed_assignee = User::factory()->create();
     $first_new_assignee = User::factory()->create();
     $second_new_assignee = User::factory()->create();
+    addBoardMembers($board, $first_new_assignee, $second_new_assignee);
     $item->values()->create(['column_id' => $column->id, 'value' => [$kept_assignee->id, $removed_assignee->id]]);
 
     // The People picker's "Save" button sends the whole drafted list at once.

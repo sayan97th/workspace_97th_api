@@ -478,6 +478,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // per-board archived/deleted-items panel, its activity log, and
     // exporting its primary (or a given) tab to Excel.
     Route::prefix('boards/{item}')->middleware('board.visible')->group(function () {
+        // The people added to the board, for its People, mention and Notify pickers.
+        Route::get('members', [BoardController::class, 'members']);
         Route::post('archive', [BoardController::class, 'archive']);
         Route::patch('permissions', [BoardController::class, 'updatePermission']);
         Route::post('unarchive', [BoardController::class, 'unarchive']);

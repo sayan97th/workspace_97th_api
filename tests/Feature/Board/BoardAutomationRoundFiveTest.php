@@ -116,6 +116,7 @@ test('a mention fires once per mentioned person and can assign the mentioned per
     [$board, $view, $group, $status] = roundFiveBoard();
     $author = User::factory()->create();
     [$ada, $grace] = User::factory()->count(2)->create();
+    addBoardMembers($board, $ada, $grace);
     $owner = roundFiveColumn($board, $view, BoardColumn::TYPE_PEOPLE, 'Owner');
     $item = roundFiveItem($board, $group, 'Brief');
 
@@ -206,6 +207,7 @@ test('change column value writes a dynamic date, person or number', function () 
     Carbon::setTestNow('2026-10-05 10:00:00');
     [$board, $view, $group, $status] = roundFiveBoard();
     $actor = User::factory()->create();
+    addBoardMembers($board, $actor);
     $due = roundFiveColumn($board, $view, BoardColumn::TYPE_DATE, 'Due date');
     $owner = roundFiveColumn($board, $view, BoardColumn::TYPE_PEOPLE, 'Owner');
     $budget = roundFiveColumn($board, $view, BoardColumn::TYPE_NUMBER, 'Budget');

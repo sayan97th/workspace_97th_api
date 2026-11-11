@@ -25,6 +25,7 @@ test('a comment can be posted with mentions and an attachment', function () {
     $board = createCommentTestBoard();
     $user = User::factory()->create();
     $mentioned = User::factory()->create();
+    addBoardMembers($board, $mentioned);
 
     $response = $this->actingAs($user, 'api')->post(
         "/api/boards/{$board->id}/comments",
@@ -326,6 +327,7 @@ test('notifying someone directly on an update creates a Notification::TYPE_NOTIF
     $board = createCommentTestBoard();
     $actor = User::factory()->create();
     $notified = User::factory()->create();
+    addBoardMembers($board, $notified);
 
     $this->actingAs($actor, 'api')->post(
         "/api/boards/{$board->id}/comments",

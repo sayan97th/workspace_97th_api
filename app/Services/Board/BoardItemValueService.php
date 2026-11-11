@@ -9,6 +9,7 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Notification\NotificationService;
+use App\Support\BoardMembers;
 
 /**
  * Writes cell values for a board item. Shared by the inline cell edit, the
@@ -37,7 +38,8 @@ class BoardItemValueService
      * (columns are per-tab, so a column from a different tab of the same
      * board is rejected too, not just columns from other boards).
      *
-     * When `$actor` is given, newly-added people on a people-type column
+     * People newly added to a people-type column must have been added to the
+     * board ({@see keepOnlyBoardMembers()}). When `$actor` is given, they
      * trigger an "Assigned you" notification, see {@see notifyNewlyAssignedPeople()}.
      * `$record_activity` is switched off while an item is being created, since
      * its starting values are not changes.
@@ -64,11 +66,15 @@ class BoardItemValueService
                 continue;
             }
 
-            if ($actor && $column->type === BoardColumn::TYPE_PEOPLE) {
-                $this->notifyNewlyAssignedPeople($item, $board_item, $column, $value, $actor);
-            }
-
             $old_value = BoardItemValue::where('item_id', $board_item->id)->where('column_id', $column->id)->first()?->value;
+
+            if ($column->type === BoardColumn::TYPE_PEOPLE) {
+                $value = $this->keepOnlyBoardMembers($item, $old_value, $value);
+
+                if ($actor) {
+                    $this->notifyNewlyAssignedPeople($item, $board_item, $column, $value, $actor);
+                }
+            }
 
             $board_item->values()->updateOrCreate(
                 ['column_id' => $column->id],
@@ -102,6 +108,33 @@ class BoardItemValueService
     public function assignAutoNumbers(BoardItem $board_item, string $scope): void
     {
         $this->item_id_assigner->assignToItem($board_item, $board_item->group->board_view_id, $scope);
+    }
+
+    /**
+     * Drops the people a write adds to a People column who were not added to the board, so nobody
+     * outside it can be assigned (or notified about it), see {@see BoardMembers}. People already
+     * stored in the cell stay, so an item keeps showing someone who later lost access until it is
+     * changed by hand.
+     */
+    private function keepOnlyBoardMembers(WorkspaceNavigationItem $item, mixed $old_value, mixed $new_value): mixed
+    {
+        if (! is_array($new_value) || $new_value === []) {
+            return $new_value;
+        }
+
+        $existing_ids = collect(is_array($old_value) ? $old_value : [])->map(fn ($id) => (string) $id)->flip();
+        $added_ids = collect($new_value)->reject(fn ($id) => $existing_ids->has((string) $id));
+
+        if ($added_ids->isEmpty()) {
+            return $new_value;
+        }
+
+        $member_ids = BoardMembers::onlyMembers($item, $added_ids)->map(fn (int $id) => (string) $id)->flip();
+
+        return array_values(array_filter(
+            $new_value,
+            fn ($id) => $existing_ids->has((string) $id) || $member_ids->has((string) $id)
+        ));
     }
 
     /**

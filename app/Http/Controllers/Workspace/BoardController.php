@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Workspace;
 use App\Enums\BoardEditPermission;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\UpdateBoardPermissionRequest;
+use App\Http\Resources\BoardMemberResource;
 use App\Http\Resources\BoardResource;
 use App\Models\BoardActivityLog;
 use App\Models\BoardVisit;
@@ -12,6 +13,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
 use App\Support\BoardEditGate;
 use App\Support\BoardManagementGate;
+use App\Support\BoardMembers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -38,6 +40,23 @@ class BoardController extends Controller
         }
 
         return response()->json(new BoardResource($item));
+    }
+
+    /**
+     * GET /api/boards/{item}/members
+     *
+     * The people added to the board, the only ones its People columns can be
+     * assigned to and its updates, replies and discussion can `@mention` or
+     * notify. See {@see BoardMembers} for the rule, which matches who can open the board.
+     */
+    public function members(WorkspaceNavigationItem $item): JsonResponse
+    {
+        $members = BoardMembers::query($item)
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->get();
+
+        return response()->json(['data' => BoardMemberResource::collection($members)]);
     }
 
     /**

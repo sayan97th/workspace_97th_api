@@ -8,7 +8,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
  * A comment or (when `parent_id` is set on the underlying model) a reply,
- * for the item detail drawer's Updates tab. Expects `likes`, `reactions`,
+ * for the item detail drawer's Updates tab. Expects `likes.user`, `reactions`,
  * `views`, `bookmarks`, `mentions`, `attachments`, `author` (and, for top-level comments,
  * `replies` with the same set) to already be eager-loaded by the controller.
  *
@@ -39,6 +39,17 @@ class BoardItemCommentResource extends JsonResource
             'edited_at' => $this->edited_at,
             'like_count' => $this->likes->count(),
             'liked_by_me' => $this->likes->contains('user_id', $current_user_id),
+            // Who liked and when, oldest first, for the "who liked" popover on the Like button.
+            'likers' => $this->likes
+                ->sortBy('created_at')
+                ->map(fn ($like) => [
+                    'id' => $like->user_id,
+                    'full_name' => $like->user?->full_name ?? __('Deleted user'),
+                    'profile_photo_url' => $like->user?->profile_photo_url,
+                    'is_deactivated' => $like->user?->is_deactivated ?? true,
+                    'liked_at' => $like->created_at,
+                ])
+                ->values(),
             'view_count' => $this->views->count(),
             'seen_by_me' => $this->views->contains('user_id', $current_user_id),
             'seen_by' => $this->views

@@ -74,6 +74,7 @@ test('removing a person fires the person is unassigned trigger', function () {
     [$board, $view, $group, $status] = roundFourBoard();
     $actor = User::factory()->create();
     [$ada, $grace] = User::factory()->count(2)->create();
+    addBoardMembers($board, $actor, $ada, $grace);
     $owner = roundFourColumn($board, $view, BoardColumn::TYPE_PEOPLE, 'Owner');
     $item = roundFourItem($board, $group, 'Launch');
 
@@ -179,6 +180,7 @@ test('a column changes trigger matches values by column type', function () {
 test('rename and add or remove values keep the rest of the item', function () {
     [$board, $view, $group, $status] = roundFourBoard();
     $actor = User::factory()->create();
+    addBoardMembers($board, $actor);
     $tags = roundFourColumn($board, $view, BoardColumn::TYPE_TAGS, 'Tags', ['options' => [['id' => 'urgent', 'label' => 'Urgent'], ['id' => 'client', 'label' => 'Client'], ['id' => 'review', 'label' => 'Review']]]);
     $watchers = roundFourColumn($board, $view, BoardColumn::TYPE_PEOPLE, 'Watchers');
     $item = roundFourItem($board, $group, 'Contract');

@@ -198,6 +198,7 @@ test('item actions create subitems, assign the creator, adjust a number and set 
     Carbon::setTestNow('2026-09-28 10:00:00');
     [$board, $view, $group] = createBuilderTestBoard();
     $actor = User::factory()->create();
+    addBoardMembers($board, $actor);
     $people = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'type' => BoardColumn::TYPE_PEOPLE]);
     $number = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'type' => BoardColumn::TYPE_NUMBER]);
     $date = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'type' => BoardColumn::TYPE_DATE]);

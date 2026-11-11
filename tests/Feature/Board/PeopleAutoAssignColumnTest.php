@@ -65,6 +65,7 @@ test('people sent with the new item win over the creator', function () {
     $teammate = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
     $column = createReporterColumn($board, $view);
+    addBoardMembers($board, $teammate);
 
     $this->actingAs($user, 'api')
         ->postJson("/api/boards/{$board->id}/items", [
@@ -81,6 +82,7 @@ test('the auto assigned creator can be changed like any People cell', function (
     $teammate = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
     $column = createReporterColumn($board, $view);
+    addBoardMembers($board, $teammate);
     $item_id = $this->actingAs($user, 'api')
         ->postJson("/api/boards/{$board->id}/items", ['name' => 'Bug report', 'group_id' => $group->id])
         ->json('item.id');
