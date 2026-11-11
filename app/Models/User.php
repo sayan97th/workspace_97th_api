@@ -346,6 +346,16 @@ class User extends Authenticatable implements JWTSubject, PasskeyUser
     }
 
     /**
+     * The unsent update and reply drafts this user left in comment composers.
+     *
+     * @return HasMany<CommentDraft, $this>
+     */
+    public function commentDrafts(): HasMany
+    {
+        return $this->hasMany(CommentDraft::class);
+    }
+
+    /**
      * The Update Feed filter combinations this user saved.
      *
      * @return HasMany<FeedSavedView, $this>

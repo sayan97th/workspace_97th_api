@@ -70,6 +70,7 @@ use App\Http\Controllers\Board\BoardViewImageController;
 use App\Http\Controllers\Board\BoardViewShareLinkController;
 use App\Http\Controllers\BrandingController as PublicBrandingController;
 use App\Http\Controllers\BroadcastAuthController;
+use App\Http\Controllers\Comment\CommentDraftController;
 use App\Http\Controllers\Comment\SavedReplyController;
 use App\Http\Controllers\Favorite\FavoriteController;
 use App\Http\Controllers\Feed\FeedUpdateController;
@@ -287,6 +288,10 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
 
     // The current user's reusable update and reply templates.
     Route::apiResource('saved-replies', SavedReplyController::class)->except(['show']);
+
+    // The current user's unsent update and reply drafts, across every board (the "Drafts" list).
+    Route::get('comment-drafts', [CommentDraftController::class, 'index']);
+    Route::delete('comment-drafts/{comment_draft}', [CommentDraftController::class, 'destroyById']);
 
     // Update Feed — real-time (Reverb) + REST-readable stream of comment
     // "updates" (item- and board-level) the current user has visibility on.
@@ -765,6 +770,13 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('/', [BoardViewFileController::class, 'store']);
                 Route::delete('{file}', [BoardViewFileController::class, 'destroy']);
             });
+        });
+
+        // The viewer's own unsent update and reply drafts on this board, see CommentDraftController.
+        Route::prefix('comment-drafts')->group(function () {
+            Route::get('/', [CommentDraftController::class, 'boardIndex']);
+            Route::put('/', [CommentDraftController::class, 'upsert']);
+            Route::delete('/', [CommentDraftController::class, 'destroy']);
         });
 
         // The Filter panel's personal "Saved filters", private to each user.
