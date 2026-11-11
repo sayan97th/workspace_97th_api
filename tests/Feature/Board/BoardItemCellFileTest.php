@@ -387,3 +387,48 @@ test('the backfill command adds variants to images stored before them and is saf
 
     $this->artisan('board:generate-cell-image-variants')->expectsOutputToContain('Processed 0 image(s)')->assertSuccessful();
 });
+
+test('back to back uploads and a link on the same cell all stay in the list', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->create('first.pdf', 10, 'application/pdf')]])
+        ->assertCreated();
+    $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column).'/link', ['url' => 'https://example.com'])
+        ->assertCreated();
+    $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column), [
+            'files' => [
+                UploadedFile::fake()->create('second.pdf', 10, 'application/pdf'),
+                UploadedFile::fake()->create('third.pdf', 10, 'application/pdf'),
+            ],
+        ])
+        ->assertCreated()
+        ->assertJsonCount(4, 'files')
+        ->assertJsonPath('files.0.file_name', 'first.pdf')
+        ->assertJsonPath('files.1.kind', 'link')
+        ->assertJsonPath('files.3.file_name', 'third.pdf');
+
+    expect($board_item->values()->where('column_id', $column->id)->first()->value)->toHaveCount(4);
+});
+
+test('renaming a missing entry fails without touching the stored list', function () {
+    Storage::fake(config('filesystems.app_disk'));
+    [$board_item, $column] = createCellFileTestItem();
+    $user = User::factory()->create();
+
+    $this->actingAs($user, 'api')
+        ->postJson(cellFilesUrl($board_item, $column), ['files' => [UploadedFile::fake()->create('brief.pdf', 10, 'application/pdf')]])
+        ->assertCreated();
+
+    $this->actingAs($user, 'api')
+        ->patchJson(cellFilesUrl($board_item, $column).'/missing-id', ['file_name' => 'renamed.pdf'])
+        ->assertNotFound();
+
+    $stored = $board_item->values()->where('column_id', $column->id)->first()->value;
+    expect($stored)->toHaveCount(1)
+        ->and($stored[0]['file_name'])->toBe('brief.pdf');
+});

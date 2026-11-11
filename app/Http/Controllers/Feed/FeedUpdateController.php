@@ -348,7 +348,7 @@ class FeedUpdateController extends Controller
     }
 
     /**
-     * DELETE /api/feed/updates/{id}/seen
+     * DELETE /api/feed/updates/{id}/seen  {thread?: bool, comment_ids?: int[]}
      *
      * "Mark as unread": brings the update back as unread for the viewer, so
      * it can be revisited later. A no-op on the viewer's own posts, which are
@@ -356,13 +356,38 @@ class FeedUpdateController extends Controller
      */
     public function markUnseen(Request $request, string $id): JsonResponse
     {
+        $request->validate([
+            'thread' => ['sometimes', 'boolean'],
+            'comment_ids' => ['sometimes', 'array', 'max:500'],
+            'comment_ids.*' => ['integer'],
+        ]);
+
         $comment = $this->resolveComment($id);
         $user_id = $request->user()->id;
+        $views_table = $comment->views()->getRelated()->getTable();
+        $is_thread = $request->boolean('thread') && $comment->parent_id === null;
+
+        // With `comment_ids` (the inbox "Undo the last close"), only the rows the close marked
+        // as seen come back as unread, limited to this update and the replies under it.
+        if ($request->has('comment_ids')) {
+            $thread_ids = collect([$comment->id]);
+            if ($is_thread) {
+                $thread_ids = $thread_ids->merge($comment->replies()->pluck('id'));
+            }
+
+            DB::table($views_table)
+                ->where('user_id', $user_id)
+                ->whereIn('comment_id', $thread_ids->intersect(collect($request->input('comment_ids'))->map(fn ($value) => (int) $value))->values())
+                ->delete();
+
+            return response()->json(['data' => $this->cardResource($comment)]);
+        }
+
         $comment->views()->where('user_id', $user_id)->delete();
 
-        // With `thread`, the replies under a top-level update come back as unread too (the inbox "Undo").
-        if ($request->boolean('thread') && $comment->parent_id === null) {
-            DB::table($comment->views()->getRelated()->getTable())
+        // With `thread`, the replies under a top-level update come back as unread too.
+        if ($is_thread) {
+            DB::table($views_table)
                 ->where('user_id', $user_id)
                 ->whereIn('comment_id', $comment->replies()->select('id'))
                 ->delete();
@@ -668,30 +693,48 @@ class FeedUpdateController extends Controller
      * Idempotent create-only. With `thread`, a top-level update is marked seen
      * together with every visible reply under it, since the feed shows the
      * whole thread as one card and reading the card reads all of it.
+     *
+     * `meta.closed_comment_ids` lists the rows this call actually marked as
+     * seen, so the inbox "Undo" can bring back exactly those and leave the
+     * replies the viewer had already read alone.
      */
     public function markSeen(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
         $user_id = $request->user()->id;
-        $comment->views()->firstOrCreate(['user_id' => $user_id]);
+        $views_table = $comment->views()->getRelated()->getTable();
 
+        $thread_ids = collect([$comment->id]);
         if ($request->boolean('thread') && $comment->parent_id === null) {
-            $now = now();
-            $reply_ids = $comment->replies()->pluck('id');
+            $thread_ids = $thread_ids->merge($comment->replies()->pluck('id'));
+        }
 
-            if ($reply_ids->isNotEmpty()) {
-                DB::table($comment->views()->getRelated()->getTable())->insertOrIgnore(
-                    $reply_ids->map(fn ($reply_id) => [
-                        'comment_id' => $reply_id,
+        $closed_comment_ids = DB::transaction(function () use ($views_table, $thread_ids, $user_id) {
+            $already_seen = DB::table($views_table)
+                ->where('user_id', $user_id)
+                ->whereIn('comment_id', $thread_ids)
+                ->pluck('comment_id');
+            $newly_seen = $thread_ids->diff($already_seen)->values();
+
+            if ($newly_seen->isNotEmpty()) {
+                $now = now();
+                DB::table($views_table)->insertOrIgnore(
+                    $newly_seen->map(fn ($comment_id) => [
+                        'comment_id' => $comment_id,
                         'user_id' => $user_id,
                         'created_at' => $now,
                         'updated_at' => $now,
                     ])->all()
                 );
             }
-        }
 
-        return response()->json(['data' => $this->cardResource($comment)]);
+            return $newly_seen;
+        });
+
+        return response()->json([
+            'data' => $this->cardResource($comment),
+            'meta' => ['closed_comment_ids' => $closed_comment_ids->map(fn ($comment_id) => (int) $comment_id)->all()],
+        ]);
     }
 
     /**

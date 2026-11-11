@@ -19,6 +19,7 @@ use App\Support\BoardEditGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -83,8 +84,7 @@ class BoardItemCellFileController extends Controller
             return $variants ? [...$entry, ...$variants] : $entry;
         });
 
-        $next_files = $this->currentFiles($board_item, $column)->concat($uploaded)->values();
-        $this->saveFiles($board_item, $column, $next_files, $request->user());
+        $next_files = $this->writeFiles($board_item, $column, $request->user(), fn (Collection $current) => $current->concat($uploaded));
 
         return response()->json([
             'message' => 'File uploaded successfully.',
@@ -117,8 +117,7 @@ class BoardItemCellFileController extends Controller
             'size_bytes' => 0,
         ];
 
-        $next_files = $this->currentFiles($board_item, $column)->push($link)->values();
-        $this->saveFiles($board_item, $column, $next_files, $request->user());
+        $next_files = $this->writeFiles($board_item, $column, $request->user(), fn (Collection $current) => $current->push($link));
 
         return response()->json([
             'message' => 'Link added successfully.',
@@ -153,8 +152,7 @@ class BoardItemCellFileController extends Controller
             'size_bytes' => 0,
         ];
 
-        $next_files = $this->currentFiles($board_item, $column)->push($entry)->values();
-        $this->saveFiles($board_item, $column, $next_files, $request->user());
+        $next_files = $this->writeFiles($board_item, $column, $request->user(), fn (Collection $current) => $current->push($entry));
 
         return response()->json([
             'message' => 'Doc created successfully.',
@@ -175,17 +173,15 @@ class BoardItemCellFileController extends Controller
     {
         $this->authorizeCellEdit($request, $item, $board_item, $column);
 
-        $existing = $this->currentFiles($board_item, $column);
-        $target = $existing->firstWhere('id', $file_id);
-        abort_unless(is_array($target), 404);
-        abort_if(($target['kind'] ?? self::KIND_FILE) === self::KIND_DOC, 422, 'A Doc is renamed from the Doc itself.');
+        $next_files = $this->writeFiles($board_item, $column, $request->user(), function (Collection $current) use ($request, $file_id) {
+            $target = $current->firstWhere('id', $file_id);
+            abort_unless(is_array($target), 404);
+            abort_if(($target['kind'] ?? self::KIND_FILE) === self::KIND_DOC, 422, 'A Doc is renamed from the Doc itself.');
 
-        $file_name = $this->keepExtension($target, $request->validated('file_name'));
+            $file_name = $this->keepExtension($target, $request->validated('file_name'));
 
-        $next_files = $existing
-            ->map(fn (array $file) => ($file['id'] ?? null) === $file_id ? [...$file, 'file_name' => $file_name] : $file)
-            ->values();
-        $this->saveFiles($board_item, $column, $next_files, $request->user());
+            return $current->map(fn (array $file) => ($file['id'] ?? null) === $file_id ? [...$file, 'file_name' => $file_name] : $file);
+        });
 
         return response()->json([
             'message' => 'File renamed successfully.',
@@ -217,11 +213,15 @@ class BoardItemCellFileController extends Controller
     {
         $this->authorizeCellEdit($request, $item, $board_item, $column);
 
-        $existing = $this->currentFiles($board_item, $column);
-        $target = $existing->firstWhere('id', $file_id);
+        $target = null;
+        $next_files = $this->writeFiles($board_item, $column, $request->user(), function (Collection $current) use ($file_id, &$target) {
+            $target = $current->firstWhere('id', $file_id);
 
-        // A link entry has no stored file. The empty path check matters, an
-        // `exists('')` on the local disk would match the disk root itself.
+            return $current->reject(fn (array $file) => ($file['id'] ?? null) === $file_id);
+        });
+
+        // Stored files go once the list no longer points at them. A link entry has no stored file.
+        // The empty path check matters, an `exists('')` on the local disk would match the disk root itself.
         $target_path = is_array($target) ? (string) ($target['path'] ?? '') : '';
         if ($target_path !== '' && Storage::disk(config('filesystems.app_disk'))->exists($target_path)) {
             Storage::disk(config('filesystems.app_disk'))->delete($target_path);
@@ -229,9 +229,6 @@ class BoardItemCellFileController extends Controller
         if (is_array($target)) {
             $image_variants->deleteVariants($target);
         }
-
-        $next_files = $existing->reject(fn (array $file) => ($file['id'] ?? null) === $file_id)->values();
-        $this->saveFiles($board_item, $column, $next_files, $request->user());
 
         return response()->json([
             'message' => 'File removed successfully.',
@@ -283,31 +280,35 @@ class BoardItemCellFileController extends Controller
     }
 
     /**
-     * Saves the column's new file list, then lets the automations watching the column react
-     * ("When a file is uploaded", "When a column changes").
+     * Read, change and save the column's file list as one locked step, then let the automations
+     * watching the column react ("When a file is uploaded", "When a column changes").
      *
-     * @param  Collection<int, array<string, mixed>>  $files
-     */
-    private function saveFiles(BoardItem $board_item, BoardColumn $column, Collection $files, ?User $actor): void
-    {
-        $old_files = $board_item->values()->where('column_id', $column->id)->first()?->value;
-
-        $board_item->values()->updateOrCreate(
-            ['column_id' => $column->id],
-            ['value' => $files->all()]
-        );
-
-        app(BoardAutomationService::class)->handleValueChanged($board_item->loadMissing('group'), $column, $old_files, $files->all(), $actor);
-    }
-
-    /**
+     * The item row is locked for the read and the write, so two writes on the same cell (a second
+     * upload sent before the first answered, a link added while a file uploads) each see the
+     * other's entries instead of overwriting them. Automations run after the commit, outside the lock.
+     *
+     * @param  callable(Collection<int, array<string, mixed>>): Collection<int, array<string, mixed>>  $change
      * @return Collection<int, array<string, mixed>>
      */
-    private function currentFiles(BoardItem $board_item, BoardColumn $column): Collection
+    private function writeFiles(BoardItem $board_item, BoardColumn $column, ?User $actor, callable $change): Collection
     {
-        $value = $board_item->values()->where('column_id', $column->id)->first()?->value;
+        [$old_files, $next_files] = DB::transaction(function () use ($board_item, $column, $change) {
+            BoardItem::query()->whereKey($board_item->id)->lockForUpdate()->first();
 
-        return collect(is_array($value) ? $value : []);
+            $old_files = $board_item->values()->where('column_id', $column->id)->first()?->value;
+            $next_files = $change(collect(is_array($old_files) ? $old_files : []))->values();
+
+            $board_item->values()->updateOrCreate(
+                ['column_id' => $column->id],
+                ['value' => $next_files->all()]
+            );
+
+            return [$old_files, $next_files];
+        });
+
+        app(BoardAutomationService::class)->handleValueChanged($board_item->loadMissing('group'), $column, $old_files, $next_files->all(), $actor);
+
+        return $next_files;
     }
 
     /**

@@ -111,3 +111,43 @@ test('marking a thread unread brings its replies back as unread too', function (
     expect($response->json('data.is_unread'))->toBeTrue()
         ->and($response->json('data.replies.0.is_unread'))->toBeTrue();
 });
+
+test('undoing the last close only reopens the rows that close read', function () {
+    $viewer = User::factory()->create();
+    $teammate = User::factory()->create();
+    $item = createInboxItem($viewer, $teammate);
+    $root = postInboxComment($item, $teammate, 'Update');
+    $old_reply = postInboxComment($item, $teammate, 'Read before', $root);
+    $new_reply = postInboxComment($item, $teammate, 'Still unread', $root);
+
+    // The viewer had already read one reply before closing the thread.
+    $this->actingAs($viewer, 'api')->postJson("/api/feed/updates/ic-{$old_reply->id}/seen")->assertOk();
+
+    $closed = $this->postJson("/api/feed/updates/ic-{$root->id}/seen", ['thread' => true])->assertOk();
+    $closed_ids = $closed->json('meta.closed_comment_ids');
+
+    expect($closed_ids)->toEqualCanonicalizing([$root->id, $new_reply->id]);
+
+    $response = $this->deleteJson("/api/feed/updates/ic-{$root->id}/seen", ['thread' => true, 'comment_ids' => $closed_ids])->assertOk();
+
+    $replies = collect($response->json('data.replies'))->keyBy('id');
+    expect($response->json('data.is_unread'))->toBeTrue()
+        ->and($replies["ic-{$old_reply->id}"]['is_unread'])->toBeFalse()
+        ->and($replies["ic-{$new_reply->id}"]['is_unread'])->toBeTrue();
+});
+
+test('undoing a close ignores comment ids from other threads', function () {
+    $viewer = User::factory()->create();
+    $teammate = User::factory()->create();
+    $item = createInboxItem($viewer, $teammate);
+    $root = postInboxComment($item, $teammate, 'Update');
+    $other = postInboxComment($item, $teammate, 'Other update');
+
+    $this->actingAs($viewer, 'api')->postJson("/api/feed/updates/ic-{$other->id}/seen", ['thread' => true])->assertOk();
+    $this->postJson("/api/feed/updates/ic-{$root->id}/seen", ['thread' => true])->assertOk();
+
+    $this->deleteJson("/api/feed/updates/ic-{$root->id}/seen", ['thread' => true, 'comment_ids' => [$root->id, $other->id]])->assertOk();
+
+    expect($other->views()->where('user_id', $viewer->id)->exists())->toBeTrue()
+        ->and($root->views()->where('user_id', $viewer->id)->exists())->toBeFalse();
+});
