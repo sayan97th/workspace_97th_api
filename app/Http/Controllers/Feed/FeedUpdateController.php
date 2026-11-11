@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Feed;
 
 use App\Exports\FeedUpdatesExport;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Feed\ScheduleFeedReplyRequest;
+use App\Http\Requests\Feed\StoreFeedReplyRequest;
+use App\Http\Requests\Feed\UpdateFeedUpdateRequest;
 use App\Http\Resources\FeedUpdateResource;
 use App\Models\BoardComment;
 use App\Models\BoardItem;
@@ -543,17 +546,13 @@ class FeedUpdateController extends Controller
      * "Edit update" from the card menu. Author only, the previous body is kept
      * as a revision exactly like an edit made in the item drawer.
      */
-    public function update(Request $request, string $id): JsonResponse
+    public function update(UpdateFeedUpdateRequest $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
         $this->ensureViewerCanAccess($comment, $request->user());
         abort_if($comment->user_id !== $request->user()->id, 403);
 
-        $validated = $request->validate([
-            'body' => ['required', 'string', 'max:5000'],
-        ]);
-
-        $this->thread_actions->editBody($comment, trim($validated['body']), $request->user());
+        $this->thread_actions->editBody($comment, $request->body(), $request->user());
 
         return response()->json(['data' => $this->cardResource($comment)]);
     }
@@ -702,16 +701,14 @@ class FeedUpdateController extends Controller
      * reply, in which case this attaches to its parent (one level of
      * nesting only, mirroring `StoreBoardItemCommentRequest`).
      */
-    public function reply(Request $request, string $id): JsonResponse
+    public function reply(StoreFeedReplyRequest $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
         $this->ensureViewerCanAccess($comment, $request->user());
-        $validated = $request->validate([
-            'body' => ['required', 'string', 'max:5000'],
-            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
-            'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
-        ]);
-        $validated['mentioned_user_ids'] = $this->boardMemberIds($comment, $validated['mentioned_user_ids'] ?? []);
+        $validated = [
+            'body' => $request->body(),
+            'mentioned_user_ids' => $this->boardMemberIds($comment, $request->validated('mentioned_user_ids', [])),
+        ];
 
         $reply = $this->createReply($comment, $validated, null);
 
@@ -727,19 +724,16 @@ class FeedUpdateController extends Controller
      * (`scheduled_at` in the future) until
      * {@see ScheduledCommentService::publishDue()} publishes it.
      */
-    public function schedule(Request $request, string $id): JsonResponse
+    public function schedule(ScheduleFeedReplyRequest $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
         $this->ensureViewerCanAccess($comment, $request->user());
-        $validated = $request->validate([
-            'body' => ['required', 'string', 'max:5000'],
-            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
-            'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
-            'scheduled_at' => ['required', 'date', 'after:now'],
-        ]);
-        $validated['mentioned_user_ids'] = $this->boardMemberIds($comment, $validated['mentioned_user_ids'] ?? []);
+        $validated = [
+            'body' => $request->body(),
+            'mentioned_user_ids' => $this->boardMemberIds($comment, $request->validated('mentioned_user_ids', [])),
+        ];
 
-        $reply = $this->createReply($comment, $validated, $validated['scheduled_at']);
+        $reply = $this->createReply($comment, $validated, $request->validated('scheduled_at'));
 
         return response()->json(['data' => new FeedUpdateResource($this->refreshed($reply))], 201);
     }
