@@ -72,6 +72,8 @@ class NotificationResource extends JsonResource
             // Notifications of the same type on the same thread share this key,
             // which is how the drawer collapses "3 people replied" into one card.
             'group_key' => $this->link !== null ? "{$this->type}|{$this->link}" : "single|{$this->id}",
+            // Only the list endpoint adds it (`withViewerLike`), a live push has not been liked yet.
+            'is_liked' => (bool) ($this->is_liked ?? false),
             'is_unread' => ! $this->is_read,
             'is_saved' => $this->saved_at !== null,
             'category' => Notification::categoryOf($this->type),

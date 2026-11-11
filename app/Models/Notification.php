@@ -275,6 +275,26 @@ class Notification extends Model
     }
 
     /**
+     * Adds `is_liked`: whether `$user_id` liked the comment behind each
+     * notification, what the card's one click Like button shows. Always false
+     * for a notification that is not about a comment.
+     *
+     * @param  Builder<Notification>  $query
+     * @return Builder<Notification>
+     */
+    public function scopeWithViewerLike(Builder $query, int $user_id): Builder
+    {
+        return $query->selectRaw(
+            "CASE notifications.comment_kind
+                WHEN 'item' THEN EXISTS (SELECT 1 FROM board_item_comment_likes WHERE board_item_comment_likes.comment_id = notifications.comment_id AND board_item_comment_likes.user_id = ?)
+                WHEN 'board' THEN EXISTS (SELECT 1 FROM board_comment_likes WHERE board_comment_likes.comment_id = notifications.comment_id AND board_comment_likes.user_id = ?)
+                ELSE 0
+            END AS is_liked",
+            [$user_id, $user_id]
+        );
+    }
+
+    /**
      * @param  Builder<Notification>  $query
      * @return Builder<Notification>
      */

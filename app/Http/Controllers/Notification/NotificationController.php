@@ -65,6 +65,7 @@ class NotificationController extends Controller
                     ->limit(1),
                 'is_item_muted'
             )
+            ->withViewerLike($request->user()->id)
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->cursorPaginate($validated['limit'] ?? self::PAGE_SIZE);
