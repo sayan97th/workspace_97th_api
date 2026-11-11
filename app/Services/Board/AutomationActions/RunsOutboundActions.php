@@ -61,6 +61,7 @@ trait RunsOutboundActions
                 action_target: $action_target,
                 link: $item ? "/boards/{$item->board_id}/pulses/{$item->id}" : "/boards/{$board->id}",
                 board_item: $item,
+                message: $has_message ? $action_target : null,
             );
         }
 

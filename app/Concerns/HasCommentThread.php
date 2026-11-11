@@ -20,6 +20,7 @@ use App\Models\BoardItemCommentNotify;
 use App\Models\BoardItemCommentReaction;
 use App\Models\BoardItemCommentRevision;
 use App\Models\BoardItemCommentView;
+use App\Models\Notification;
 use App\Models\User;
 use App\Services\Board\CommentThreadActionsService;
 use Illuminate\Database\Eloquent\Builder;
@@ -39,6 +40,24 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 trait HasCommentThread
 {
+    /**
+     * Keeps the message preview stored on notifications about this comment in
+     * step with it: an edit refreshes it, deleting the comment clears it (so
+     * removed text never lingers in someone's bell) and restoring brings it back.
+     */
+    public static function bootHasCommentThread(): void
+    {
+        static::updated(function (BoardItemComment|BoardComment $comment) {
+            if ($comment->wasChanged('body')) {
+                Notification::forComment($comment)->update(['preview' => Notification::previewFrom($comment->body)]);
+            }
+        });
+
+        static::deleted(fn (BoardItemComment|BoardComment $comment) => Notification::forComment($comment)->update(['preview' => null]));
+
+        static::restored(fn (BoardItemComment|BoardComment $comment) => Notification::forComment($comment)->update(['preview' => Notification::previewFrom($comment->body)]));
+    }
+
     /**
      * @return array<string, string>
      */

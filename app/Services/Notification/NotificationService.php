@@ -2,6 +2,7 @@
 
 namespace App\Services\Notification;
 
+use App\Concerns\HasCommentThread;
 use App\Events\NewNotification;
 use App\Jobs\SendEmailJob;
 use App\Mail\Notifications\AssignedNotificationEmail;
@@ -60,6 +61,17 @@ class NotificationService
      * notification keeps a reference to it so the bell can reply to that thread
      * inline, and an item comment also ties the notification to its item, which
      * is what muting an item silences.
+     *
+     * Like a monday.com notification the row is self-contained: it stores its
+     * target and a snapshot of the message preview and the item and board names
+     * (see {@see Notification::snapshotAttributes()}), so the bell never has to
+     * join comments to render it. Editing or deleting the comment refreshes or
+     * clears the preview, see {@see HasCommentThread}.
+     *
+     * `$message` is text written for the notification itself, an automation's
+     * "notify" message. The bell shows it under "Automations" instead of the
+     * sentence, while email and Slack keep using `$action_label` and
+     * `$action_target`.
      */
     public function notify(
         User $recipient,
@@ -72,6 +84,7 @@ class NotificationService
         ?BoardItem $board_item = null,
         BoardItemComment|BoardComment|null $comment = null,
         bool $allow_self = false,
+        ?string $message = null,
     ): ?Notification {
         if (! $allow_self && $actor !== null && $recipient->id === $actor->id) {
             return null;
@@ -95,6 +108,7 @@ class NotificationService
         $notification = Notification::create([
             'user_id' => $recipient->id,
             'actor_id' => $actor?->id,
+            'sender_type' => Notification::senderTypeOf($type),
             'type' => $type,
             'board_id' => $board?->id,
             'board_item_id' => $board_item?->id,
@@ -107,6 +121,7 @@ class NotificationService
             'action_label' => $action_label,
             'action_target' => $action_target,
             'link' => $link,
+            ...Notification::snapshotAttributes($board, $board_item, $comment, $message),
         ]);
 
         $notification->load(['actor', 'board']);

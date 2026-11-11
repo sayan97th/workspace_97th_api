@@ -101,7 +101,12 @@ class NotificationController extends Controller
             ->orderBy('first_name')
             ->orderBy('last_name')
             ->get()
-            ->map(fn (User $actor) => ['id' => $actor->id, 'name' => $actor->full_name])
+            ->map(fn (User $actor) => [
+                'id' => $actor->id,
+                'name' => $actor->full_name,
+                'avatar_url' => $actor->profile_photo_url,
+                'is_deactivated' => $actor->is_deactivated,
+            ])
             ->values();
 
         return response()->json(['data' => ['boards' => $boards, 'actors' => $actors]]);
@@ -163,6 +168,27 @@ class NotificationController extends Controller
     }
 
     /**
+     * DELETE /api/notifications
+     *
+     * The bell drawer's "Delete all": dismisses every notification the user
+     * still has, snoozed ones included, so nothing resurfaces later. Responds
+     * with how many were removed and the fresh unread count (always zero).
+     */
+    public function dismissAll(Request $request): JsonResponse
+    {
+        $dismissed_count = $request->user()->notifications()
+            ->whereNull('dismissed_at')
+            ->update(['dismissed_at' => now(), 'saved_at' => null, 'snoozed_until' => null]);
+
+        return response()->json([
+            'data' => [
+                'dismissed_count' => $dismissed_count,
+                'unread_count' => $request->user()->notifications()->unread()->visible()->count(),
+            ],
+        ]);
+    }
+
+    /**
      * PATCH /api/notifications/{notification}/read
      */
     public function markAsRead(Request $request, Notification $notification): JsonResponse
@@ -203,15 +229,15 @@ class NotificationController extends Controller
      * PATCH /api/notifications/read-all
      *
      * Marks every one of the current user's unread, visible notifications as
-     * read, the bell drawer's "Mark all as read". Notifications saved for later
-     * are left alone, saving one is how the user keeps it out of a bulk clear.
+     * read, the bell drawer's "Mark all as read". Saved notifications are
+     * included, the drawer no longer has a Saved tab that would explain why
+     * some of them stayed unread.
      */
     public function markAllAsRead(Request $request): JsonResponse
     {
         $request->user()->notifications()
             ->unread()
             ->visible()
-            ->notSaved()
             ->update(['is_read' => true, 'read_at' => now()]);
 
         return response()->json(['message' => 'All notifications marked as read.']);
@@ -411,7 +437,8 @@ class NotificationController extends Controller
 
     /**
      * Matches every whitespace-separated term of `$search` against the actor's
-     * first or last name, or the board's label, so "ada love" finds Ada Lovelace.
+     * first or last name, the board's label, or the item name, sentence and message
+     * preview stored on the notification, so "ada love" finds Ada Lovelace.
      *
      * @param  Builder<Notification>  $query
      * @return Builder<Notification>
@@ -425,7 +452,11 @@ class NotificationController extends Controller
                 $inner->whereHas('actor', fn (Builder $actor) => $actor
                     ->where('first_name', 'like', $like)
                     ->orWhere('last_name', 'like', $like))
-                    ->orWhereHas('board', fn (Builder $board) => $board->where('label', 'like', $like));
+                    ->orWhereHas('board', fn (Builder $board) => $board->where('label', 'like', $like))
+                    ->orWhere('board_name', 'like', $like)
+                    ->orWhere('item_name', 'like', $like)
+                    ->orWhere('action_target', 'like', $like)
+                    ->orWhere('preview', 'like', $like);
             });
         }
 

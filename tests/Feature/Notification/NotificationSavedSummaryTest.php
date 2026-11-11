@@ -38,14 +38,14 @@ test('a notification can be saved for later and listed in the saved tab', functi
     $this->actingAs($user, 'api')->getJson('/api/notifications?tab=saved')->assertOk()->assertJsonCount(0, 'data');
 });
 
-test('mark all as read leaves saved notifications unread', function () {
+test('mark all as read also reads saved notifications', function () {
     $user = User::factory()->create();
     $saved = createSavedTestNotification($user, ['saved_at' => now()]);
     $other = createSavedTestNotification($user);
 
     $this->actingAs($user, 'api')->patchJson('/api/notifications/read-all')->assertOk();
 
-    expect($saved->fresh()->is_read)->toBeFalse()->and($other->fresh()->is_read)->toBeTrue();
+    expect($saved->fresh()->is_read)->toBeTrue()->and($other->fresh()->is_read)->toBeTrue();
 });
 
 test('bulk save and unsave apply to the selection and dismissing clears the saved mark', function () {

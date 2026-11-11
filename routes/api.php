@@ -260,6 +260,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Notifications — real-time (Reverb) + REST-readable notification feed.
     Route::prefix('notifications')->group(function () {
         Route::get('/', [NotificationController::class, 'index']);
+        Route::delete('/', [NotificationController::class, 'dismissAll']);
         Route::get('filters', [NotificationController::class, 'filters']);
         Route::get('unread-count', [NotificationController::class, 'unreadCount']);
         Route::get('latest', [NotificationController::class, 'latest'])->middleware('throttle:60,1');

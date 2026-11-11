@@ -107,7 +107,8 @@ trait RunsSubscriberActions
 
         $board = $item->board ?? $automation->board;
         $automation_label = $automation->name ?: 'Automation';
-        $action_target = trim((string) ($params['message'] ?? '')) !== ''
+        $has_message = trim((string) ($params['message'] ?? '')) !== '';
+        $action_target = $has_message
             ? $this->renderer->render($params['message'], $automation, $item, $actor, $context)
             : sprintf('ran on "%s" on the Board "%s"', $item->name, $board->label);
 
@@ -121,6 +122,7 @@ trait RunsSubscriberActions
                 action_target: $action_target,
                 link: "/boards/{$item->board_id}/pulses/{$item->id}",
                 board_item: $item,
+                message: $has_message ? $action_target : null,
             );
         }
         $this->log($automation, $item, $actor, "notified the {$subscribers->count()} subscriber(s) of \"{$item->name}\"");
