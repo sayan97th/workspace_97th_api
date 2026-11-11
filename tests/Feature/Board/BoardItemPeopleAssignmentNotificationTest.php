@@ -137,3 +137,28 @@ test('saving a confirmed people selection in one request stores it and only noti
     }
     Queue::assertPushed(SendEmailJob::class, 2);
 });
+
+test('assigning people one click at a time, without a save step, notifies each newly added person exactly once', function () {
+    Queue::fake();
+
+    [$board, , $column, $item] = createPeopleAssignmentTestBoard();
+    $actor = User::factory()->create();
+    $first_assignee = User::factory()->create();
+    $second_assignee = User::factory()->create();
+    addBoardMembers($board, $first_assignee, $second_assignee);
+
+    // The People picker saves on every pick, each request carrying the full current list.
+    foreach ([[$first_assignee->id], [$first_assignee->id, $second_assignee->id]] as $person_ids) {
+        $this->actingAs($actor, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/values", [
+            'values' => [(string) $column->id => array_map('strval', $person_ids)],
+        ])->assertOk();
+    }
+
+    expect(array_map('intval', $item->values()->where('column_id', $column->id)->first()->value))
+        ->toBe([$first_assignee->id, $second_assignee->id]);
+
+    foreach ([$first_assignee, $second_assignee] as $assignee) {
+        expect(Notification::where('user_id', $assignee->id)->where('type', Notification::TYPE_ASSIGNED)->count())->toBe(1);
+    }
+    Queue::assertPushed(SendEmailJob::class, 2);
+});
