@@ -18,7 +18,8 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `renderMentionText()`, the same helper board comment threads already use,
  * so this resource does not re-implement segment parsing.
  *
- * Expects `author`, `mentions.user`, `bookmarks`, `views` and (for
+ * Expects `author`, `mentions.user`, `bookmarks`, `views`, `likes.user`,
+ * `reactions.user` and (for
  * `BoardItemComment`) `item.board.parent` — or (for `BoardComment`)
  * `board.parent` — eager-loaded by the caller. Reads directly off the
  * underlying model (rather than through `JsonResource`'s magic `$this->`
@@ -123,6 +124,8 @@ class FeedUpdateResource extends JsonResource
         $comment = $this->comment;
         $viewer_id = $this->viewer !== null ? $this->viewer->id : $request->user()?->id;
         $is_item_comment = $comment instanceof BoardItemComment;
+        // A broadcast payload is built from a comment loaded elsewhere, so fill in what the like row needs.
+        $comment->loadMissing(['likes.user', 'reactions.user']);
 
         [$board, $item, $link] = $is_item_comment
             ? $this->itemContext($comment)
@@ -165,11 +168,59 @@ class FeedUpdateResource extends JsonResource
                 ])
                 ->values(),
             'pinned' => $comment->pinned,
+            'like_count' => $comment->likes->count(),
+            'liked_by_me' => $viewer_id !== null && $comment->likes->contains('user_id', $viewer_id),
+            // Who liked and when, oldest first, the same shape the item drawer's Like card reads.
+            'likers' => $comment->likes
+                ->sortBy('created_at')
+                ->map(fn ($like) => [
+                    'id' => $like->user_id,
+                    'full_name' => $like->user?->full_name ?? __('Deleted user'),
+                    'profile_photo_url' => $like->user?->profile_photo_url,
+                    'is_deactivated' => $like->user?->is_deactivated ?? true,
+                    'liked_at' => $like->created_at,
+                ])
+                ->values(),
+            'reactions' => $this->reactionsPayload($viewer_id),
             'is_following_item' => $item !== null && in_array($item['id'], $this->followedIds($viewer_id)['items'], true),
             'is_following_board' => in_array($board->id, $this->followedIds($viewer_id)['boards'], true),
             'activity' => $this->activity['entries'] ?? [],
             'activity_total' => $this->activity['total'] ?? 0,
         ];
+    }
+
+    /**
+     * Emoji reactions grouped by emoji in the order they were first used, with
+     * who reacted and when, matching `BoardItemCommentResource::reactions`.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function reactionsPayload(?int $viewer_id): array
+    {
+        return $this->comment->reactions
+            ->sortBy('created_at')
+            ->groupBy('emoji')
+            ->map(fn ($group, $emoji) => [
+                'emoji' => (string) $emoji,
+                'count' => $group->count(),
+                'reacted_by_me' => $viewer_id !== null && $group->contains('user_id', $viewer_id),
+                'reactors' => $group
+                    ->map(fn ($reaction) => [
+                        'id' => $reaction->user_id,
+                        'full_name' => $reaction->user?->full_name ?? __('Deleted user'),
+                        'profile_photo_url' => $reaction->user?->profile_photo_url,
+                        'is_deactivated' => $reaction->user?->is_deactivated ?? true,
+                        'reacted_at' => $reaction->created_at,
+                    ])
+                    ->values(),
+                'reactor_names' => $group
+                    ->map(fn ($reaction) => $reaction->user_id === $viewer_id
+                        ? __('You')
+                        : ($reaction->user?->full_name ?? __('Deleted user')))
+                    ->values(),
+            ])
+            ->values()
+            ->all();
     }
 
     /**

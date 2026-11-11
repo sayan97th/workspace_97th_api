@@ -13,6 +13,7 @@ use App\Models\FeedSavedView;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use App\Rules\ValidEmojiReaction;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardItemActivityService;
 use App\Services\Board\ScheduledCommentService;
@@ -504,10 +505,37 @@ class FeedUpdateController extends Controller
     public function toggleLike(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
+        $this->ensureViewerCanAccess($comment, $request->user());
         $user_id = $request->user()->id;
 
         $like = $comment->likes()->where('user_id', $user_id)->first();
         $like ? $like->delete() : $comment->likes()->create(['user_id' => $user_id]);
+
+        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+    }
+
+    /**
+     * POST /api/feed/updates/{id}/reactions
+     *
+     * Toggles the viewer's emoji reaction on a feed card, the same reaction
+     * rows the item drawer and the board discussion drawer read, and tells the
+     * author the first time someone reacts with that emoji.
+     */
+    public function toggleReaction(Request $request, string $id): JsonResponse
+    {
+        $comment = $this->resolveComment($id);
+        $actor = $request->user();
+        $this->ensureViewerCanAccess($comment, $actor);
+        $emoji = $request->validate(['emoji' => ['required', 'string', new ValidEmojiReaction]])['emoji'];
+
+        $reaction = $comment->reactions()->where(['user_id' => $actor->id, 'emoji' => $emoji])->first();
+
+        if ($reaction) {
+            $reaction->delete();
+        } else {
+            $comment->reactions()->create(['user_id' => $actor->id, 'emoji' => $emoji]);
+            $this->notifyReaction($comment, $actor);
+        }
 
         return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
     }
@@ -973,6 +1001,31 @@ class FeedUpdateController extends Controller
         abort_unless($user->workspaces()->where('workspaces.id', $this->boardFor($comment)->workspace_id)->exists(), 403);
     }
 
+    /**
+     * "Reacted to your comment" for the author, worded and linked like the
+     * drawers word it, never sent to someone reacting to their own update.
+     */
+    private function notifyReaction(BoardItemComment|BoardComment $comment, User $actor): void
+    {
+        if ($comment->author === null || $comment->author->id === $actor->id) {
+            return;
+        }
+
+        $board = $this->boardFor($comment);
+        $is_item_comment = $comment instanceof BoardItemComment;
+
+        $this->notification_service->notify(
+            recipient: $comment->author,
+            actor: $actor,
+            type: Notification::TYPE_REACTIONS,
+            board: $board,
+            action_label: $is_item_comment ? 'Reacted to your comment' : 'Reacted to your update',
+            action_target: $is_item_comment ? sprintf('on "%s"', $comment->item->name) : sprintf('on the Board "%s"', $board->label),
+            link: $is_item_comment ? "/boards/{$board->id}/pulses/{$comment->item->id}" : "/boards/{$board->id}",
+            comment: $comment,
+        );
+    }
+
     private function boardFor(BoardItemComment|BoardComment $comment): WorkspaceNavigationItem
     {
         return $comment instanceof BoardItemComment ? $comment->item->board : $comment->board;
@@ -995,7 +1048,7 @@ class FeedUpdateController extends Controller
      */
     private function itemLoads(): array
     {
-        return ['author', 'mentions.user', 'bookmarks', 'views', 'item.board.parent'];
+        return ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'item.board.parent'];
     }
 
     /**
@@ -1003,7 +1056,7 @@ class FeedUpdateController extends Controller
      */
     private function boardLoads(): array
     {
-        return ['author', 'mentions.user', 'bookmarks', 'views', 'board.parent'];
+        return ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'board.parent'];
     }
 
     /**

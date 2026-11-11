@@ -305,6 +305,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('updates/{id}/bookmark', [FeedUpdateController::class, 'toggleBookmark']);
         Route::post('updates/{id}/pin', [FeedUpdateController::class, 'togglePin']);
         Route::post('updates/{id}/like', [FeedUpdateController::class, 'toggleLike']);
+        Route::post('updates/{id}/reactions', [FeedUpdateController::class, 'toggleReaction'])->middleware('throttle:120,1');
         Route::post('updates/{id}/reply', [FeedUpdateController::class, 'reply']);
         Route::post('updates/{id}/seen', [FeedUpdateController::class, 'markSeen']);
         Route::delete('updates/{id}/seen', [FeedUpdateController::class, 'markUnseen']);
