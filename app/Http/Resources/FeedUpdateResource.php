@@ -8,12 +8,16 @@ use App\Models\BoardItemComment;
 use App\Models\FeedFollow;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Collection;
 
 /**
- * Maps a {@see BoardItemComment} or {@see BoardComment} (top-level or reply,
- * both render as feed cards) into the Update Feed DTO. The comment's raw
+ * Maps a {@see BoardItemComment} or {@see BoardComment} into the Update Feed
+ * DTO. The feed lists threads the way monday.com does: one card per top-level
+ * update with its replies inline under it (see {@see withReplies()}), so a
+ * reply never shows up as a card of its own. The comment's raw
  * `body` is sent as-is — mention highlighting stays entirely client-side via
  * `renderMentionText()`, the same helper board comment threads already use,
  * so this resource does not re-implement segment parsing.
@@ -28,7 +32,16 @@ use Illuminate\Http\Resources\Json\JsonResource;
  */
 class FeedUpdateResource extends JsonResource
 {
+    /** What a payload reads off an item update, eager loaded by every caller. */
+    public const ITEM_LOADS = ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'item.board.parent'];
+
+    /** What a payload reads off a board discussion update. */
+    public const BOARD_LOADS = ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'board.parent'];
+
     private ?User $viewer = null;
+
+    /** @var Collection<int, BoardItemComment|BoardComment>|null The thread's replies, oldest first, set on a top-level update only. */
+    private ?Collection $replies = null;
 
     /** @var array{items: array<int, int>, boards: array<int, int>}|null Ids the viewer follows, injected by the caller to avoid one query per card. */
     private ?array $follows = null;
@@ -86,6 +99,75 @@ class FeedUpdateResource extends JsonResource
     }
 
     /**
+     * Sends the thread's replies inline under this top-level update, oldest
+     * first, each in the same shape as a card.
+     *
+     * @param  iterable<int, BoardItemComment|BoardComment>  $replies  A plain or Eloquent collection, or any list of replies.
+     */
+    public function withReplies(iterable $replies): self
+    {
+        $this->replies = collect($replies)->values();
+
+        return $this;
+    }
+
+    /**
+     * The eager loads a payload of `$comment`'s kind reads.
+     *
+     * @return array<int, string>
+     */
+    public static function loadsFor(BoardItemComment|BoardComment $comment): array
+    {
+        return $comment instanceof BoardItemComment ? self::ITEM_LOADS : self::BOARD_LOADS;
+    }
+
+    /**
+     * Eager loads every root's visible replies, oldest first, with what a
+     * reply payload reads, one query per comment table.
+     *
+     * @param  Collection<int, BoardItemComment|BoardComment>  $roots
+     */
+    public static function loadReplies(Collection $roots): void
+    {
+        foreach ($roots->groupBy(fn ($comment) => $comment::class) as $group) {
+            $loads = self::loadsFor($group->first());
+
+            (new EloquentCollection($group->all()))->load(['replies' => fn ($query) => $query->with($loads)]);
+        }
+    }
+
+    /**
+     * The card a comment belongs to in the feed: the comment itself when it is
+     * a top-level update, its parent when it is a reply. A reply whose parent
+     * is gone stands on its own.
+     */
+    public static function threadRoot(BoardItemComment|BoardComment $comment): BoardItemComment|BoardComment
+    {
+        if ($comment->parent_id === null) {
+            return $comment;
+        }
+
+        $parent = $comment::query()->visibleNow()->with(self::loadsFor($comment))->find($comment->parent_id);
+
+        return $parent instanceof $comment ? $parent : $comment;
+    }
+
+    /**
+     * A ready to send card for `$comment`'s whole thread (the root with every
+     * reply), as seen by `$viewer`. Used by the live broadcast, so a new reply
+     * lands inside its thread instead of as a card of its own.
+     *
+     * @return array<string, mixed>
+     */
+    public static function threadPayload(BoardItemComment|BoardComment $comment, User $viewer): array
+    {
+        $root = self::threadRoot($comment);
+        self::loadReplies(collect([$root]));
+
+        return (new self($root))->forViewer($viewer)->withReplies($root->replies)->resolve();
+    }
+
+    /**
      * The JSON shape of the item changes behind one update.
      *
      * @param  array{total: int, entries: iterable<int, BoardItemActivity>}  $bundle
@@ -124,6 +206,7 @@ class FeedUpdateResource extends JsonResource
         $comment = $this->comment;
         $viewer_id = $this->viewer !== null ? $this->viewer->id : $request->user()?->id;
         $is_item_comment = $comment instanceof BoardItemComment;
+        $prefix = $is_item_comment ? 'ic-' : 'bc-';
         // A broadcast payload is built from a comment loaded elsewhere, so fill in what the like row needs.
         $comment->loadMissing(['likes.user', 'reactions.user']);
 
@@ -132,7 +215,9 @@ class FeedUpdateResource extends JsonResource
             : $this->boardContext($comment);
 
         return [
-            'id' => ($is_item_comment ? 'ic-' : 'bc-').$comment->id,
+            'id' => $prefix.$comment->id,
+            // The card this update shows in: its own id for a top-level update, its parent's for a reply.
+            'thread_id' => $prefix.($comment->parent_id ?? $comment->id),
             'actor' => [
                 'id' => $comment->author?->id,
                 'name' => $comment->author !== null ? $comment->author->full_name : __('Deleted user'),
@@ -141,6 +226,7 @@ class FeedUpdateResource extends JsonResource
             ],
             'body' => $comment->body,
             'created_at' => $comment->created_at,
+            'edited_at' => $comment->edited_at,
             'board' => [
                 'id' => $board->id,
                 'name' => $board->label,
@@ -186,7 +272,33 @@ class FeedUpdateResource extends JsonResource
             'is_following_board' => in_array($board->id, $this->followedIds($viewer_id)['boards'], true),
             'activity' => $this->activity['entries'] ?? [],
             'activity_total' => $this->activity['total'] ?? 0,
+            'replies' => $this->repliesPayload($request),
         ];
+    }
+
+    /**
+     * The thread's replies in the card shape, read by the same viewer and with
+     * the same follows as the card itself. Empty for a reply, or a card built
+     * without {@see withReplies()}.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function repliesPayload(Request $request): array
+    {
+        if ($this->replies === null) {
+            return [];
+        }
+
+        $follows = $this->followedIds($this->viewer !== null ? $this->viewer->id : $request->user()?->id);
+
+        return $this->replies
+            ->map(function (BoardItemComment|BoardComment $reply) use ($request, $follows) {
+                $resource = (new self($reply))->withFollows($follows['items'], $follows['boards']);
+
+                return ($this->viewer !== null ? $resource->forViewer($this->viewer) : $resource)->toArray($request);
+            })
+            ->values()
+            ->all();
     }
 
     /**

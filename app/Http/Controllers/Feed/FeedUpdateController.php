@@ -84,7 +84,13 @@ class FeedUpdateController extends Controller
      * `unread` keeps only what the viewer has not seen yet.
      *
      * One cursor-paginated page of updates (comments + replies, item- and
-     * board-level merged) matching the tab, newest first. The first page also
+     * board-level merged) matching the tab, newest first, sent as threads:
+     * a matching reply brings its whole thread in as one card (the top-level
+     * update with every reply inline), the way monday.com's inbox reads, so
+     * the viewer's own replies never clutter the feed as separate cards. A
+     * thread shows once per page, where its newest matching row sorts. A
+     * later page can bring an older row of a thread already shown, the
+     * client keeps the first copy. The first page also
      * carries every pinned update ahead of the newest ones, later pages hold
      * only unpinned updates older than the cursor, so paging never repeats a
      * pinned card. The scheduled and pinned tabs are small and never paginated,
@@ -107,11 +113,12 @@ class FeedUpdateController extends Controller
         $filters = $this->readFilters($request);
 
         if ($tab === 'scheduled') {
+            // Scheduled drafts are not live yet, so each one stays its own card.
             return $this->respondWithPage($this->scheduledUpdates($user, $board_id), null);
         }
 
         if ($tab === 'pinned') {
-            return $this->respondWithPage($this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED, $filters), null);
+            return $this->respondWithPage($this->collapseIntoThreads($this->fetchUpdates($user, $tab, $board_id, true, null, self::MAX_PINNED, $filters)), null);
         }
 
         $limit = $validated['limit'] ?? self::PAGE_SIZE;
@@ -124,7 +131,7 @@ class FeedUpdateController extends Controller
         $rows = $rows->take($limit);
 
         return $this->respondWithPage(
-            $pinned->concat($rows),
+            $this->collapseIntoThreads($pinned->concat($rows)),
             $has_more && $rows->isNotEmpty() ? $this->encodeCursor($rows->last()) : null,
         );
     }
@@ -343,7 +350,7 @@ class FeedUpdateController extends Controller
         $comment = $this->resolveComment($id);
         $comment->views()->where('user_id', $request->user()->id)->delete();
 
-        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
@@ -480,7 +487,7 @@ class FeedUpdateController extends Controller
         $bookmark = $comment->bookmarks()->where('user_id', $user_id)->first();
         $bookmark ? $bookmark->delete() : $comment->bookmarks()->create(['user_id' => $user_id]);
 
-        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
@@ -496,7 +503,7 @@ class FeedUpdateController extends Controller
         BoardEditGate::authorize($this->boardFor($comment), $request->user());
         $comment->update(['pinned' => ! $comment->pinned]);
 
-        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
@@ -511,7 +518,7 @@ class FeedUpdateController extends Controller
         $like = $comment->likes()->where('user_id', $user_id)->first();
         $like ? $like->delete() : $comment->likes()->create(['user_id' => $user_id]);
 
-        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
@@ -537,20 +544,39 @@ class FeedUpdateController extends Controller
             $this->notifyReaction($comment, $actor);
         }
 
-        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
-     * POST /api/feed/updates/{id}/seen
+     * POST /api/feed/updates/{id}/seen  {thread?: bool}
      *
-     * Idempotent create-only — the feed never lets a card go back to unread.
+     * Idempotent create-only. With `thread`, a top-level update is marked seen
+     * together with every visible reply under it, since the feed shows the
+     * whole thread as one card and reading the card reads all of it.
      */
     public function markSeen(Request $request, string $id): JsonResponse
     {
         $comment = $this->resolveComment($id);
-        $comment->views()->firstOrCreate(['user_id' => $request->user()->id]);
+        $user_id = $request->user()->id;
+        $comment->views()->firstOrCreate(['user_id' => $user_id]);
 
-        return response()->json(['data' => new FeedUpdateResource($this->refreshed($comment))]);
+        if ($request->boolean('thread') && $comment->parent_id === null) {
+            $now = now();
+            $reply_ids = $comment->replies()->pluck('id');
+
+            if ($reply_ids->isNotEmpty()) {
+                DB::table($comment->views()->getRelated()->getTable())->insertOrIgnore(
+                    $reply_ids->map(fn ($reply_id) => [
+                        'comment_id' => $reply_id,
+                        'user_id' => $user_id,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ])->all()
+                );
+            }
+        }
+
+        return response()->json(['data' => $this->cardResource($comment)]);
     }
 
     /**
@@ -614,12 +640,75 @@ class FeedUpdateController extends Controller
             'data' => $comments->map(function ($comment) use ($follows, $activity) {
                 $resource = (new FeedUpdateResource($comment))->withFollows($follows['items'], $follows['boards']);
 
+                if ($comment->relationLoaded('replies')) {
+                    $resource->withReplies($comment->replies);
+                }
+
                 return $comment instanceof BoardItemComment && isset($activity[$comment->id])
                     ? $resource->withActivity(FeedUpdateResource::activityPayload($activity[$comment->id]))
                     : $resource;
             })->values(),
             'meta' => ['next_cursor' => $next_cursor, 'has_more' => $next_cursor !== null],
         ]);
+    }
+
+    /**
+     * Turns matching rows into the threads they belong to, newest first: a
+     * top-level update stands for itself, a reply for its parent. Each thread
+     * is kept once, where its newest row sorts, and comes back with every
+     * visible reply loaded. A reply whose parent is gone stays on its own.
+     *
+     * @param  Collection<int, BoardItemComment|BoardComment>  $rows
+     * @return Collection<int, BoardItemComment|BoardComment>
+     */
+    private function collapseIntoThreads(Collection $rows): Collection
+    {
+        $parents = [];
+        foreach (['ic' => BoardItemComment::class, 'bc' => BoardComment::class] as $kind => $model_class) {
+            $parent_ids = $rows
+                ->filter(fn ($row) => $row::class === $model_class && $row->parent_id !== null)
+                ->pluck('parent_id')
+                ->unique()
+                ->values();
+
+            $parents[$kind] = $parent_ids->isEmpty()
+                ? collect()
+                : $model_class::query()->visibleNow()->with($kind === 'ic' ? $this->itemLoads() : $this->boardLoads())->whereIn('id', $parent_ids)->get()->keyBy('id');
+        }
+
+        $threads = collect();
+        foreach ($rows as $row) {
+            $kind = $row instanceof BoardItemComment ? 'ic' : 'bc';
+            $root = $row->parent_id !== null ? ($parents[$kind]->get($row->parent_id) ?? $row) : $row;
+            $key = "{$kind}-{$root->id}";
+
+            if (! $threads->has($key)) {
+                $threads->put($key, $root);
+            }
+        }
+
+        $roots = $threads->values();
+        FeedUpdateResource::loadReplies($roots->filter(fn ($root) => $root->parent_id === null));
+
+        return $roots;
+    }
+
+    /**
+     * The response of a card action: a top-level update comes back with its
+     * replies, so swapping the card for it keeps the thread, a reply comes
+     * back on its own and the client patches it inside its thread.
+     */
+    private function cardResource(BoardItemComment|BoardComment $comment): FeedUpdateResource
+    {
+        $fresh = $this->refreshed($comment);
+        $resource = new FeedUpdateResource($fresh);
+
+        if ($fresh->parent_id === null) {
+            FeedUpdateResource::loadReplies(collect([$fresh]));
+            $resource->withReplies($fresh->replies);
+        }
+
+        return $resource;
     }
 
     /**
@@ -1048,7 +1137,7 @@ class FeedUpdateController extends Controller
      */
     private function itemLoads(): array
     {
-        return ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'item.board.parent'];
+        return FeedUpdateResource::ITEM_LOADS;
     }
 
     /**
@@ -1056,7 +1145,7 @@ class FeedUpdateController extends Controller
      */
     private function boardLoads(): array
     {
-        return ['author', 'mentions.user', 'bookmarks', 'views', 'likes.user', 'reactions.user', 'board.parent'];
+        return FeedUpdateResource::BOARD_LOADS;
     }
 
     /**

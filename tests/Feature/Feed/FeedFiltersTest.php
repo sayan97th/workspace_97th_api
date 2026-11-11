@@ -80,12 +80,14 @@ test('the feed filters by author, kind and posted day', function () {
     $recent = $this->actingAs($viewer, 'api')->getJson('/api/feed/updates?from='.now()->subDays(2)->toDateString());
     $window = $this->actingAs($viewer, 'api')->getJson('/api/feed/updates?from='.now()->subDays(12)->toDateString().'&to='.now()->subDays(5)->toDateString());
 
+    // A matching reply brings its whole thread in as one card, the reply sitting inline under its update.
     expect(feedFilterBodies($by_author))->toBe(['Ada root'])
         ->and(feedFilterBodies($updates_only))->toBe(['Ada root', 'Grace root'])
-        ->and(feedFilterBodies($replies_only))->toBe(['Grace reply'])
-        ->and(feedFilterBodies($recent))->toBe(['Grace reply', 'Grace root'])
-        ->and(feedFilterBodies($window))->toBe(['Ada root'])
-        ->and(collect($replies_only->json('data'))->first()['is_reply'])->toBeTrue();
+        ->and(feedFilterBodies($replies_only))->toBe(['Ada root'])
+        ->and($replies_only->json('data.0.replies.0.body'))->toBe('Grace reply')
+        ->and($replies_only->json('data.0.replies.0.is_reply'))->toBeTrue()
+        ->and(feedFilterBodies($recent))->toBe(['Ada root', 'Grace root'])
+        ->and(feedFilterBodies($window))->toBe(['Ada root']);
 });
 
 test('the unread filter drops what the viewer has already seen', function () {

@@ -48,14 +48,21 @@ class NewFeedUpdate implements ShouldBroadcast
      * Resolved for {@see $recipient} specifically, so `is_unread` /
      * `is_mentioned` / `is_bookmarked` are correct for whoever receives this
      * particular broadcast, even though the same comment is pushed to many
-     * recipients' channels.
+     * recipients' channels. A reply also carries `thread`, the card of its
+     * whole thread (the top-level update with every reply), so the feed can
+     * show it inline under its update instead of as a card of its own.
      *
      * @return array<string, mixed>
      */
     public function broadcastWith(): array
     {
         $resource = (new FeedUpdateResource($this->comment))->forViewer($this->recipient);
+        $payload = ($this->activity !== null ? $resource->withActivity($this->activity) : $resource)->resolve();
 
-        return ($this->activity !== null ? $resource->withActivity($this->activity) : $resource)->resolve();
+        if ($this->comment->parent_id !== null) {
+            $payload['thread'] = FeedUpdateResource::threadPayload($this->comment, $this->recipient);
+        }
+
+        return $payload;
     }
 }
