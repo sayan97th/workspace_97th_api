@@ -14,11 +14,13 @@ use App\Http\Requests\Board\UpdateBoardItemRequest;
 use App\Http\Requests\Board\UpdateBoardItemValuesRequest;
 use App\Http\Resources\BoardItemDetailResource;
 use App\Http\Resources\BoardItemResource;
+use App\Models\BoardActivityLog;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardDependencyScheduler;
 use App\Services\Board\BoardItemActivityService;
@@ -48,6 +50,7 @@ class BoardItemController extends Controller
         private readonly BoardItemScopeConversionService $scope_conversion_service,
         private readonly ColumnPermissionService $column_permissions,
         private readonly BoardItemActivityService $activity_service,
+        private readonly BoardActivityLogger $activity_logger,
     ) {}
 
     /**
@@ -262,6 +265,14 @@ class BoardItemController extends Controller
             $this->value_service->sync($item, $board_item, $validated['values'], $request->user(), false);
         }
 
+        $this->activity_logger->logItem(
+            $item,
+            $request->user(),
+            BoardActivityLog::ACTION_ITEM_CREATED,
+            $parent_id === null ? 'Created' : 'Created subitem',
+            $board_item,
+        );
+
         $this->automation_service->handleItemCreated($board_item, $request->user());
 
         return response()->json([
@@ -293,19 +304,12 @@ class BoardItemController extends Controller
             $this->cascadeGroupToDescendants($board_item, $validated['group_id']);
             $this->automation_service->handleItemMoved($board_item->fresh('group'), $from_group_id, $request->user());
         }
-        if (array_key_exists('group_id', $validated) && $from_group_id !== $board_item->group_id) {
-            $this->activity_service->recordField(
-                $board_item,
-                BoardItemActivityService::FIELD_GROUP,
-                'Group',
-                BoardGroup::whereKey($from_group_id)->value('name'),
-                $board_item->fresh('group')->group?->name,
-                $request->user(),
-            );
+        if (array_key_exists('group_id', $validated)) {
+            $this->recordGroupMove($board_item, $from_group_id, $request);
         }
         if (array_key_exists('name', $validated) && $old_name !== (string) $board_item->name) {
             $this->automation_service->handleNameChanged($board_item->fresh('group'), $old_name, $request->user());
-            $this->activity_service->recordField($board_item, BoardItemActivityService::FIELD_NAME, 'Name', $old_name, (string) $board_item->name, $request->user());
+            $this->activity_service->recordField($board_item, BoardItemActivityService::FIELD_NAME, 'Name', $old_name, (string) $board_item->name, $request->user(), $old_name, (string) $board_item->name);
         }
 
         return response()->json([
@@ -458,6 +462,7 @@ class BoardItemController extends Controller
         $this->ensureItemBelongsToBoard($item, $board_item);
         BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
+        $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_TRASHED, 'Deleted', $board_item);
         $this->deleteSubtree($board_item);
         $this->automation_service->handleItemDeleted($board_item, $request->user());
 
@@ -484,16 +489,22 @@ class BoardItemController extends Controller
         $originals = $item->items()->with(['values', 'childrenRecursive'])->whereIn('id', $request->validated()['item_ids'])->get();
         $with_subitems = $request->boolean('with_subitems', true);
 
-        $duplicates = $originals->map(
-            fn (BoardItem $original) => $this->copySubtree(
+        $duplicates = $originals->map(function (BoardItem $original) use ($item, $request, $with_subitems) {
+            $copy = $this->copySubtree(
                 $item,
                 $original,
                 $original->group_id,
                 $original->parent_id,
                 $this->nextPosition($item, $original->group_id, $original->parent_id),
                 $with_subitems
-            )
-        );
+            );
+
+            $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_DUPLICATED, 'Duplicated', $original, [
+                'copy_item_id' => $copy->id,
+            ]);
+
+            return $copy;
+        });
 
         return response()->json([
             'message' => 'Items duplicated successfully.',
@@ -524,6 +535,7 @@ class BoardItemController extends Controller
                 'position' => $this->nextPosition($item, $group_id),
             ]);
             $this->cascadeGroupToDescendants($board_item, $group_id);
+            $this->recordGroupMove($board_item, $from_group_id, $request);
             $this->automation_service->handleItemMoved($board_item->fresh('group'), $from_group_id, $request->user());
         }
 
@@ -618,6 +630,7 @@ class BoardItemController extends Controller
 
         // Run once the new order is committed, so an automation that moves the item again wins.
         if ($moved !== null) {
+            $this->recordGroupMove($moved[0], $moved[1], $request);
             $this->automation_service->handleItemMoved($moved[0]->fresh('group'), $moved[1], $request->user());
         }
 
@@ -644,6 +657,7 @@ class BoardItemController extends Controller
         $item->items()->whereIn('id', $request->validated()['item_ids'])->update(['is_archived' => true]);
 
         foreach ($archived_items as $archived_item) {
+            $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_ARCHIVED, 'Archived', $archived_item);
             $this->automation_service->handleItemArchived($archived_item, $request->user());
         }
 
@@ -667,6 +681,7 @@ class BoardItemController extends Controller
         $this->authorizeItems($item, $request, $items);
 
         foreach ($items as $board_item) {
+            $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_TRASHED, 'Deleted', $board_item);
             $this->deleteSubtree($board_item);
             $this->automation_service->handleItemDeleted($board_item, $request->user());
         }
@@ -806,6 +821,29 @@ class BoardItemController extends Controller
         // whenever this relation isn't loaded, mirroring
         // `WorkspaceNavigationItemController::duplicate()`'s same reload.
         return $copy->fresh(['values', 'childrenRecursive']);
+    }
+
+    /**
+     * Writes a "Moved" entry to the item's activity (and so to the board
+     * Activity log) when `$board_item` now sits in a different group than
+     * `$from_group_id`. Both group ids are kept, so the move can be undone.
+     */
+    private function recordGroupMove(BoardItem $board_item, int $from_group_id, Request $request): void
+    {
+        if ($from_group_id === (int) $board_item->group_id) {
+            return;
+        }
+
+        $this->activity_service->recordField(
+            $board_item,
+            BoardItemActivityService::FIELD_GROUP,
+            'Group',
+            BoardGroup::whereKey($from_group_id)->value('name'),
+            BoardGroup::whereKey($board_item->group_id)->value('name'),
+            $request->user(),
+            $from_group_id,
+            $board_item->group_id,
+        );
     }
 
     /**

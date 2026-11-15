@@ -70,15 +70,20 @@ class BoardItemActivityService
             'column_type' => $column->type,
             'old_display' => $this->display($column, $old_value),
             'new_display' => $this->display($column, $new_value),
+            // Raw values, so the board Activity log can write the old one back on "Undo".
+            'old_value' => $this->rawValue($old_value),
+            'new_value' => $this->rawValue($new_value),
+            'is_undoable' => true,
         ]);
     }
 
     /**
      * Stores a change to one of the item's own fields rather than a cell (its
      * name, or the group it sits in), when the two sides really differ.
-     * `$field_type` is one of the `FIELD_*` constants.
+     * `$field_type` is one of the `FIELD_*` constants. `$old_raw` and
+     * `$new_raw` are what "Undo" writes back: the old name, or the old group id.
      */
-    public function recordField(BoardItem $board_item, string $field_type, string $field_label, ?string $old_display, ?string $new_display, ?User $actor): void
+    public function recordField(BoardItem $board_item, string $field_type, string $field_label, ?string $old_display, ?string $new_display, ?User $actor, mixed $old_raw = null, mixed $new_raw = null): void
     {
         if ($old_display === $new_display) {
             return;
@@ -96,6 +101,9 @@ class BoardItemActivityService
             'column_type' => $field_type,
             'old_display' => $old_display === null || $old_display === '' ? null : Str::limit($old_display, self::MAX_DISPLAY_LENGTH),
             'new_display' => $new_display === null || $new_display === '' ? null : Str::limit($new_display, self::MAX_DISPLAY_LENGTH),
+            'old_value' => $old_raw,
+            'new_value' => $new_raw,
+            'is_undoable' => $old_raw !== null,
         ]);
     }
 
@@ -233,6 +241,14 @@ class BoardItemActivityService
         $end = $this->dateText($value['end'] ?? $value[1] ?? null);
 
         return $start !== null && $end !== null ? "{$start} to {$end}" : ($start ?? $end);
+    }
+
+    /**
+     * The value as stored for "Undo", an empty value is kept as null.
+     */
+    private function rawValue(mixed $value): mixed
+    {
+        return $this->normalize($value) === null ? null : $value;
     }
 
     /**

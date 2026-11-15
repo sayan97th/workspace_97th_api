@@ -10,9 +10,11 @@ use App\Http\Requests\Board\StoreBoardColumnRequest;
 use App\Http\Requests\Board\UpdateBoardColumnPermissionsRequest;
 use App\Http\Requests\Board\UpdateBoardColumnRequest;
 use App\Http\Resources\BoardColumnResource;
+use App\Models\BoardActivityLog;
 use App\Models\BoardColumn;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardDateAutoFiller;
 use App\Services\Board\BoardItemIdAssigner;
@@ -30,6 +32,7 @@ class BoardColumnController extends Controller
 {
     public function __construct(
         private readonly BoardViewResolver $view_resolver,
+        private readonly BoardActivityLogger $activity_logger,
         private readonly ColumnPermissionService $column_permissions,
         private readonly BoardItemIdAssigner $item_id_assigner,
         private readonly BoardDateAutoFiller $date_auto_filler,
@@ -113,6 +116,8 @@ class BoardColumnController extends Controller
         // A new Reporter column (People with auto assign) shows who created each existing item right away.
         $filled_values = $column->autoAssignsCreator() ? $this->people_auto_assigner->fillEmptyCells($column) : [];
 
+        $this->activity_logger->logColumn($item, $request->user(), BoardActivityLog::ACTION_COLUMN_CREATED, 'Added', $column);
+
         return response()->json([
             'message' => 'Column created successfully.',
             'column' => new BoardColumnResource($column),
@@ -159,6 +164,7 @@ class BoardColumnController extends Controller
         }
 
         $was_item_id = $column->type === BoardColumn::TYPE_AUTO_NUMBER;
+        $old_label = (string) $column->label;
         $filled_values = DB::transaction(function () use ($column, $validated, $was_item_id, $date_source, $assigns_creators) {
             $column->fill($validated)->save();
 
@@ -173,6 +179,16 @@ class BoardColumnController extends Controller
 
             return $date_source !== null ? $this->date_auto_filler->fillEmptyCells($column, $date_source) : [];
         });
+
+        if ($old_label !== (string) $column->label) {
+            $this->activity_logger->log(
+                $item,
+                $request->user(),
+                BoardActivityLog::ACTION_COLUMN_RENAMED,
+                "Renamed column \"{$old_label}\" to \"{$column->label}\"",
+                ['column_id' => $column->id, 'column_label' => $column->label, 'column_type' => $column->type, 'old_name' => $old_label, 'new_name' => $column->label],
+            );
+        }
 
         return response()->json([
             'message' => 'Column updated successfully.',
@@ -350,6 +366,7 @@ class BoardColumnController extends Controller
         $this->ensureColumnBelongsToBoard($item, $column);
 
         $view_id = $column->board_view_id;
+        $this->activity_logger->logColumn($item, $request->user(), BoardActivityLog::ACTION_COLUMN_DELETED, 'Deleted', $column);
         $column->delete();
 
         // Automations that used the column can no longer run, they are paused and their owners told.
@@ -402,6 +419,8 @@ class BoardColumnController extends Controller
 
         // An Item ID copy always holds the item ids, with or without values.
         $this->item_id_assigner->backfillColumn($copy);
+
+        $this->activity_logger->logColumn($item, $request->user(), BoardActivityLog::ACTION_COLUMN_DUPLICATED, 'Duplicated', $column, ['copy_column_id' => $copy->id]);
 
         return response()->json([
             'message' => 'Column duplicated successfully.',

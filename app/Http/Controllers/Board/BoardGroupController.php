@@ -9,11 +9,13 @@ use App\Http\Requests\Board\StoreBoardGroupRequest;
 use App\Http\Requests\Board\UpdateBoardGroupRequest;
 use App\Http\Requests\Board\UpdateGroupCollapseStateRequest;
 use App\Http\Resources\BoardGroupResource;
+use App\Models\BoardActivityLog;
 use App\Models\BoardGroup;
 use App\Models\BoardGroupCollapseState;
 use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardViewResolver;
 use App\Support\BoardEditGate;
@@ -23,7 +25,10 @@ use Illuminate\Support\Facades\DB;
 
 class BoardGroupController extends Controller
 {
-    public function __construct(private readonly BoardViewResolver $view_resolver) {}
+    public function __construct(
+        private readonly BoardViewResolver $view_resolver,
+        private readonly BoardActivityLogger $activity_logger,
+    ) {}
 
     /**
      * GET /api/boards/{item}/groups
@@ -100,6 +105,8 @@ class BoardGroupController extends Controller
             'position' => $position,
         ]);
 
+        $this->activity_logger->logGroup($item, $request->user(), BoardActivityLog::ACTION_GROUP_CREATED, 'Created', $group);
+
         return response()->json([
             'message' => 'Table created successfully.',
             'group' => new BoardGroupResource($group),
@@ -147,7 +154,18 @@ class BoardGroupController extends Controller
         $this->ensureGroupBelongsToBoard($item, $group);
         BoardEditGate::authorizeStructure($item, $request->user());
 
+        $old_name = (string) $group->name;
         $group->fill($request->validated())->save();
+
+        if ($old_name !== (string) $group->name) {
+            $this->activity_logger->log(
+                $item,
+                $request->user(),
+                BoardActivityLog::ACTION_GROUP_RENAMED,
+                "Renamed group \"{$old_name}\" to \"{$group->name}\"",
+                ['group_id' => $group->id, 'group_name' => $group->name, 'group_color' => $group->accent_color, 'old_name' => $old_name, 'new_name' => $group->name],
+            );
+        }
 
         return response()->json([
             'message' => 'Table updated successfully.',
@@ -217,6 +235,7 @@ class BoardGroupController extends Controller
         BoardEditGate::authorizeStructure($item, $request->user());
 
         $group->update(['is_archived' => true, 'archived_at' => now()]);
+        $this->activity_logger->logGroup($item, $request->user(), BoardActivityLog::ACTION_GROUP_ARCHIVED, 'Archived', $group);
 
         return response()->json([
             'message' => 'Table archived successfully.',
@@ -235,6 +254,7 @@ class BoardGroupController extends Controller
         BoardEditGate::authorizeStructure($item, $request->user());
 
         $view_id = $group->board_view_id;
+        $this->activity_logger->logGroup($item, $request->user(), BoardActivityLog::ACTION_GROUP_DELETED, 'Deleted', $group);
         $group->delete();
 
         // Automations that used the group can no longer run, they are paused and their owners told.
@@ -281,6 +301,8 @@ class BoardGroupController extends Controller
                 $this->copyItemSubtree($item, $original, $copy->id, null);
             }
         }
+
+        $this->activity_logger->logGroup($item, $request->user(), BoardActivityLog::ACTION_GROUP_DUPLICATED, 'Duplicated', $group, ['copy_group_id' => $copy->id]);
 
         return response()->json([
             'message' => 'Table duplicated successfully.',

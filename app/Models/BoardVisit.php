@@ -9,13 +9,14 @@ use Illuminate\Support\Carbon;
 
 /**
  * The last time a user opened a board. Powers the Home page's
- * "Recently visited" list.
+ * "Recently visited" list and the board Activity log's "Last viewed" tab.
  *
  * @property int $id
  * @property int $user_id
  * @property int $board_id
  * @property Carbon $visited_at
  * @property-read WorkspaceNavigationItem $board
+ * @property-read User|null $user
  */
 #[Fillable(['user_id', 'board_id', 'visited_at'])]
 class BoardVisit extends Model
@@ -37,6 +38,14 @@ class BoardVisit extends Model
     public function board(): BelongsTo
     {
         return $this->belongsTo(WorkspaceNavigationItem::class, 'board_id');
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class)->withTrashed();
     }
 
     /**

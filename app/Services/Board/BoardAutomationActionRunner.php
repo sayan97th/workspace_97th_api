@@ -1088,7 +1088,7 @@ class BoardAutomationActionRunner
             $actor,
             BoardActivityLog::ACTION_AUTOMATION_RAN,
             "Automation \"{$automation_label}\" {$what}",
-            array_filter(['item_id' => $item?->id, 'automation_id' => $automation->id])
+            array_filter(['item_id' => $item?->id, 'automation_id' => $automation->id, 'automation_name' => $automation_label])
         );
     }
 

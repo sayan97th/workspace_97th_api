@@ -506,6 +506,14 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::post('unarchive', [BoardController::class, 'unarchive']);
 
         Route::get('activity-log', [BoardActivityLogController::class, 'index']);
+        // The Activity log drawer: its Activity, Last viewed and Updates tabs, CSV export and Undo.
+        Route::get('activity-log/feed', [BoardActivityLogController::class, 'feed']);
+        Route::get('activity-log/viewers', [BoardActivityLogController::class, 'viewers']);
+        Route::get('activity-log/updates', [BoardActivityLogController::class, 'updates']);
+        Route::get('activity-log/export', [BoardActivityLogController::class, 'export'])->middleware('throttle:10,1');
+        Route::post('activity-log/{source}/{entry}/undo', [BoardActivityLogController::class, 'undo'])
+            ->whereIn('source', ['cell', 'board'])
+            ->whereNumber('entry');
 
         Route::get('trash', [BoardTrashController::class, 'index']);
         Route::patch('trash/{board_item}/restore', [BoardTrashController::class, 'restore']);

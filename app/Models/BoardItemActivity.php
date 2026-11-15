@@ -27,11 +27,15 @@ use Illuminate\Support\Carbon;
  * @property string $column_type
  * @property string|null $old_display
  * @property string|null $new_display
+ * @property mixed $old_value
+ * @property mixed $new_value
+ * @property bool $is_undoable
+ * @property Carbon|null $undone_at
  * @property Carbon $created_at
  * @property-read BoardItem $item
  * @property-read User|null $user
  */
-#[Fillable(['item_id', 'user_id', 'automation_id', 'automation_name', 'column_id', 'column_label', 'column_type', 'old_display', 'new_display'])]
+#[Fillable(['item_id', 'user_id', 'automation_id', 'automation_name', 'column_id', 'column_label', 'column_type', 'old_display', 'new_display', 'old_value', 'new_value', 'is_undoable', 'undone_at'])]
 class BoardItemActivity extends Model
 {
     public const UPDATED_AT = null;
@@ -50,5 +54,19 @@ class BoardItemActivity extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class)->withTrashed();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'old_value' => 'json',
+            'new_value' => 'json',
+            'is_undoable' => 'boolean',
+            'undone_at' => 'datetime',
+            'created_at' => 'datetime',
+        ];
     }
 }

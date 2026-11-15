@@ -84,6 +84,8 @@ class BoardTrashController extends Controller
             'position' => (int) BoardGroup::where('board_view_id', $target->board_view_id)->where('is_archived', false)->max('position') + 1,
         ]);
 
+        $this->activity_logger->logGroup($item, $request->user(), BoardActivityLog::ACTION_GROUP_RESTORED, 'Restored', $target);
+
         return response()->json(['message' => 'Table restored successfully.']);
     }
 
@@ -97,7 +99,9 @@ class BoardTrashController extends Controller
     {
         BoardEditGate::authorize($item, $request->user());
 
-        BoardGroup::where('board_id', $item->id)->where('is_archived', true)->findOrFail($group)->delete();
+        $target = BoardGroup::where('board_id', $item->id)->where('is_archived', true)->findOrFail($group);
+        $this->activity_logger->logGroup($item, $request->user(), BoardActivityLog::ACTION_GROUP_DELETED, 'Permanently deleted', $target);
+        $target->delete();
 
         return response()->json(['message' => 'Table permanently deleted.']);
     }
@@ -119,13 +123,7 @@ class BoardTrashController extends Controller
             $target->update(['is_archived' => false]);
         }
 
-        $this->activity_logger->log(
-            $item,
-            $request->user(),
-            BoardActivityLog::ACTION_ITEM_RESTORED,
-            "Restored \"{$target->name}\"",
-            ['item_id' => $target->id]
-        );
+        $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_RESTORED, 'Restored', $target);
 
         $this->automation_service->handleItemRestored($target->fresh('group'), $request->user());
 
@@ -141,17 +139,8 @@ class BoardTrashController extends Controller
     public function forceDelete(Request $request, WorkspaceNavigationItem $item, int $board_item): JsonResponse
     {
         $target = BoardItem::withTrashed()->where('board_id', $item->id)->findOrFail($board_item);
-        $name = $target->name;
-        $target_id = $target->id;
+        $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_DELETED, 'Permanently deleted', $target);
         $target->forceDelete();
-
-        $this->activity_logger->log(
-            $item,
-            $request->user(),
-            BoardActivityLog::ACTION_ITEM_DELETED,
-            "Permanently deleted \"{$name}\"",
-            ['item_id' => $target_id]
-        );
 
         return response()->json(['message' => 'Item permanently deleted.']);
     }

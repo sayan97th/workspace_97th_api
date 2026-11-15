@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\BoardEditPermission;
+use App\Services\Board\BoardActivityFeed;
 use App\Services\Board\RecurringItemService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
@@ -10,12 +11,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
- * One entry in a board's "Activity log" (its "..." menu item) — a coarse,
- * board-level timeline of who did what and when: renamed the board, changed
- * its type, duplicated it, archived/unarchived it, or deleted it. This is
- * deliberately scoped to board-lifecycle events rather than every single
- * item/column/group edit, which already has its own surface (the item
- * drawer's comments, the board's discussion feed).
+ * One structural entry in a board's Activity log: the board itself (renamed,
+ * archived, permissions), its items as a whole (created, duplicated, archived,
+ * moved to trash, restored), its groups and its columns (created, renamed,
+ * archived, deleted). Cell changes live in {@see BoardItemActivity}, the
+ * Activity log drawer reads both through {@see BoardActivityFeed}.
  *
  * @property int $id
  * @property int $board_id
@@ -23,11 +23,12 @@ use Illuminate\Support\Carbon;
  * @property string $action
  * @property string $description
  * @property array<string, mixed>|null $meta
+ * @property Carbon|null $undone_at
  * @property Carbon $created_at
  * @property-read WorkspaceNavigationItem $board
  * @property-read User|null $user
  */
-#[Fillable(['board_id', 'user_id', 'action', 'description', 'meta'])]
+#[Fillable(['board_id', 'user_id', 'action', 'description', 'meta', 'undone_at'])]
 class BoardActivityLog extends Model
 {
     public const UPDATED_AT = null;
@@ -64,6 +65,36 @@ class BoardActivityLog extends Model
     /** A board owner changed the board permission mode, see {@see BoardEditPermission}. */
     public const ACTION_PERMISSIONS_CHANGED = 'permissions_changed';
 
+    /** A new item (or subitem) was added to the board. */
+    public const ACTION_ITEM_CREATED = 'item_created';
+
+    /** An item was duplicated, `meta.source_item_id` is the original. */
+    public const ACTION_ITEM_DUPLICATED = 'item_duplicated';
+
+    /** An item was moved to the trash (soft deleted), it can still be restored. */
+    public const ACTION_ITEM_TRASHED = 'item_trashed';
+
+    public const ACTION_GROUP_CREATED = 'group_created';
+
+    public const ACTION_GROUP_RENAMED = 'group_renamed';
+
+    public const ACTION_GROUP_ARCHIVED = 'group_archived';
+
+    /** An archived group was brought back, from the archive panel or the Activity log's "Undo". */
+    public const ACTION_GROUP_RESTORED = 'group_restored';
+
+    public const ACTION_GROUP_DELETED = 'group_deleted';
+
+    public const ACTION_GROUP_DUPLICATED = 'group_duplicated';
+
+    public const ACTION_COLUMN_CREATED = 'column_created';
+
+    public const ACTION_COLUMN_RENAMED = 'column_renamed';
+
+    public const ACTION_COLUMN_DELETED = 'column_deleted';
+
+    public const ACTION_COLUMN_DUPLICATED = 'column_duplicated';
+
     /**
      * @return BelongsTo<WorkspaceNavigationItem, $this>
      */
@@ -87,6 +118,7 @@ class BoardActivityLog extends Model
     {
         return [
             'meta' => 'array',
+            'undone_at' => 'datetime',
             'created_at' => 'datetime',
         ];
     }
