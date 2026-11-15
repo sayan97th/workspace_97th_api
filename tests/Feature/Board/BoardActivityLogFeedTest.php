@@ -11,6 +11,8 @@ use App\Models\BoardVisit;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardActivityFeed;
+use App\Services\Board\BoardItemTransferService;
 
 /**
  * @return array{0: WorkspaceNavigationItem, 1: BoardView, 2: BoardGroup, 3: BoardColumn}
@@ -50,7 +52,7 @@ test('the feed merges cell changes and board events newest first, with label col
     $this->travel(1)->seconds();
     $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item_id}/values", ['values' => [(string) $status->id => 'done']])->assertOk();
 
-    $feed = activityLogFeed($user, $board);
+    $feed = activityLogFeed($user, $board, '?with_facets=1');
 
     expect($feed['data'])->toHaveCount(2)
         ->and($feed['data'][0]['source'])->toBe('cell')
@@ -168,7 +170,57 @@ test('the updates tab lists the updates posted on the board items', function () 
 
     $this->actingAs($user, 'api')->getJson("/api/boards/{$board->id}/activity-log/updates")
         ->assertOk()
-        ->assertJsonPath('meta.total', 1)
+        ->assertJsonPath('meta.has_more', false)
+        ->assertJsonCount(1, 'data')
         ->assertJsonPath('data.0.item.name', 'Task')
         ->assertJsonPath('data.0.author.id', $user->id);
+});
+
+test('a filtered walk through small scan windows returns every match once, in order', function () {
+    app()->instance(BoardActivityFeed::class, new BoardActivityFeed(3));
+    [$board, , $group, $status] = activityLogBoard();
+    $user = User::factory()->create();
+    $match = $board->items()->create(['group_id' => $group->id, 'name' => 'Needle', 'position' => 0]);
+    $noise = $board->items()->create(['group_id' => $group->id, 'name' => 'Hay', 'position' => 1]);
+
+    foreach (range(1, 12) as $round) {
+        $this->travel(1)->seconds();
+        $target = $round % 3 === 0 ? $match : $noise;
+        $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$target->id}/values", ['values' => [(string) $status->id => $round % 2 ? 'done' : 'working']])->assertOk();
+    }
+
+    $keys = [];
+    $cursor = null;
+    $requests = 0;
+    do {
+        $page = activityLogFeed($user, $board, '?per_page=2&search=needle'.($cursor ? "&cursor={$cursor}" : ''));
+        $keys = [...$keys, ...array_column($page['data'], 'key')];
+        $cursor = $page['meta']['next_cursor'];
+        $requests++;
+    } while ($cursor !== null && $requests < 50);
+
+    $expected = BoardItemActivity::where('item_id', $match->id)->orderByDesc('created_at')->orderByDesc('id')->pluck('id')->map(fn ($id) => "cell-{$id}")->all();
+    expect($keys)->toBe($expected)->and($requests)->toBeGreaterThan(2);
+});
+
+test('facets are only computed when the drawer asks for them', function () {
+    [$board] = activityLogBoard();
+    $user = User::factory()->create();
+
+    expect(activityLogFeed($user, $board)['meta']['facets'])->toBeNull()
+        ->and(activityLogFeed($user, $board, '?with_facets=1')['meta']['facets']['columns'])->toHaveCount(1);
+});
+
+test('the history of an item moved to another board follows it', function () {
+    [$board, , $group, $status] = activityLogBoard();
+    $user = User::factory()->create();
+    $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Task', 'position' => 0]);
+    $this->actingAs($user, 'api')->patchJson("/api/boards/{$board->id}/items/{$item->id}/values", ['values' => [(string) $status->id => 'done']])->assertOk();
+
+    expect(BoardItemActivity::where('item_id', $item->id)->value('board_id'))->toBe($board->id);
+
+    $target = BoardGroup::factory()->create(['board_id' => WorkspaceNavigationItem::factory()->create(['workspace_id' => $board->workspace_id, 'type' => WorkspaceNavigationItem::TYPE_LEAF])->id]);
+    app(BoardItemTransferService::class)->moveToBoard($item, $target);
+
+    expect(BoardItemActivity::where('item_id', $item->id)->value('board_id'))->toBe($target->board_id);
 });

@@ -62,6 +62,7 @@ class BoardItemActivityService
 
         BoardItemActivity::create([
             'item_id' => $board_item->id,
+            'board_id' => $board_item->board_id,
             'user_id' => $actor?->id,
             'automation_id' => $automation?->id,
             'automation_name' => $automation ? Str::limit($automation->name ?: 'Automation', 250, '') : null,
@@ -93,6 +94,7 @@ class BoardItemActivityService
 
         BoardItemActivity::create([
             'item_id' => $board_item->id,
+            'board_id' => $board_item->board_id,
             'user_id' => $actor?->id,
             'automation_id' => $automation?->id,
             'automation_name' => $automation ? Str::limit($automation->name ?: 'Automation', 250, '') : null,

@@ -5,6 +5,7 @@ namespace App\Services\Board;
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
+use App\Models\BoardItemActivity;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -84,6 +85,10 @@ class BoardItemTransferService
                 $this->transferValues($descendant, $column_maps[BoardColumn::SCOPE_SUBITEM]);
                 $this->assignAutoNumberValues($descendant, $target_view_id, BoardColumn::SCOPE_SUBITEM);
             }
+
+            // The item's change history travels with it, it shows in the new board's Activity log.
+            BoardItemActivity::whereIn('item_id', [$board_item->id, ...array_map(fn (BoardItem $descendant) => $descendant->id, $this->flattenTree($board_item->childrenRecursive))])
+                ->update(['board_id' => $target_board_id]);
 
             return $board_item->fresh(['values', 'childrenRecursive']);
         });

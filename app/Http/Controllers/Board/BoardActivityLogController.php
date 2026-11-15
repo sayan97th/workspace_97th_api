@@ -82,14 +82,15 @@ class BoardActivityLogController extends Controller
             (int) ($request->validated('per_page') ?? self::DEFAULT_PER_PAGE),
         );
 
-        $is_first_page = ($request->validated('cursor') ?? '') === '';
-
         return response()->json([
             'data' => $page['entries'],
             'meta' => [
                 'next_cursor' => $page['next_cursor'],
-                // The filter menus' choices, sent with the first page only.
-                'facets' => $is_first_page ? $this->feed->facets($item) : null,
+                // Set when a filtered page ended at its scan window: how far back the search looked so far.
+                'scanned_until' => $page['scanned_until'],
+                // The filter menus' choices, only when asked for: the drawer asks once per opening,
+                // not again on every filter change or page.
+                'facets' => $request->boolean('with_facets') ? $this->feed->facets($item) : null,
             ],
         ]);
     }
@@ -143,15 +144,20 @@ class BoardActivityLogController extends Controller
      */
     public function updates(Request $request, WorkspaceNavigationItem $item): JsonResponse
     {
+        // A join on the board's items rather than `whereHas`, which MySQL would check against every
+        // comment of every board, and no total count, so a board with many updates still pages fast.
         $page = BoardItemComment::query()
-            ->whereNull('parent_id')
+            ->select('board_item_comments.*')
+            ->join('board_items', 'board_items.id', '=', 'board_item_comments.item_id')
+            ->where('board_items.board_id', $item->id)
+            ->whereNull('board_items.deleted_at')
+            ->whereNull('board_item_comments.parent_id')
             ->visibleNow()
-            ->whereHas('item', fn ($query) => $query->where('board_id', $item->id))
             ->with(['author', 'automation:id,name', 'item:id,name,group_id,parent_id', 'item.group:id,name,accent_color'])
             ->withCount(['replies', 'likes'])
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->paginate(self::UPDATES_PER_PAGE);
+            ->orderByDesc('board_item_comments.created_at')
+            ->orderByDesc('board_item_comments.id')
+            ->simplePaginate(self::UPDATES_PER_PAGE);
 
         return response()->json([
             'data' => collect($page->items())->map(fn (BoardItemComment $comment) => [
@@ -182,8 +188,7 @@ class BoardActivityLogController extends Controller
             ])->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
-                'last_page' => $page->lastPage(),
-                'total' => $page->total(),
+                'has_more' => $page->hasMorePages(),
             ],
         ]);
     }

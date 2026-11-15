@@ -19,6 +19,7 @@ use Illuminate\Support\Carbon;
  *
  * @property int $id
  * @property int $item_id
+ * @property int|null $board_id
  * @property int|null $user_id
  * @property int|null $automation_id
  * @property string|null $automation_name
@@ -35,10 +36,22 @@ use Illuminate\Support\Carbon;
  * @property-read BoardItem $item
  * @property-read User|null $user
  */
-#[Fillable(['item_id', 'user_id', 'automation_id', 'automation_name', 'column_id', 'column_label', 'column_type', 'old_display', 'new_display', 'old_value', 'new_value', 'is_undoable', 'undone_at'])]
+#[Fillable(['item_id', 'board_id', 'user_id', 'automation_id', 'automation_name', 'column_id', 'column_label', 'column_type', 'old_display', 'new_display', 'old_value', 'new_value', 'is_undoable', 'undone_at'])]
 class BoardItemActivity extends Model
 {
     public const UPDATED_AT = null;
+
+    /**
+     * `board_id` is a copy of the item's board, so the board Activity log can
+     * read a board's history from one index. Filled here when a caller did
+     * not set it.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (BoardItemActivity $activity) {
+            $activity->board_id ??= BoardItem::withTrashed()->whereKey($activity->item_id)->value('board_id');
+        });
+    }
 
     /**
      * @return BelongsTo<BoardItem, $this>

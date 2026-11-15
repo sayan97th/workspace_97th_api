@@ -58,11 +58,22 @@ class BoardActivityFeed
         'automations' => [BoardActivityLog::ACTION_AUTOMATION_RAN],
     ];
 
+    /** Most cell changes one filtered request scans by default, see {@see page()}. */
+    public const SCAN_WINDOW = 20000;
+
+    /** Most items an item name search matches, keeps the id list short on a huge board. */
+    private const MAX_SEARCH_ITEMS = 2000;
+
     /** "Filter log" event types answered by cell change rows. */
     public const CELL_EVENT_TYPES = ['column_values', 'item_name', 'item_moved'];
 
     /** Column types whose values are drawn as colored label chips. */
     private const LABEL_COLUMN_TYPES = [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL];
+
+    /**
+     * @param  int  $scan_window  Most cell changes one filtered request scans, smaller in tests.
+     */
+    public function __construct(private readonly int $scan_window = self::SCAN_WINDOW) {}
 
     /**
      * One page of the log, newest first.
@@ -72,15 +83,25 @@ class BoardActivityFeed
      * {@see CELL_EVENT_TYPES}), `search`, `from` and `to` (dates), and
      * `automation_only` (only what automations did).
      *
+     * A filtered request scans at most `$scan_window` cell changes (see
+     * {@see scanWindowEnd()}). When that window holds less than a page of
+     * matches, the page ends at the window's edge with a `next_cursor` to
+     * keep going, and `scanned_until` says how far back it looked. Every
+     * request stays fast on a board with a very long history, and the drawer
+     * keeps asking until the page fills or the history ends.
+     *
      * @param  array<string, mixed>  $filters
-     * @return array{entries: array<int, array<string, mixed>>, next_cursor: string|null}
+     * @return array{entries: array<int, array<string, mixed>>, next_cursor: string|null, scanned_until: CarbonInterface|null}
      */
     public function page(WorkspaceNavigationItem $board, array $filters, ?string $cursor, int $limit): array
     {
         $position = $this->decodeCursor($cursor);
+        $cell_query = $this->cellQuery($board, $filters, $position);
+        // Only a filter over the cell changes needs a window, the board events have their own short index.
+        $window_end = $cell_query !== null && $this->isFiltered($filters) ? $this->scanWindowEnd($board, $filters, $position) : null;
 
-        $cell_rows = $this->cellQuery($board, $filters, $position)?->limit($limit + 1)->get() ?? collect();
-        $board_rows = $this->boardQuery($board, $filters, $position)?->limit($limit + 1)->get() ?? collect();
+        $cell_rows = $cell_query?->tap(fn (Builder $query) => $this->applyWindow($query, 'board_item_activities', self::SOURCE_CELL, $window_end))->limit($limit + 1)->get() ?? collect();
+        $board_rows = $this->boardQuery($board, $filters, $position)?->tap(fn (Builder $query) => $this->applyWindow($query, 'board_activity_logs', self::SOURCE_BOARD, $window_end))->limit($limit + 1)->get() ?? collect();
 
         $merged = $cell_rows->map(fn (BoardItemActivity $row) => ['source' => self::SOURCE_CELL, 'row' => $row])
             ->concat($board_rows->map(fn (BoardActivityLog $row) => ['source' => self::SOURCE_BOARD, 'row' => $row]))
@@ -90,12 +111,88 @@ class BoardActivityFeed
         $page = $merged->take($limit);
         $last = $page->last();
 
+        $next_cursor = match (true) {
+            $merged->count() > $limit && $last !== null => $this->encodeCursor($last['row']->created_at, $last['source'], $last['row']->id),
+            // The window ran out before the page filled, the next request scans the next window.
+            $window_end !== null => $this->encodeCursor($window_end['at'], self::SOURCE_CELL, $window_end['id']),
+            default => null,
+        };
+
         return [
             'entries' => $this->present($board, $page),
-            'next_cursor' => $merged->count() > $limit && $last !== null
-                ? $this->encodeCursor($last['row']->created_at, $last['source'], $last['row']->id)
-                : null,
+            'next_cursor' => $next_cursor,
+            'scanned_until' => $merged->count() > $limit ? null : $window_end['at'] ?? null,
         ];
+    }
+
+    /**
+     * Whether a filter that can not be answered from an index alone is active
+     * (search, columns, groups, event types, people, automations). The plain
+     * log and a date range read straight from the index and need no window.
+     *
+     * @param  array<string, mixed>  $filters
+     */
+    private function isFiltered(array $filters): bool
+    {
+        return ($filters['search'] ?? '') !== ''
+            || ! empty($filters['column_ids'])
+            || ! empty($filters['group_ids'])
+            || ! empty($filters['event_types'])
+            || ! empty($filters['user_ids'])
+            || ! empty($filters['automation_only']);
+    }
+
+    /**
+     * The oldest of the next `$scan_window` cell changes after the cursor,
+     * or null when fewer than that are left (the scan then runs to the end).
+     * Read from the `(board_id, created_at, id)` index only, so finding the
+     * edge costs a short index walk, not a read of the rows.
+     *
+     * @param  array<string, mixed>  $filters
+     * @param  array{at: CarbonInterface, source: string, id: int}|null  $position
+     * @return array{at: CarbonInterface, id: int}|null
+     */
+    private function scanWindowEnd(WorkspaceNavigationItem $board, array $filters, ?array $position): ?array
+    {
+        $query = BoardItemActivity::query()->where('board_item_activities.board_id', $board->id);
+        $this->applyDates($query, 'board_item_activities.created_at', $filters);
+        $this->applyCursor($query, 'board_item_activities', self::SOURCE_CELL, $position);
+
+        $edge = $query->orderByDesc('board_item_activities.created_at')
+            ->orderByDesc('board_item_activities.id')
+            ->offset($this->scan_window - 1)
+            ->limit(1)
+            ->toBase()
+            ->first(['board_item_activities.id', 'board_item_activities.created_at']);
+
+        return $edge === null ? null : ['at' => Carbon::parse($edge->created_at), 'id' => (int) $edge->id];
+    }
+
+    /**
+     * Keeps only the rows that sit at or before the window's edge in the merged
+     * order (time desc, source rank desc, id desc). The edge row itself is
+     * included, the next window starts right after it.
+     *
+     * @param  Builder<covariant \Illuminate\Database\Eloquent\Model>  $query
+     * @param  array{at: CarbonInterface, id: int}|null  $window_end
+     */
+    private function applyWindow(Builder $query, string $table, string $source, ?array $window_end): void
+    {
+        if ($window_end === null) {
+            return;
+        }
+
+        if ($source === self::SOURCE_BOARD) {
+            // A board event of the same second sorts after the cell edge, so it belongs to the next window.
+            $query->where("{$table}.created_at", '>', $window_end['at']);
+
+            return;
+        }
+
+        $query->where(function (Builder $query) use ($table, $window_end) {
+            $query->where("{$table}.created_at", '>', $window_end['at'])
+                ->orWhere(fn (Builder $query) => $query->where("{$table}.created_at", $window_end['at'])->where("{$table}.id", '>=', $window_end['id']));
+        });
     }
 
     /**
@@ -119,12 +216,8 @@ class BoardActivityFeed
             ->get(['id', 'name', 'accent_color', 'is_archived'])
             ->map(fn (BoardGroup $group) => ['id' => $group->id, 'name' => $group->name, 'color' => $group->accent_color, 'is_archived' => (bool) $group->is_archived]);
 
-        $cell_user_ids = BoardItemActivity::query()
-            ->join('board_items', 'board_items.id', '=', 'board_item_activities.item_id')
-            ->where('board_items.board_id', $board->id)
-            ->whereNotNull('board_item_activities.user_id')
-            ->distinct()
-            ->pluck('board_item_activities.user_id');
+        // Both read the `(board_id, user_id)` indexes, so they stay quick on a long history.
+        $cell_user_ids = BoardItemActivity::where('board_id', $board->id)->whereNotNull('user_id')->distinct()->pluck('user_id');
         $board_user_ids = BoardActivityLog::where('board_id', $board->id)->whereNotNull('user_id')->distinct()->pluck('user_id');
 
         $people = User::withTrashed()
@@ -142,7 +235,7 @@ class BoardActivityFeed
      * when the active event type filter rules every one of them out.
      *
      * @param  array<string, mixed>  $filters
-     * @param  array{at: Carbon, source: string, id: int}|null  $position
+     * @param  array{at: CarbonInterface, source: string, id: int}|null  $position
      * @return Builder<BoardItemActivity>|null
      */
     private function cellQuery(WorkspaceNavigationItem $board, array $filters, ?array $position): ?Builder
@@ -153,10 +246,11 @@ class BoardActivityFeed
             return null;
         }
 
+        // Read from the `(board_id, created_at, id)` index newest first, so MySQL stops after one
+        // page instead of sorting the board's whole history. Filters on the item itself (its
+        // group, its name) go through a small subquery on the board's items, never a join.
         $query = BoardItemActivity::query()
-            ->join('board_items', 'board_items.id', '=', 'board_item_activities.item_id')
-            ->where('board_items.board_id', $board->id)
-            ->select('board_item_activities.*')
+            ->where('board_item_activities.board_id', $board->id)
             ->with('user');
 
         if ($cell_types !== []) {
@@ -183,12 +277,12 @@ class BoardActivityFeed
             $query->whereIn('board_item_activities.column_id', $filters['column_ids']);
         }
         if (! empty($filters['group_ids'])) {
-            $query->whereIn('board_items.group_id', $filters['group_ids']);
+            $query->whereIn('board_item_activities.item_id', $this->boardItemIds($board)->whereIn('group_id', $filters['group_ids'])->pluck('id'));
         }
         if (($filters['search'] ?? '') !== '') {
             $like = '%'.$this->escapeLike($filters['search']).'%';
-            $query->where(function (Builder $query) use ($like) {
-                $query->where('board_items.name', 'like', $like)
+            $query->where(function (Builder $query) use ($board, $like) {
+                $query->whereIn('board_item_activities.item_id', $this->boardItemIds($board)->where('name', 'like', $like)->limit(self::MAX_SEARCH_ITEMS)->pluck('id'))
                     ->orWhere('board_item_activities.column_label', 'like', $like)
                     ->orWhere('board_item_activities.old_display', 'like', $like)
                     ->orWhere('board_item_activities.new_display', 'like', $like);
@@ -202,11 +296,24 @@ class BoardActivityFeed
     }
 
     /**
+     * The board's items (trashed ones too, their history still shows), to
+     * narrow the cell changes by something about the item. The ids are read
+     * once and passed as a list: as a subquery MySQL would run it again for
+     * every change it scans.
+     *
+     * @return Builder<BoardItem>
+     */
+    private function boardItemIds(WorkspaceNavigationItem $board): Builder
+    {
+        return BoardItem::withTrashed()->where('board_id', $board->id)->select('id');
+    }
+
+    /**
      * Structural events of the board, or null when the active filters rule
      * every one of them out.
      *
      * @param  array<string, mixed>  $filters
-     * @param  array{at: Carbon, source: string, id: int}|null  $position
+     * @param  array{at: CarbonInterface, source: string, id: int}|null  $position
      * @return Builder<BoardActivityLog>|null
      */
     private function boardQuery(WorkspaceNavigationItem $board, array $filters, ?array $position): ?Builder
@@ -264,7 +371,7 @@ class BoardActivityFeed
      * (time desc, source rank desc, id desc).
      *
      * @param  Builder<covariant \Illuminate\Database\Eloquent\Model>  $query
-     * @param  array{at: Carbon, source: string, id: int}|null  $position
+     * @param  array{at: CarbonInterface, source: string, id: int}|null  $position
      */
     private function applyCursor(Builder $query, string $table, string $source, ?array $position): void
     {
@@ -303,7 +410,7 @@ class BoardActivityFeed
     }
 
     /**
-     * @return array{at: Carbon, source: string, id: int}|null
+     * @return array{at: CarbonInterface, source: string, id: int}|null
      */
     private function decodeCursor(?string $cursor): ?array
     {

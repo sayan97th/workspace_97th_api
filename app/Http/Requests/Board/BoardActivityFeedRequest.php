@@ -40,6 +40,7 @@ class BoardActivityFeedRequest extends FormRequest
             'from' => ['sometimes', 'nullable', 'date'],
             'to' => ['sometimes', 'nullable', 'date'],
             'automation_only' => ['sometimes', 'boolean'],
+            'with_facets' => ['sometimes', 'boolean'],
         ];
     }
 
