@@ -39,6 +39,7 @@ function createReporterColumn(WorkspaceNavigationItem $board, BoardView $view, b
 test('a new item gets its creator in an auto assign People column', function () {
     $user = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user);
     $column = createReporterColumn($board, $view);
 
     $this->actingAs($user, 'api')
@@ -50,6 +51,7 @@ test('a new item gets its creator in an auto assign People column', function () 
 test('a new subitem gets its creator in an auto assign subitem People column', function () {
     $user = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user);
     $column = createReporterColumn($board, $view);
     $column->update(['scope' => BoardColumn::SCOPE_SUBITEM]);
     $parent = $board->items()->create(['group_id' => $group->id, 'name' => 'Parent', 'position' => 0]);
@@ -64,8 +66,8 @@ test('people sent with the new item win over the creator', function () {
     $user = User::factory()->create();
     $teammate = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user, $teammate);
     $column = createReporterColumn($board, $view);
-    addBoardMembers($board, $teammate);
 
     $this->actingAs($user, 'api')
         ->postJson("/api/boards/{$board->id}/items", [
@@ -81,8 +83,8 @@ test('the auto assigned creator can be changed like any People cell', function (
     $user = User::factory()->create();
     $teammate = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user, $teammate);
     $column = createReporterColumn($board, $view);
-    addBoardMembers($board, $teammate);
     $item_id = $this->actingAs($user, 'api')
         ->postJson("/api/boards/{$board->id}/items", ['name' => 'Bug report', 'group_id' => $group->id])
         ->json('item.id');
@@ -96,6 +98,7 @@ test('the auto assigned creator can be changed like any People cell', function (
 test('the creator is not notified about their own auto assignment', function () {
     $user = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user);
     createReporterColumn($board, $view);
 
     $this->actingAs($user, 'api')
@@ -108,6 +111,7 @@ test('the creator is not notified about their own auto assignment', function () 
 test('a People column without auto assign stays empty on new items', function () {
     $user = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user);
     $column = createReporterColumn($board, $view, false);
 
     $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/items", ['name' => 'Task', 'group_id' => $group->id]);
@@ -131,6 +135,7 @@ test('creating a Reporter column assigns each existing item creator right away',
     $user = User::factory()->create();
     $author = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user, $author);
     $known = $board->items()->create(['group_id' => $group->id, 'name' => 'Known', 'position' => 0, 'created_by_id' => $author->id]);
     $unknown = $board->items()->create(['group_id' => $group->id, 'name' => 'Imported', 'position' => 1]);
 
@@ -152,6 +157,7 @@ test('turning a Creation log column into a People column keeps the creators and 
     $user = User::factory()->create();
     $author = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user, $author);
     $column = BoardColumn::factory()->create(['board_id' => $board->id, 'board_view_id' => $view->id, 'type' => BoardColumn::TYPE_CREATION_LOG]);
     $item = $board->items()->create(['group_id' => $group->id, 'name' => 'Old', 'position' => 0, 'created_by_id' => $author->id]);
     // A date kept from when the column was a Date column is not a person, so it is replaced.
@@ -174,6 +180,7 @@ test('fill empty cells assigns creators only where a People column is empty', fu
     $author = User::factory()->create();
     $teammate = User::factory()->create();
     [$board, $view, $group] = createPeopleAutoAssignTestBoard();
+    addBoardMembers($board, $user, $author, $teammate);
     $column = createReporterColumn($board, $view, false);
     $empty = $board->items()->create(['group_id' => $group->id, 'name' => 'Empty', 'position' => 0, 'created_by_id' => $author->id]);
     $cleared = $board->items()->create(['group_id' => $group->id, 'name' => 'Cleared', 'position' => 1, 'created_by_id' => $author->id]);

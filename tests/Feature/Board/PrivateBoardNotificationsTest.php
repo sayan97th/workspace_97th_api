@@ -2,10 +2,13 @@
 
 use App\Models\BoardColumn;
 use App\Models\BoardGroup;
+use App\Models\BoardView;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardItemFilterEvaluator;
+use App\Services\Board\BoardPeopleAutoAssigner;
 use App\Services\Feed\FeedService;
 use App\Services\Notification\NotificationService;
 use App\Support\VisibleBoards;
@@ -126,4 +129,44 @@ test('onlyViewers keeps everyone on a Main board and the people added on a priva
 
     $this->board->update(['board_type' => WorkspaceNavigationItem::BOARD_TYPE_MAIN]);
     expect(VisibleBoards::onlyViewers($this->board, $users)->pluck('id')->all())->toBe([$this->outsider->id, $this->invitee->id, $this->creator->id]);
+});
+
+test('a Reporter column never auto assigns a creator who cannot open the private board', function () {
+    $view = BoardView::factory()->create(['board_id' => $this->board->id, 'is_primary' => true]);
+    $reporter = BoardColumn::factory()->create([
+        'board_id' => $this->board->id,
+        'board_view_id' => $view->id,
+        'type' => BoardColumn::TYPE_PEOPLE,
+        'config' => ['auto_assign_creator' => true],
+    ]);
+    $group = BoardGroup::factory()->create(['board_id' => $this->board->id, 'board_view_id' => $view->id]);
+    // Items moved in from another board keep the author they had there.
+    $moved_in = $this->board->items()->create(['group_id' => $group->id, 'name' => 'Moved in', 'position' => 0, 'created_by_id' => $this->outsider->id]);
+    $own = $this->board->items()->create(['group_id' => $group->id, 'name' => 'Own', 'position' => 1, 'created_by_id' => $this->invitee->id]);
+
+    $filled = app(BoardPeopleAutoAssigner::class)->fillEmptyCells($reporter);
+
+    expect($filled)->toBe([$own->id => [(string) $this->invitee->id]]);
+
+    app(BoardPeopleAutoAssigner::class)->fillItem($moved_in, $view->id, BoardColumn::SCOPE_ITEM);
+    expect($moved_in->values()->where('column_id', $reporter->id)->exists())->toBeFalse();
+});
+
+test('a Creation log column filters by person like People and Reporter columns', function () {
+    $creation_log = BoardColumn::factory()->create(['board_id' => $this->board->id, 'type' => BoardColumn::TYPE_CREATION_LOG]);
+    $this->item->update(['created_by_id' => $this->invitee->id]);
+    $evaluator = new BoardItemFilterEvaluator(
+        collect([(string) $creation_log->id => $creation_log]),
+        $this->creator->id,
+        '2026-11-16',
+    );
+
+    expect($evaluator->matches($this->item->fresh('values'), ['selected_person_ids' => [(string) $this->invitee->id]]))->toBeTrue();
+    expect($evaluator->matches($this->item->fresh('values'), ['selected_person_ids' => [(string) $this->creator->id]]))->toBeFalse();
+    expect($evaluator->matches($this->item->fresh('values'), [
+        'advanced_filter_rows' => [['id' => 'r1', 'column_id' => (string) $creation_log->id, 'condition' => 'is', 'values' => [(string) $this->invitee->id]]],
+    ]))->toBeTrue();
+    expect($evaluator->matches($this->item->fresh('values'), [
+        'advanced_filter_rows' => [['id' => 'r1', 'column_id' => (string) $creation_log->id, 'condition' => 'is', 'values' => [(string) $this->creator->id]]],
+    ]))->toBeFalse();
 });

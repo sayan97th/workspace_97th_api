@@ -80,6 +80,8 @@ class BoardItemFilterEvaluator
         BoardColumn::TYPE_TAGS => self::KIND_OPTION,
         BoardColumn::TYPE_PEOPLE => self::KIND_PEOPLE,
         BoardColumn::TYPE_VOTE => self::KIND_PEOPLE,
+        // The item's creator, filtered by person like a People or Reporter column.
+        BoardColumn::TYPE_CREATION_LOG => self::KIND_PEOPLE,
         BoardColumn::TYPE_DATE => self::KIND_DATE,
         BoardColumn::TYPE_TIMELINE => self::KIND_DATE,
         BoardColumn::TYPE_NUMBER => self::KIND_NUMBER,
@@ -285,7 +287,7 @@ class BoardItemFilterEvaluator
 
         $column_ids = array_map('strval', (array) ($filter_state['person_column_ids'] ?? []));
         foreach ($this->columns as $column_id => $column) {
-            if ($column->type !== BoardColumn::TYPE_PEOPLE) {
+            if (! in_array($column->type, [BoardColumn::TYPE_PEOPLE, BoardColumn::TYPE_CREATION_LOG], true)) {
                 continue;
             }
             if ($column_ids !== [] && ! in_array((string) $column_id, $column_ids, true)) {
@@ -772,6 +774,9 @@ class BoardItemFilterEvaluator
     {
         if ($column === null) {
             return [(string) $item->group_id];
+        }
+        if ($column->type === BoardColumn::TYPE_CREATION_LOG) {
+            return $item->created_by_id !== null ? [(string) $item->created_by_id] : [];
         }
 
         $value = $this->rawValue($item, $column);

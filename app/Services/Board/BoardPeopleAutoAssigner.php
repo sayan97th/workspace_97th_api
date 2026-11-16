@@ -6,6 +6,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemValue;
+use App\Support\BoardMembers;
 use Illuminate\Support\Collection;
 
 /**
@@ -26,6 +27,11 @@ use Illuminate\Support\Collection;
  * Values are written as `["<user id>"]`, the same shape the People cell's
  * picker stores, and no "Assigned you" notification is sent, since the
  * creator is the one who made the item.
+ *
+ * Like any People column a Reporter only ever holds people added to the board
+ * (see {@see BoardMembers}): a creator who cannot open it, such as the author
+ * of an item moved in from another board or someone removed from a private
+ * board, or a deactivated account, leaves the cell empty.
  */
 class BoardPeopleAutoAssigner
 {
@@ -41,6 +47,11 @@ class BoardPeopleAutoAssigner
 
         $columns = $this->autoAssignColumns($board_view_id, $scope);
         if ($columns->isEmpty()) {
+            return;
+        }
+
+        $board = $board_item->board;
+        if ($board === null || ! BoardMembers::includes($board, $board_item->created_by_id)) {
             return;
         }
 
@@ -91,6 +102,12 @@ class BoardPeopleAutoAssigner
             return [];
         }
 
+        $board = $column->board;
+        if ($board === null) {
+            return [];
+        }
+
+        $member_ids = BoardMembers::ids($board)->flip();
         $group_ids = BoardGroup::where('board_view_id', $column->board_view_id)->pluck('id');
         $filled = [];
 
@@ -104,8 +121,12 @@ class BoardPeopleAutoAssigner
             )
             ->with(['values' => fn ($query) => $query->where('column_id', $column->id)])
             ->select(['id', 'created_by_id'])
-            ->chunkById(500, function ($board_items) use ($column, &$filled) {
+            ->chunkById(500, function ($board_items) use ($column, $member_ids, &$filled) {
                 foreach ($board_items as $board_item) {
+                    if (! $member_ids->has((int) $board_item->created_by_id)) {
+                        continue;
+                    }
+
                     $current = $board_item->values->first();
                     if ($current !== null && ! self::isEmptyValue($current->value)) {
                         continue;
