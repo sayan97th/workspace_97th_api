@@ -88,6 +88,8 @@ class BoardItemController extends Controller
             return response()->json(['data' => []]);
         }
 
+        $viewer_id = $request->user()?->id;
+
         $query = $item->items()
             ->where('is_archived', false)
             ->whereNull('parent_id')
@@ -98,9 +100,12 @@ class BoardItemController extends Controller
                 'recurrence',
                 'latestActivity',
                 // An archived subitem is hidden like an archived root item, it
-                // only comes back through the board's archive panel.
-                'childrenRecursive' => fn ($q) => $q->where('is_archived', false),
+                // only comes back through the board's archive panel. Subitems
+                // get the same per viewer mention flag as their parent row.
+                'childrenRecursive' => fn ($q) => $q->where('is_archived', false)->withViewerMention($viewer_id),
             ])
+            // Blue chat bubble on rows where the viewer is tagged, see BoardItem::scopeWithViewerMention().
+            ->withViewerMention($viewer_id)
             ->withCount([
                 'comments',
                 'commentAttachments',

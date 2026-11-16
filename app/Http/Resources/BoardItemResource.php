@@ -71,6 +71,11 @@ class BoardItemResource extends JsonResource
             // count); other actions that return this resource (store/update/
             // updateValues) fall back to 0 rather than a real count.
             'comment_count' => $this->whenCounted('comments', default: 0),
+            // Whether the requesting user is `@mentioned` in one of those
+            // comments, which paints the row chat bubble blue instead of gray.
+            // Only `index()` loads it (BoardItem::scopeWithViewerMention()),
+            // every other action falls back to false like `comment_count`.
+            'has_viewer_mention' => (bool) ($this->has_viewer_mention ?? false),
             // Sums attachments uploaded directly to the item (the Kanban
             // drawer's "Attachments" affordance) and files sent along with a
             // comment — both count toward the card's single attachment badge.

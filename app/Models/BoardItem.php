@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Concerns\HasRandomBigId;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -224,6 +225,29 @@ class BoardItem extends Model
     public function latestActivity(): HasOne
     {
         return $this->hasOne(BoardItemActivity::class, 'item_id')->latestOfMany();
+    }
+
+    /**
+     * Adds a `has_viewer_mention` flag: whether `$user_id` is `@mentioned` in at least one
+     * published update or reply on the item. Drives monday's row chat bubble, which turns
+     * blue instead of gray while the viewer is tagged in the item's conversation. Group
+     * mentions such as `@Everyone` are stored per person, so they count too. A scheduled
+     * update that has not gone out yet does not.
+     *
+     * @param  Builder<BoardItem>  $query
+     * @return Builder<BoardItem>
+     */
+    public function scopeWithViewerMention(Builder $query, ?int $user_id): Builder
+    {
+        if ($user_id === null) {
+            return $query;
+        }
+
+        return $query->withExists([
+            'comments as has_viewer_mention' => fn ($comments) => $comments
+                ->visibleNow()
+                ->whereHas('mentions', fn ($mentions) => $mentions->where('user_id', $user_id)),
+        ]);
     }
 
     /**
