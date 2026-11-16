@@ -20,6 +20,7 @@ use App\Models\BoardColumn;
 use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardItemRecurrence;
+use App\Models\BoardItemValue;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardAutomationService;
@@ -650,28 +651,75 @@ class BoardItemController extends Controller
     /**
      * PATCH /api/boards/{item}/items/values
      *
-     * Selection action bar's "Edit column" bulk action — applies one column's
-     * value to every given item in one request, reusing `BoardItemValueService::sync()` per
-     * item so this gets the exact same behavior a single inline cell edit
-     * gets for free (the People-column "assigned you" notification, silently
-     * skipping a column id that doesn't belong to this item's own tab).
+     * Bulk cell edit, used when a cell is changed on a row that is checked
+     * together with other rows (monday.com applies the change to every
+     * checked row). Reuses `BoardItemValueService::sync()` per item so each
+     * one gets exactly what a single inline cell edit gets (the People column
+     * "Assigned you" notification, activity, automations, dependency moves,
+     * silently skipping a column that doesn't belong to the item's own scope).
+     *
+     * With `value`, every item takes that value. With `added`/`removed`, each
+     * item's own list keeps its entries, drops `removed` and gains `added`,
+     * so adding a person to five checked rows never erases who each row
+     * already had.
      */
     public function bulkSetValue(BulkSetColumnValueRequest $request, WorkspaceNavigationItem $item): JsonResponse
     {
         $validated = $request->validated();
+        $column_id = (int) $validated['column_id'];
         $items = $item->items()->whereIn('id', $validated['item_ids'])->get();
 
         $this->authorizeItems($item, $request, $items);
-        $this->column_permissions->authorizeEdit($item, $request->user(), [$validated['column_id']]);
+        $this->column_permissions->authorizeEdit($item, $request->user(), [$column_id]);
+
+        $current_values = $request->isMerge()
+            ? BoardItemValue::whereIn('item_id', $items->pluck('id'))->where('column_id', $column_id)->pluck('value', 'item_id')
+            : collect();
 
         foreach ($items as $board_item) {
-            $this->value_service->sync($item, $board_item, [$validated['column_id'] => $validated['value']], $request->user());
+            $value = $request->isMerge()
+                ? $this->mergeListValue($current_values->get($board_item->id), $validated['added'] ?? [], $validated['removed'] ?? [])
+                : ($validated['value'] ?? null);
+
+            $this->value_service->sync($item, $board_item, [$column_id => $value], $request->user());
         }
+
+        // Items whose dates moved because they depend on the edited ones, see BoardDependencyScheduler.
+        $edited_ids = $items->pluck('id')->all();
+        $moved_items = $this->dependency_scheduler->movedItems(0)->reject(fn (BoardItem $moved) => in_array($moved->id, $edited_ids, true));
 
         return response()->json([
             'message' => 'Items updated successfully.',
-            'items' => BoardItemResource::collection($items->fresh('values')),
+            'items' => BoardItemResource::collection($items->fresh(['values', 'dependencyLinks'])),
+            'moved_items' => BoardItemResource::collection($moved_items->values()),
         ]);
+    }
+
+    /**
+     * One item's list cell after a bulk merge: its own entries minus `$removed`, then `$added`
+     * (entries it already has are not repeated). Ids are compared as strings, since stored
+     * lists mix "12" and 12. An emptied list is stored as null, like clearing the cell by hand.
+     *
+     * @param  array<int, mixed>  $added
+     * @param  array<int, mixed>  $removed
+     * @return array<int, mixed>|null
+     */
+    private function mergeListValue(mixed $current, array $added, array $removed): ?array
+    {
+        $current_list = is_array($current) ? array_values($current) : [];
+        $removed_keys = array_map(fn ($entry) => (string) $entry, $removed);
+
+        $next = array_values(array_filter($current_list, fn ($entry) => ! in_array((string) $entry, $removed_keys, true)));
+        $next_keys = array_map(fn ($entry) => (string) $entry, $next);
+
+        foreach ($added as $entry) {
+            if (! in_array((string) $entry, $next_keys, true)) {
+                $next[] = $entry;
+                $next_keys[] = (string) $entry;
+            }
+        }
+
+        return $next === [] ? null : $next;
     }
 
     /**
