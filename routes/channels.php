@@ -66,7 +66,7 @@ Broadcast::channel('presence-board.{board_id}', function (User $user, int $board
     }
 
     $is_member = $user->workspaces()->where('workspaces.id', $board->workspace_id)->exists();
-    if (! $is_member) {
+    if (! $is_member || ! VisibleBoards::canView($user, $board)) {
         return false;
     }
 
@@ -86,7 +86,7 @@ Broadcast::channel('presence-board-item.{board_item_id}', function (User $user, 
     }
 
     $is_member = $user->workspaces()->where('workspaces.id', $board_item->board->workspace_id)->exists();
-    if (! $is_member) {
+    if (! $is_member || ! VisibleBoards::canView($user, $board_item->board)) {
         return false;
     }
 
@@ -106,7 +106,7 @@ Broadcast::channel('presence-board-discussion.{board_id}', function (User $user,
     }
 
     $is_member = $user->workspaces()->where('workspaces.id', $board->workspace_id)->exists();
-    if (! $is_member) {
+    if (! $is_member || ! VisibleBoards::canView($user, $board)) {
         return false;
     }
 

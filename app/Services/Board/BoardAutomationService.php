@@ -21,6 +21,7 @@ use App\Services\ExternalAccounts\CalendarEventSyncer;
 use App\Services\Notification\NotificationService;
 use App\Support\AutomationSchedule;
 use App\Support\MarkdownPlainText;
+use App\Support\VisibleBoards;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -1820,6 +1821,9 @@ class BoardAutomationService
 
         $owner = $automation->responsibleUser();
         if (! $owner || ! $owner->is_active || $automation->failure_alert === BoardAutomation::FAILURE_ALERT_NONE) {
+            return;
+        }
+        if ($automation->board && ! VisibleBoards::canView($owner, $automation->board)) {
             return;
         }
         if (! Cache::add("automation_failure_notice:{$automation->id}", true, now()->addMinutes(self::FAILURE_NOTICE_MINUTES))) {

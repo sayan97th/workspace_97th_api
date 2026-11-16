@@ -13,6 +13,7 @@ use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardItemActivityService;
 use App\Services\Board\ScheduledCommentService;
 use App\Services\Notification\NotificationService;
+use App\Support\VisibleBoards;
 use Illuminate\Support\Collection;
 
 /**
@@ -55,6 +56,7 @@ class FeedService
             ->where('auto_follow_enabled', true)
             ->whereHas('workspaces', fn ($query) => $query->where('workspaces.id', $item->board->workspace_id))
             ->get()
+            ->pipe(fn ($users) => VisibleBoards::onlyViewers($item->board, $users))
             ->each(fn (User $user) => $user->feedFollows()->firstOrCreate([
                 'target_type' => FeedFollow::TYPE_ITEM,
                 'target_id' => $item->id,
@@ -82,7 +84,9 @@ class FeedService
             $recipients = $recipients->concat(User::whereIn('id', $missing_ids)->get());
         }
 
-        return $recipients->unique('id');
+        // A private board is completely private: its updates never reach the live feed of people
+        // who were not added to it, whether they are workspace members or were mentioned by mistake.
+        return VisibleBoards::onlyViewers($board, $recipients->unique('id')->where('is_active', true));
     }
 
     /**

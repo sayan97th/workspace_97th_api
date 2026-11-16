@@ -6,6 +6,7 @@ use App\Services\Board\CommentThreadActionsService;
 use App\Services\Board\DueDateReminderService;
 use App\Services\Notification\NotificationService;
 use App\Services\Search\Everything\PlainText;
+use App\Support\VisibleBoards;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -325,8 +326,10 @@ class Notification extends Model
     }
 
     /**
-     * Notifications the bell should list: not dismissed, and not snoozed
-     * (a snooze that has already elapsed no longer hides the row).
+     * Notifications the bell should list: not dismissed, not snoozed
+     * (a snooze that has already elapsed no longer hides the row), and not
+     * about a private board the recipient cannot open, see
+     * {@see VisibleBoards::notificationsOnVisibleBoards()}.
      *
      * @param  Builder<Notification>  $query
      * @return Builder<Notification>
@@ -335,7 +338,8 @@ class Notification extends Model
     {
         return $query
             ->whereNull('dismissed_at')
-            ->where(fn (Builder $inner) => $inner->whereNull('snoozed_until')->orWhere('snoozed_until', '<=', now()));
+            ->where(fn (Builder $inner) => $inner->whereNull('snoozed_until')->orWhere('snoozed_until', '<=', now()))
+            ->tap(fn (Builder $inner) => VisibleBoards::notificationsOnVisibleBoards($inner));
     }
 
     /**

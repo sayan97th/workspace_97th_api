@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Board\AutomationConditionEvaluator;
 use App\Services\Board\BoardAutomationActionOutcome;
 use App\Services\Board\BoardAutomationActionRunner;
+use App\Support\VisibleBoards;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 
@@ -42,6 +43,10 @@ trait RunsDigestActions
     private function sendDigest(BoardAutomation $automation, array $params, ?BoardItem $item, ?User $actor, array $context): BoardAutomationActionOutcome
     {
         $recipients = $this->digestRecipients($params);
+        if ($automation->board) {
+            // A private board digest only goes to people who were added to the board.
+            $recipients = new Collection(VisibleBoards::onlyViewers($automation->board, $recipients)->all());
+        }
         if ($recipients->isEmpty()) {
             return BoardAutomationActionOutcome::skipped('Found nobody with an email address to send the digest to.');
         }

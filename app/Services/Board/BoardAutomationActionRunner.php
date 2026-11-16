@@ -34,6 +34,7 @@ use App\Services\Board\AutomationActions\RunsSubscriberActions;
 use App\Services\Notification\NotificationService;
 use App\Services\Slack\SlackNotifier;
 use App\Support\BoardEditGate;
+use App\Support\VisibleBoards;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -854,7 +855,11 @@ class BoardAutomationActionRunner
             $recipients = $recipients->merge(User::whereIn('id', array_values(array_unique($person_ids)))->where('is_active', true)->get());
         }
 
-        return $recipients->unique(fn (User $user) => $user->id)->values();
+        $recipients = $recipients->unique(fn (User $user) => $user->id)->values();
+        $board = $item?->board ?? $automation->board;
+
+        // A private board never reaches people who were not added to it, by any channel.
+        return $board ? new Collection(VisibleBoards::onlyViewers($board, $recipients)->all()) : $recipients;
     }
 
     /**

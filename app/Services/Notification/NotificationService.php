@@ -16,6 +16,7 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Slack\SlackNotifier;
+use App\Support\VisibleBoards;
 
 /**
  * Single entry point for creating and delivering notifications, both in-app
@@ -96,6 +97,10 @@ class NotificationService
 
         $board_item ??= $comment instanceof BoardItemComment ? $comment->item : null;
 
+        if (! $this->canReach($recipient, $board, $board_item, $comment)) {
+            return null;
+        }
+
         if ($board_item !== null && BoardItemNotificationMute::where('user_id', $recipient->id)->where('board_item_id', $board_item->id)->exists()) {
             return null;
         }
@@ -156,6 +161,26 @@ class NotificationService
     }
 
     /**
+     * Whether a notification about this board may reach `$recipient` at all. Like monday.com, a
+     * private board is completely private: someone who was not added to it never hears about it,
+     * not in the bell, by email, on Slack or as a toast, even when they were assigned or
+     * `@mentioned` by mistake. Disabled accounts never receive anything either.
+     *
+     * The board is taken from the item or the comment when the caller did not pass it, so no
+     * trigger can skip this check by leaving `$board` out.
+     */
+    private function canReach(User $recipient, ?WorkspaceNavigationItem $board, ?BoardItem $board_item, BoardItemComment|BoardComment|null $comment): bool
+    {
+        if ($recipient->is_active === false) {
+            return false;
+        }
+
+        $board ??= $board_item?->board ?? ($comment instanceof BoardComment ? $comment->board : null);
+
+        return $board === null || VisibleBoards::canView($recipient, $board);
+    }
+
+    /**
      * Brings back every snoozed notification whose time has come: clears the
      * snooze, flags it unread again and broadcasts it like a fresh one, so an
      * open bell shows it right away. Run every minute by
@@ -169,6 +194,7 @@ class NotificationService
             ->whereNull('dismissed_at')
             ->whereNotNull('snoozed_until')
             ->where('snoozed_until', '<=', now())
+            ->tap(fn ($query) => VisibleBoards::notificationsOnVisibleBoards($query))
             ->with(['actor', 'board', 'user'])
             ->get();
 
