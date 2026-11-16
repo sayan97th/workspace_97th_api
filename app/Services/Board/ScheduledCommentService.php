@@ -31,6 +31,7 @@ class ScheduledCommentService
         private readonly FeedService $feed_service,
         private readonly CommentThreadActionsService $comment_actions,
         private readonly BoardAutomationService $automation_service,
+        private readonly BoardItemCommentCounter $comment_counter,
     ) {}
 
     /**
@@ -75,6 +76,11 @@ class ScheduledCommentService
         }
 
         $is_item ? broadcast(new ItemCommentPosted($comment)) : broadcast(new BoardCommentPosted($comment));
+
+        // Only now does the update count on the row's chat bubble, refresh it on every open view.
+        if ($is_item) {
+            $this->comment_counter->changed($comment->item, BoardItemCommentCounter::ACTION_POSTED, $comment->user_id, $comment);
+        }
 
         $this->feed_service->broadcastUpdate($comment, $board, $comment->parent?->author);
 

@@ -679,6 +679,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             // Search box's "Updates and replies", declared before the `{board_item}` wildcard.
             Route::get('update-matches', [BoardItemController::class, 'updateMatches'])->middleware('throttle:120,1');
 
+            // Every row's updates counter, read by an open board to catch up after its socket was down.
+            Route::get('comment-counts', [BoardItemController::class, 'commentCounts'])->middleware('throttle:120,1');
+
             // Selection action bar (bulk row actions) — declared before the
             // `{board_item}` wildcard routes below so these literal segments
             // aren't swallowed by it.

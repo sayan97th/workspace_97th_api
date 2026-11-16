@@ -599,6 +599,7 @@ class BoardAutomationActionRunner
             'body' => $body,
         ]);
         $this->log($automation, $item, $actor, "posted an update on \"{$item->name}\"");
+        app(BoardItemCommentCounter::class)->changed($item, BoardItemCommentCounter::ACTION_POSTED, $author->id, $comment);
         $this->automationService()->handleUpdatePosted($item, $comment, $author);
 
         return BoardAutomationActionOutcome::success('Posted an update on the item.');

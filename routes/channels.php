@@ -56,6 +56,17 @@ Broadcast::channel('board-automations.{board_id}', function (User $user, int $bo
     return VisibleBoards::canView($user, $board);
 });
 
+// Private per-board channel of BoardItemCommentsChanged: every open view of a board refreshes a
+// row's updates counter as soon as an update is posted, deleted or restored. Same rule as above.
+Broadcast::channel('board-comments.{board_id}', function (User $user, int $board_id) {
+    $board = WorkspaceNavigationItem::find($board_id);
+    if (! $board || ! $user->workspaces()->where('workspaces.id', $board->workspace_id)->exists()) {
+        return false;
+    }
+
+    return VisibleBoards::canView($user, $board);
+});
+
 // Presence channel powering the Table view's face-pile: every workspace
 // member who joins is broadcast to every other joiner via here/joining/
 // leaving, so the UI shows who else is currently on this board.

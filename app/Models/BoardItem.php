@@ -119,7 +119,7 @@ class BoardItem extends Model
     public function childrenRecursive(): HasMany
     {
         return $this->children()->with(['childrenRecursive', 'values', 'dependencyLinks', 'latestActivity'])->withCount([
-            'comments',
+            'comments' => fn ($q) => $q->visibleNow(),
             'commentAttachments',
             'attachments',
             'checklistItems as checklist_total_count',

@@ -26,6 +26,7 @@ use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardDependencyScheduler;
 use App\Services\Board\BoardItemActivityService;
+use App\Services\Board\BoardItemCommentCounter;
 use App\Services\Board\BoardItemFilterService;
 use App\Services\Board\BoardItemScopeConversionService;
 use App\Services\Board\BoardItemValueService;
@@ -108,7 +109,9 @@ class BoardItemController extends Controller
             // Blue chat bubble on rows where the viewer is tagged, see BoardItem::scopeWithViewerMention().
             ->withViewerMention($viewer_id)
             ->withCount([
-                'comments',
+                // Scheduled updates are invisible until they go live, so they do not count yet,
+                // same as BoardItemCommentCounter which keeps this number live.
+                'comments' => fn ($q) => $q->visibleNow(),
                 'commentAttachments',
                 'attachments',
                 'checklistItems as checklist_total_count',
@@ -174,6 +177,21 @@ class BoardItemController extends Controller
 
         return response()->json([
             'data' => $this->filter_service->rootIdsWithMatchingUpdates($root_query, $validated['q']),
+        ]);
+    }
+
+    /**
+     * GET /api/boards/{item}/items/comment-counts
+     *
+     * Every item's updates counter on the board at once: `counts` maps item ids to their number of
+     * published updates and replies (items with none are left out), `mentioned_item_ids` lists the
+     * items where the viewer is tagged. An open board reads it to catch up after its
+     * `board-comments.{id}` socket was down, see {@see BoardItemCommentCounter}.
+     */
+    public function commentCounts(Request $request, WorkspaceNavigationItem $item, BoardItemCommentCounter $comment_counter): JsonResponse
+    {
+        return response()->json([
+            'data' => $comment_counter->boardSnapshot($item, $request->user()->id),
         ]);
     }
 

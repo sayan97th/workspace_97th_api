@@ -15,6 +15,7 @@ use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardAutomationService;
+use App\Services\Board\BoardItemCommentCounter;
 use App\Services\Board\CommentAttachmentService;
 use App\Services\Board\CommentThreadActionsService;
 use App\Services\Board\ScheduledCommentService;
@@ -35,6 +36,7 @@ class BoardItemCommentController extends Controller
         private readonly BoardAutomationService $automation_service,
         private readonly ScheduledCommentService $scheduled_comments,
         private readonly CommentAttachmentService $comment_attachments,
+        private readonly BoardItemCommentCounter $comment_counter,
     ) {}
 
     /**
@@ -132,9 +134,16 @@ class BoardItemCommentController extends Controller
             $request->user(),
         );
 
+        // The row's updates counter on every open view of the board. A scheduled update does not
+        // count until it goes live, ScheduledCommentService tells the board then.
+        $item_comments = $scheduled_at === null
+            ? $this->comment_counter->changed($board_item, BoardItemCommentCounter::ACTION_POSTED, $actor?->id, $comment)
+            : $this->comment_counter->summaryFor($board_item);
+
         return response()->json([
             'message' => 'Comment posted successfully.',
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+            'item_comments' => $item_comments,
         ], 201);
     }
 
@@ -256,6 +265,7 @@ class BoardItemCommentController extends Controller
 
         return response()->json([
             'message' => 'Comment deleted successfully.',
+            'item_comments' => $this->comment_counter->changed($board_item, BoardItemCommentCounter::ACTION_DELETED, $request->user()?->id, $comment),
         ]);
     }
 
@@ -280,6 +290,7 @@ class BoardItemCommentController extends Controller
         return response()->json([
             'message' => 'Comment restored successfully.',
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+            'item_comments' => $this->comment_counter->changed($board_item, BoardItemCommentCounter::ACTION_RESTORED, $request->user()?->id, $comment),
         ]);
     }
 
