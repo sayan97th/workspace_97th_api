@@ -446,7 +446,7 @@ class BoardExportService
     private function groupsQuery(BoardView $view, ?BoardGroup $group): Builder
     {
         return BoardGroup::query()
-            ->where('board_view_id', $view->id)
+            ->where('board_view_id', $view->content_view_id)
             ->where('is_archived', false)
             ->when($group !== null, fn (Builder $query) => $query->where('id', $group->id))
             ->orderBy('position')

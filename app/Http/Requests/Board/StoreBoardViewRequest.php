@@ -28,6 +28,9 @@ class StoreBoardViewRequest extends FormRequest
             // real emoji grapheme without needing a fragile emoji-matching regex.
             'emoji' => ['sometimes', 'nullable', 'string', 'max:32'],
             'is_primary' => ['sometimes', 'boolean'],
+            // The tab whose items this one shows (a filter view). Omitted, Table/Gantt/Calendar
+            // tabs show the Main table; an explicit null creates a tab with its own, empty data.
+            'source_view_id' => ['sometimes', 'nullable', 'integer'],
             'position' => ['sometimes', 'integer', 'min:0'],
             'filter_state' => ['sometimes', 'nullable', 'array'],
             'sort_state' => ['sometimes', 'nullable', 'array'],

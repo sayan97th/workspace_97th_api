@@ -33,6 +33,8 @@ class BoardViewResource extends JsonResource
             'board_id' => $this->board_id,
             'label' => $this->label,
             'view_type' => $this->view_type,
+            // The tab whose items, groups and columns this one shows (a filter view), null when it owns its data.
+            'source_view_id' => $this->source_view_id,
             // Markdown source for a `doc`-type view — null/unused for every other kind.
             'doc_content' => $this->doc_content,
             // Chart type/data source/grouping for a `chart`-type view — null/unused for every other kind.

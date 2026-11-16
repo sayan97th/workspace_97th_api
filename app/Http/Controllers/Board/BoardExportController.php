@@ -175,13 +175,15 @@ class BoardExportController extends Controller
      */
     private function resolveScope(WorkspaceNavigationItem $item, ?int $view_id, ?int $group_id): array
     {
-        $view = $this->view_resolver->resolveForRead($item, $view_id);
+        // The tab itself, not its source: a filter view exports the shared rows
+        // under its own name and with its own hidden columns.
+        $view = $this->view_resolver->resolveTab($item, $view_id);
         abort_if($view === null, 404, 'This board has no table to export.');
 
         $group = null;
         if ($group_id !== null) {
             $group = $item->groups()->where('is_archived', false)->findOrFail($group_id);
-            if ($group->board_view_id !== $view->id) {
+            if ($group->board_view_id !== $view->content_view_id) {
                 $view = $item->views()->find($group->board_view_id) ?? $view;
             }
         }

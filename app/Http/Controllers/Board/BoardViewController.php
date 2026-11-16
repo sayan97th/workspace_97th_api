@@ -94,10 +94,12 @@ class BoardViewController extends Controller
         BoardEditGate::authorizeStructure($item, $request->user());
 
         $validated = $request->validated();
+        $view_type = BoardViewType::from($validated['view_type'] ?? BoardViewType::Table->value);
 
         $view = $item->views()->create([
             ...$validated,
-            'view_type' => $validated['view_type'] ?? BoardViewType::Table->value,
+            'view_type' => $view_type->value,
+            'source_view_id' => $this->sourceViewIdForNewView($item, $view_type, $validated),
             'position' => $validated['position'] ?? $this->nextPosition($item),
             'is_primary' => $validated['is_primary'] ?? false,
             'row_height' => $validated['row_height'] ?? 'single',
@@ -145,6 +147,16 @@ class BoardViewController extends Controller
             ], 422);
         }
 
+        // Filter views would lose every item they show, so they go first.
+        $filter_view_count = $board_view->filterViews()->count();
+        if ($filter_view_count > 0) {
+            return response()->json([
+                'message' => $filter_view_count === 1
+                    ? 'Another view shows this view\'s items. Delete that view first.'
+                    : "{$filter_view_count} other views show this view's items. Delete those views first.",
+            ], 422);
+        }
+
         $board_view->delete();
 
         return response()->json([
@@ -156,14 +168,12 @@ class BoardViewController extends Controller
      * POST /api/boards/{item}/views/{board_view}/duplicate
      *
      * Clones a view's label + saved filter/sort/display configuration into a
-     * new, always-unlocked, non-primary tab appended to the end — and,
-     * because columns/groups/items are scoped per tab (see
-     * `BelongsToBoardView`), also deep-clones every table (group), column,
-     * item and cell value the source tab owns, so the new tab is a genuine,
-     * independently-editable copy rather than an empty shell. Comments/
-     * activity on the source items are intentionally NOT copied — a
-     * duplicate is a fresh structural copy to edit, not a copy of the
-     * conversation history.
+     * new, always-unlocked, non-primary tab appended to the end. A Table,
+     * Gantt or Calendar tab (and any filter view) is copied as a filter view
+     * of the same data, like monday.com, so the copy shows the very same
+     * items. Only a tab that owns separate data (a Kanban) is deep cloned
+     * with its tables, columns, items and cell values. Comments/activity are
+     * never copied.
      *
      * The toolbar's "Save as new view" sends a `label` and the live
      * filter/sort/display state, which the copy keeps instead of the source's
@@ -180,16 +190,21 @@ class BoardViewController extends Controller
             $this->ensureViewUnlocked($board_view);
         }
 
-        $copy = $duplication_service->duplicateView(
-            $board_view,
-            $item,
-            [
-                'label' => $request->validated('label') ?? "{$board_view->label} (copy)",
-                'position' => $this->nextPosition($item),
-            ],
-            $request->user()?->id,
-            $state_overrides,
-        );
+        $overrides = [
+            'label' => $request->validated('label') ?? "{$board_view->label} (copy)",
+            'position' => $this->nextPosition($item),
+        ];
+
+        // A copy of a tab that shows items is a filter view of the same data,
+        // as on monday.com; only a Kanban tab with its own items is deep copied.
+        $view_type = BoardViewType::tryFrom($board_view->view_type);
+        $is_filter_copy = $view_type !== null
+            && $view_type->canShowItems()
+            && ($board_view->isFilterView() || $board_view->is_primary || $view_type->isFilterViewByDefault());
+
+        $copy = $is_filter_copy
+            ? $duplication_service->duplicateAsFilterView($board_view, $item, $overrides, $request->user()?->id, $state_overrides)
+            : $duplication_service->duplicateView($board_view, $item, $overrides, $request->user()?->id, $state_overrides);
 
         return response()->json([
             'message' => 'View duplicated successfully.',
@@ -383,6 +398,41 @@ class BoardViewController extends Controller
             ->delete();
 
         return response()->json(['message' => 'View reset to its saved state.']);
+    }
+
+    /**
+     * Which tab a new tab shows the items of. An explicit `source_view_id`
+     * wins (null means "own, empty data"), resolved to the tab that stores the
+     * content so filter views never chain. Otherwise Table, Gantt and Calendar
+     * tabs show the Main table, like every board view on monday.com.
+     *
+     * @param  array<string, mixed>  $validated
+     */
+    private function sourceViewIdForNewView(WorkspaceNavigationItem $item, BoardViewType $view_type, array $validated): ?int
+    {
+        if (! $view_type->canShowItems() || ($validated['is_primary'] ?? false)) {
+            return null;
+        }
+
+        if (array_key_exists('source_view_id', $validated)) {
+            if ($validated['source_view_id'] === null) {
+                return null;
+            }
+
+            $source = $item->views()->find($validated['source_view_id']);
+            $source_type = $source ? BoardViewType::tryFrom($source->view_type) : null;
+            abort_if($source === null || $source_type === null || ! $source_type->canShowItems(), 422, 'Pick a view with items to show.');
+
+            return $source->content_view_id;
+        }
+
+        if (! $view_type->isFilterViewByDefault()) {
+            return null;
+        }
+
+        $this->ensurePrimaryViewExists($item);
+
+        return $item->views()->where('is_primary', true)->value('id');
     }
 
     /**

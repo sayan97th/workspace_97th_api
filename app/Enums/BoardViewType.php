@@ -26,6 +26,27 @@ enum BoardViewType: string
     case Dashboard = 'dashboard';
 
     /**
+     * Whether a new tab of this kind is created as a filter view: it shows the
+     * board's Main table items, groups and columns instead of an empty data
+     * set of its own, and keeps only its own filter/sort/display settings
+     * (see `BoardView::$source_view_id`). Kanban is left out on purpose, it
+     * provisions its own card columns the first time it opens.
+     */
+    public function isFilterViewByDefault(): bool
+    {
+        return in_array($this, [self::Table, self::Gantt, self::Calendar], true);
+    }
+
+    /**
+     * Whether a tab of this kind renders items, so it can be linked to
+     * another tab's data at all.
+     */
+    public function canShowItems(): bool
+    {
+        return in_array($this, [self::Table, self::Kanban, self::Gantt, self::Calendar], true);
+    }
+
+    /**
      * @return array<int, string>
      */
     public static function values(): array

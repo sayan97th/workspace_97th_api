@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Concerns\HasRandomBigId;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -24,6 +25,8 @@ use Illuminate\Support\Carbon;
  * @property int $board_id
  * @property string $label
  * @property string $view_type
+ * @property int|null $source_view_id
+ * @property-read int $content_view_id
  * @property string|null $doc_content
  * @property array<string, mixed>|null $chart_config
  * @property array<string, mixed>|null $form_config
@@ -53,11 +56,14 @@ use Illuminate\Support\Carbon;
  * @property-read User|null $lockedBy
  * @property-read Collection<int, BoardColumn> $columns
  * @property-read Collection<int, BoardGroup> $groups
+ * @property-read BoardView|null $sourceView
+ * @property-read Collection<int, BoardView> $filterViews
  */
 #[Fillable([
     'board_id',
     'label',
     'view_type',
+    'source_view_id',
     'doc_content',
     'chart_config',
     'form_config',
@@ -121,23 +127,70 @@ class BoardView extends Model
     }
 
     /**
-     * This tab's own columns — independent from every other tab on the board.
+     * The tab whose items, groups and columns this tab shows, when it is a
+     * filter view (see {@see isFilterView()}). Null for a tab that owns its
+     * own content, like the Main table.
+     *
+     * @return BelongsTo<BoardView, $this>
+     */
+    public function sourceView(): BelongsTo
+    {
+        return $this->belongsTo(BoardView::class, 'source_view_id');
+    }
+
+    /**
+     * The filter views that show this tab's content.
+     *
+     * @return HasMany<BoardView, $this>
+     */
+    public function filterViews(): HasMany
+    {
+        return $this->hasMany(BoardView::class, 'source_view_id');
+    }
+
+    /**
+     * A filter view shares another tab's items, groups and columns and only
+     * keeps its own filter, sort, hidden columns, group by and display
+     * settings, like a Google Sheets filter view.
+     */
+    public function isFilterView(): bool
+    {
+        return $this->source_view_id !== null;
+    }
+
+    /**
+     * The id of the tab that actually stores this tab's content: the source
+     * tab for a filter view, otherwise the tab itself. Every content query
+     * (`board_columns`/`board_groups.board_view_id`) must use this id.
+     *
+     * @return Attribute<int, never>
+     */
+    protected function contentViewId(): Attribute
+    {
+        return Attribute::get(fn () => (int) ($this->source_view_id ?? $this->id));
+    }
+
+    /**
+     * The columns this tab shows, which are its source tab's columns for a
+     * filter view (keyed by {@see contentViewId()}), so creating a column
+     * through this relation from a filter view lands on the shared table.
      *
      * @return HasMany<BoardColumn, $this>
      */
     public function columns(): HasMany
     {
-        return $this->hasMany(BoardColumn::class, 'board_view_id')->orderBy('position');
+        return $this->hasMany(BoardColumn::class, 'board_view_id', 'content_view_id')->orderBy('position');
     }
 
     /**
-     * This tab's own groups ("tables") — independent from every other tab on the board.
+     * The groups ("tables") this tab shows, which are its source tab's groups
+     * for a filter view, see {@see columns()}.
      *
      * @return HasMany<BoardGroup, $this>
      */
     public function groups(): HasMany
     {
-        return $this->hasMany(BoardGroup::class, 'board_view_id')->orderBy('position');
+        return $this->hasMany(BoardGroup::class, 'board_view_id', 'content_view_id')->orderBy('position');
     }
 
     /**
@@ -167,6 +220,7 @@ class BoardView extends Model
     {
         return [
             'position' => 'integer',
+            'source_view_id' => 'integer',
             'is_primary' => 'boolean',
             'pinned' => 'boolean',
             'is_locked' => 'boolean',

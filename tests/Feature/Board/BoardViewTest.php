@@ -194,10 +194,11 @@ test('a view can be duplicated', function () {
     expect(BoardView::where('board_id', $board->id)->count())->toBe(2);
 });
 
-test('duplicating a view deep-clones its tables, columns, items and cell values', function () {
+test('duplicating a kanban view that owns its items deep-clones its tables, columns, items and cell values', function () {
     $user = User::factory()->create();
     $board = createViewTestBoard();
-    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true, 'label' => 'Main table']);
+    BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => true, 'label' => 'Main table']);
+    $view = BoardView::factory()->create(['board_id' => $board->id, 'is_primary' => false, 'view_type' => 'kanban', 'label' => 'Board']);
 
     $status_column = BoardColumn::factory()->create([
         'board_id' => $board->id,
@@ -242,7 +243,8 @@ test('duplicating a view deep-clones its tables, columns, items and cell values'
     $response = $this->actingAs($user, 'api')
         ->postJson("/api/boards/{$board->id}/views/{$view->id}/duplicate")
         ->assertCreated()
-        ->assertJsonPath('view.label', 'Main table (copy)');
+        ->assertJsonPath('view.label', 'Board (copy)')
+        ->assertJsonPath('view.source_view_id', null);
 
     $copy_id = $response->json('view.id');
 

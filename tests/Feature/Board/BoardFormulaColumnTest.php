@@ -5,6 +5,7 @@ use App\Models\BoardView;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Services\Board\BoardDuplicationService;
 use App\Support\FormulaReferences;
 
 function createFormulaTestBoard(): WorkspaceNavigationItem
@@ -133,8 +134,7 @@ test('a saved expression that only mentions a column inside text is not treated 
         ->assertOk();
 });
 
-test('duplicating a view repoints a formula at the cloned columns', function () {
-    $user = User::factory()->create();
+test('deep copying a view repoints a formula at the cloned columns', function () {
     [$board, $view, $budget, $spent] = createFormulaTestTable();
     BoardColumn::factory()->create([
         'board_id' => $board->id,
@@ -153,9 +153,10 @@ test('duplicating a view repoints a formula at the cloned columns', function () 
         'config' => ['operation' => 'sum', 'source_column_ids' => [$budget->id, $spent->id]],
     ]);
 
-    $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/views/{$view->id}/duplicate")->assertCreated();
+    // A whole board duplicate deep copies each tab that owns its content.
+    $copy = app(BoardDuplicationService::class)->duplicateView($view, $board);
 
-    $copy_columns = BoardColumn::where('board_view_id', $response->json('view.id'))->get()->keyBy('key');
+    $copy_columns = BoardColumn::where('board_view_id', $copy->id)->get()->keyBy('key');
     $new_budget = $copy_columns['budget']->id;
     $new_spent = $copy_columns['spent']->id;
 

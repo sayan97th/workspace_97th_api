@@ -30,6 +30,46 @@ class BoardDuplicationService
      */
     public function duplicateView(BoardView $source, WorkspaceNavigationItem $target_item, array $overrides = [], ?int $created_by_id = null, array $state_overrides = []): BoardView
     {
+        return $this->copyViewWithContent($source, $target_item, $overrides, $created_by_id, $state_overrides)['view'];
+    }
+
+    /**
+     * Copies a tab as a filter view of the same content: no columns, groups or
+     * items are cloned, the copy shows the source's data (the Main table for
+     * a filter view's copy) and keeps its own copy of the saved filter/sort/
+     * display state. Column and group ids stay valid since the data is shared.
+     *
+     * @param  array<string, mixed>  $overrides  Attributes to override on the copied view (e.g. `label`, `position`).
+     * @param  array<string, mixed>  $state_overrides  Saved filter/sort/display state to keep instead of the source's ("Save as new view").
+     */
+    public function duplicateAsFilterView(BoardView $source, WorkspaceNavigationItem $target_item, array $overrides = [], ?int $created_by_id = null, array $state_overrides = []): BoardView
+    {
+        $state = array_merge($this->savedState($source), $state_overrides);
+
+        return $target_item->views()->create(array_merge([
+            'label' => $source->label,
+            'view_type' => $source->view_type,
+            'source_view_id' => $source->content_view_id,
+            'emoji' => $source->emoji,
+            'description' => $source->description,
+            'position' => $this->nextViewPosition($target_item),
+            'is_primary' => false,
+            'pinned' => false,
+            'is_locked' => false,
+            'locked_by_id' => null,
+            'calendar_config' => $source->calendar_config,
+            'gantt_config' => $source->gantt_config,
+            'created_by_id' => $created_by_id,
+        ], $state, $overrides));
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     * @param  array<string, mixed>  $state_overrides
+     * @return array{view: BoardView, column_id_map: array<int, int>, group_id_map: array<int, int>}
+     */
+    private function copyViewWithContent(BoardView $source, WorkspaceNavigationItem $target_item, array $overrides = [], ?int $created_by_id = null, array $state_overrides = []): array
+    {
         $source->loadMissing(['columns', 'groups.items.values']);
 
         return DB::transaction(function () use ($source, $target_item, $overrides, $created_by_id, $state_overrides) {
@@ -123,8 +163,27 @@ class BoardDuplicationService
 
             $view_copy->fill($this->remapColumnReferences($state_source, $column_id_map, $group_id_map))->save();
 
-            return $view_copy;
+            return ['view' => $view_copy, 'column_id_map' => $column_id_map, 'group_id_map' => $group_id_map];
         });
+    }
+
+    /**
+     * The saved filter/sort/display state of a tab, as view attributes.
+     *
+     * @return array<string, mixed>
+     */
+    private function savedState(BoardView $view): array
+    {
+        return [
+            'filter_state' => $view->filter_state,
+            'sort_state' => $view->sort_state,
+            'group_by_option_id' => $view->group_by_option_id,
+            'hidden_column_ids' => $view->hidden_column_ids,
+            'pinned_column_ids' => $view->pinned_column_ids,
+            'row_height' => $view->row_height,
+            'header_height' => $view->header_height ?? 'single',
+            'conditional_color_rules' => $view->conditional_color_rules,
+        ];
     }
 
     /**
@@ -144,11 +203,30 @@ class BoardDuplicationService
             ]);
         }
 
-        foreach ($source_board->views()->orderBy('position')->get() as $view) {
-            $this->duplicateView($view, $target_board, [
+        $views = $source_board->views()->orderBy('position')->get();
+
+        // Tabs that own content first, so filter views can be linked to the copies.
+        /** @var array<int, array{view: BoardView, column_id_map: array<int, int>, group_id_map: array<int, int>}> $copies */
+        $copies = [];
+        foreach ($views->reject(fn (BoardView $view) => $view->isFilterView()) as $view) {
+            $copies[$view->id] = $this->copyViewWithContent($view, $target_board, [
                 'position' => $view->position,
                 'is_primary' => $view->is_primary,
                 'pinned' => $view->pinned,
+            ], $created_by_id);
+        }
+
+        foreach ($views->filter(fn (BoardView $view) => $view->isFilterView()) as $view) {
+            $content_copy = $copies[$view->source_view_id] ?? null;
+            if ($content_copy === null) {
+                continue;
+            }
+
+            $this->duplicateAsFilterView($view, $target_board, [
+                'source_view_id' => $content_copy['view']->id,
+                'position' => $view->position,
+                'pinned' => $view->pinned,
+                ...$this->remapColumnReferences($view, $content_copy['column_id_map'], $content_copy['group_id_map']),
             ], $created_by_id);
         }
     }
