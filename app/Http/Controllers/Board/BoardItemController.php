@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Board\BulkBoardItemsRequest;
 use App\Http\Requests\Board\BulkMoveBoardItemsRequest;
 use App\Http\Requests\Board\BulkSetColumnValueRequest;
+use App\Http\Requests\Board\BulkUpdateBoardItemParentRequest;
 use App\Http\Requests\Board\ReorderBoardItemsRequest;
 use App\Http\Requests\Board\SetBoardItemRecurrenceRequest;
 use App\Http\Requests\Board\StoreBoardItemRequest;
@@ -341,44 +342,140 @@ class BoardItemController extends Controller
         BoardEditGate::authorizeItem($item, $request->user(), $board_item);
 
         $validated = $request->validated();
-        $parent_id = $validated['parent_id'] ?? null;
+        $parent = isset($validated['parent_id']) ? $item->items()->findOrFail($validated['parent_id']) : null;
 
-        if ($parent_id !== null) {
-            $parent = $item->items()->findOrFail($parent_id);
-            $group_id = $parent->group_id;
-            $position = $this->nextPosition($item, $group_id, $parent_id);
-        } else {
-            $group_id = $validated['group_id'];
-            $position = $this->nextPosition($item, $group_id);
-        }
-
-        DB::transaction(function () use ($board_item, $parent_id, $group_id, $position) {
-            $board_item->loadMissing('group');
-            $source_view_id = $board_item->group->board_view_id;
-            $source_scope = $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
-
-            $board_item->update([
-                'parent_id' => $parent_id,
-                'group_id' => $group_id,
-                'position' => $position,
-            ]);
-
-            $this->cascadeGroupToDescendants($board_item, $group_id);
-
-            $board_item->load('group');
-            $target_view_id = $board_item->group->board_view_id;
-            $target_scope = $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
-
-            if ($source_scope !== $target_scope || $source_view_id !== $target_view_id) {
-                $this->scope_conversion_service->convert($board_item, $source_view_id, $source_scope, $target_view_id, $target_scope);
-                $this->assignAutoNumberValues($board_item, $target_scope);
-            }
-        });
+        DB::transaction(fn () => $this->reparentItem($item, $board_item, $parent, $parent ? $parent->group_id : (int) $validated['group_id']));
 
         return response()->json([
             'message' => 'Item moved successfully.',
             'item' => new BoardItemResource($board_item->fresh('values')),
         ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/parent
+     *
+     * Selection action bar's "Convert" and, for a subitem selection, "Move to".
+     * With a `parent_id` every selected row is placed under that item (items
+     * become subitems, subitems change parent). With `parent_id` null every
+     * selected subitem becomes an item, in `group_id` when given and otherwise
+     * in the table its parent lives in, like monday.com's "Convert to item".
+     * Runs in one transaction, so a failure never leaves half a selection moved.
+     */
+    public function bulkUpdateParent(BulkUpdateBoardItemParentRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $validated = $request->validated();
+        $ordered_ids = array_map('intval', $validated['item_ids']);
+        $board_items = $item->items()->whereIn('id', $ordered_ids)->get()
+            ->sortBy(fn (BoardItem $board_item) => array_search($board_item->id, $ordered_ids, true))
+            ->values();
+
+        $this->authorizeItems($item, $request, $board_items);
+
+        $parent = isset($validated['parent_id']) ? $item->items()->findOrFail($validated['parent_id']) : null;
+        $target_group_id = isset($validated['group_id']) ? (int) $validated['group_id'] : null;
+
+        DB::transaction(function () use ($item, $board_items, $parent, $target_group_id) {
+            foreach ($board_items as $board_item) {
+                $group_id = $parent?->group_id ?? $target_group_id ?? $board_item->group_id;
+                $this->reparentItem($item, $board_item, $parent, $group_id);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Items moved successfully.',
+            'items' => BoardItemResource::collection($board_items->map(fn (BoardItem $board_item) => $board_item->fresh('values'))),
+        ]);
+    }
+
+    /**
+     * PATCH /api/boards/{item}/items/restore
+     *
+     * Undo for the selection action bar's "Archive" and "Delete". Brings every
+     * given item back, together with the subitems that were deleted along with
+     * it (the ones trashed at the same moment or later, so a subitem deleted on
+     * its own earlier stays in the trash).
+     */
+    public function bulkRestore(BulkBoardItemsRequest $request, WorkspaceNavigationItem $item): JsonResponse
+    {
+        $targets = BoardItem::withTrashed()->where('board_id', $item->id)->whereIn('id', $request->validated()['item_ids'])->get();
+        $this->authorizeItems($item, $request, $targets);
+
+        DB::transaction(function () use ($item, $targets, $request) {
+            foreach ($targets as $target) {
+                if ($target->trashed()) {
+                    $this->restoreTrashedDescendants($target);
+                    $target->restore();
+                }
+                if ($target->is_archived) {
+                    $target->update(['is_archived' => false]);
+                }
+
+                $this->activity_logger->logItem($item, $request->user(), BoardActivityLog::ACTION_ITEM_RESTORED, 'Restored', $target);
+            }
+        });
+
+        foreach ($targets as $target) {
+            $this->automation_service->handleItemRestored($target->fresh('group'), $request->user());
+        }
+
+        return response()->json([
+            'message' => 'Items restored successfully.',
+        ]);
+    }
+
+    /**
+     * Moves one row under `$parent` (null makes it an item in `$group_id`),
+     * appended after its new siblings. When the row changes level or tab its
+     * cell values are re-keyed onto the target columns, see
+     * {@see BoardItemScopeConversionService}. Callers wrap it in a transaction.
+     */
+    private function reparentItem(WorkspaceNavigationItem $item, BoardItem $board_item, ?BoardItem $parent, int $group_id): void
+    {
+        $parent_id = $parent?->id;
+        $position = $this->nextPosition($item, $group_id, $parent_id);
+
+        $board_item->loadMissing('group');
+        $source_view_id = $board_item->group->board_view_id;
+        $source_scope = $board_item->parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
+
+        $board_item->update([
+            'parent_id' => $parent_id,
+            'group_id' => $group_id,
+            'position' => $position,
+        ]);
+
+        $this->cascadeGroupToDescendants($board_item, $group_id);
+
+        $board_item->load('group');
+        $target_view_id = $board_item->group->board_view_id;
+        $target_scope = $parent_id === null ? BoardColumn::SCOPE_ITEM : BoardColumn::SCOPE_SUBITEM;
+
+        if ($source_scope !== $target_scope || $source_view_id !== $target_view_id) {
+            $this->scope_conversion_service->convert($board_item, $source_view_id, $source_scope, $target_view_id, $target_scope);
+            $this->assignAutoNumberValues($board_item, $target_scope);
+        }
+    }
+
+    /**
+     * Restores the descendants `deleteSubtree()` trashed together with `$target`.
+     * Soft-deleted rows are invisible to `childrenRecursive`, so the tree is
+     * walked level by level with `withTrashed()`.
+     */
+    private function restoreTrashedDescendants(BoardItem $target): void
+    {
+        $deleted_at = $target->deleted_at;
+        $parent_ids = [$target->id];
+
+        while ($parent_ids !== []) {
+            $children = BoardItem::withTrashed()->whereIn('parent_id', $parent_ids)->get();
+            foreach ($children as $child) {
+                if ($child->trashed() && $deleted_at !== null && $child->deleted_at->greaterThanOrEqualTo($deleted_at->copy()->subSeconds(5))) {
+                    $child->restore();
+                }
+            }
+            $parent_ids = $children->pluck('id')->all();
+        }
     }
 
     /**

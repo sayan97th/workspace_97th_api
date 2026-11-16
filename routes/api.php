@@ -688,6 +688,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::patch('reorder', [BoardItemController::class, 'reorder']);
             Route::patch('archive', [BoardItemController::class, 'bulkArchive']);
             Route::delete('/', [BoardItemController::class, 'bulkDestroy']);
+            Route::patch('parent', [BoardItemController::class, 'bulkUpdateParent']);
+            Route::patch('restore', [BoardItemController::class, 'bulkRestore']);
 
             Route::get('{board_item}', [BoardItemController::class, 'show']);
             Route::patch('{board_item}', [BoardItemController::class, 'update']);

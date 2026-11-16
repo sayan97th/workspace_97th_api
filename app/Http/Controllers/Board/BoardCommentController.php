@@ -166,6 +166,14 @@ class BoardCommentController extends Controller
             editor: $request->user(),
         );
 
+        // People `@mentioned` while editing are notified like on a new update, only board members count.
+        $this->comment_actions->addEditedMentions(
+            comment: $comment,
+            mentioned_user_ids: BoardMembers::onlyMembers($item, $validated['mentioned_user_ids'] ?? []),
+            actor: $request->user(),
+            board: $item,
+        );
+
         return response()->json([
             'message' => 'Update edited successfully.',
             'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),

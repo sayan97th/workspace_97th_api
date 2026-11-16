@@ -11,7 +11,7 @@ use Illuminate\Foundation\Http\FormRequest;
  * PATCH /api/feed/updates/{id}
  *
  * "Edit update" from a feed card's menu, a new Markdown body for the update
- * or reply. Normalizing line breaks keeps an untouched edit equal to the
+ * or reply, plus the people `@mentioned` in it. Normalizing line breaks keeps an untouched edit equal to the
  * stored body, so it is not recorded as a revision.
  */
 class UpdateFeedUpdateRequest extends FormRequest
@@ -27,6 +27,10 @@ class UpdateFeedUpdateRequest extends FormRequest
     {
         return [
             'body' => ['required', 'string', 'max:'.StoreFeedReplyRequest::BODY_MAX_LENGTH, new MarkdownHasContent],
+            // People `@mentioned` while editing. Only the ones the update did not
+            // mention yet are recorded and notified, capped like a new update.
+            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
+            'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
         ];
     }
 

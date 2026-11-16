@@ -566,7 +566,7 @@ class FeedUpdateController extends Controller
     }
 
     /**
-     * PATCH /api/feed/updates/{id} {body}
+     * PATCH /api/feed/updates/{id} {body, mentioned_user_ids?}
      *
      * "Edit update" from the card menu. Author only, the previous body is kept
      * as a revision exactly like an edit made in the item drawer.
@@ -578,6 +578,18 @@ class FeedUpdateController extends Controller
         abort_if($comment->user_id !== $request->user()->id, 403);
 
         $this->thread_actions->editBody($comment, $request->body(), $request->user());
+
+        // People `@mentioned` while editing are notified like on a new reply, only board members count.
+        $board = $this->boardFor($comment);
+        $new_mention_ids = $this->thread_actions->addEditedMentions(
+            comment: $comment,
+            mentioned_user_ids: collect($this->boardMemberIds($comment, $request->validated('mentioned_user_ids', []))),
+            actor: $request->user(),
+            board: $board,
+        );
+        if ($new_mention_ids->isNotEmpty() && $comment instanceof BoardItemComment) {
+            $this->feed_service->autoFollowItem($comment->item, $new_mention_ids);
+        }
 
         return response()->json(['data' => $this->cardResource($comment)]);
     }

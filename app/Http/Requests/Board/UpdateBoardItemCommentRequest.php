@@ -31,6 +31,10 @@ class UpdateBoardItemCommentRequest extends FormRequest
             // Ids of the update's own attachments the author took off.
             'removed_attachment_ids' => ['sometimes', 'array'],
             'removed_attachment_ids.*' => ['integer'],
+            // People `@mentioned` while editing. Only the ones the update did not
+            // mention yet are recorded and notified, capped like a new update.
+            'mentioned_user_ids' => ['sometimes', 'array', 'max:200'],
+            'mentioned_user_ids.*' => ['integer', 'exists:users,id'],
         ];
     }
 }

@@ -152,4 +152,64 @@ class CommentThreadActionsService
             }
         }
     }
+
+    /**
+     * The `@mentions` an edit adds: records everyone in `$mentioned_user_ids`
+     * the comment did not mention yet and sends each of them the same
+     * "Mentioned you" notification a new comment sends. People mentioned
+     * before the edit are left alone, so saving an edit never notifies anyone
+     * twice. A scheduled comment only records them,
+     * {@see ScheduledCommentService} notifies everyone once it goes live.
+     * Returns the ids that were newly mentioned.
+     *
+     * Callers pass ids already limited to the board's members, see BoardMembers.
+     *
+     * @param  Collection<int, int>  $mentioned_user_ids
+     * @return Collection<int, int>
+     */
+    public function addEditedMentions(
+        BoardItemComment|BoardComment $comment,
+        Collection $mentioned_user_ids,
+        User $actor,
+        WorkspaceNavigationItem $board,
+    ): Collection {
+        $already_mentioned_ids = $comment->mentions()->pluck('user_id')->map(fn ($user_id) => (int) $user_id);
+        $new_ids = $mentioned_user_ids
+            ->map(fn ($user_id) => (int) $user_id)
+            ->unique()
+            ->reject(fn ($user_id) => $already_mentioned_ids->contains($user_id))
+            ->values();
+
+        if ($new_ids->isEmpty()) {
+            return $new_ids;
+        }
+
+        $comment->mentions()->createMany($new_ids->map(fn ($user_id) => ['user_id' => $user_id])->all());
+
+        $is_scheduled = $comment->scheduled_at !== null && $comment->scheduled_at->isFuture();
+        if ($is_scheduled) {
+            return $new_ids;
+        }
+
+        $is_item = $comment instanceof BoardItemComment;
+        $link = $is_item ? "/boards/{$board->id}/pulses/{$comment->item_id}" : "/boards/{$board->id}";
+        $action_target = $is_item
+            ? sprintf('in a comment on "%s"', $comment->item?->name)
+            : sprintf('in a comment on the Board "%s"', $board->label);
+
+        foreach (User::whereIn('id', $new_ids->all())->get() as $mentioned_user) {
+            $this->notification_service->notify(
+                recipient: $mentioned_user,
+                actor: $actor,
+                type: Notification::TYPE_MENTIONED,
+                board: $board,
+                action_label: 'Mentioned you',
+                action_target: $action_target,
+                link: $link,
+                comment: $comment,
+            );
+        }
+
+        return $new_ids;
+    }
 }
