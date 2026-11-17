@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Board;
 
 use App\Events\ItemCommentPosted;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\ReplaceCommentAttachmentRequest;
 use App\Http\Requests\Board\StoreBoardItemCommentRequest;
 use App\Http\Requests\Board\ToggleBoardItemCommentReactionRequest;
 use App\Http\Requests\Board\UpdateBoardItemCommentRequest;
@@ -11,6 +12,7 @@ use App\Http\Resources\BoardItemCommentResource;
 use App\Http\Resources\CommentRevisionResource;
 use App\Models\BoardItem;
 use App\Models\BoardItemComment;
+use App\Models\BoardItemCommentAttachment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -183,6 +185,52 @@ class BoardItemCommentController extends Controller
 
         return response()->json([
             'message' => 'Comment updated successfully.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/items/{board_item}/comments/{comment}/attachments/{comment_attachment}
+     *
+     * Takes one file (a video, an image) off a posted update. Author only,
+     * like editing. The stored file is deleted from the disk when it exists.
+     */
+    public function destroyAttachment(Request $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment, BoardItemCommentAttachment $comment_attachment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+
+        $this->comment_attachments->removeAttachment($comment, $comment_attachment);
+
+        return response()->json([
+            'message' => 'File removed from the update.',
+            'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/items/{board_item}/comments/{comment}/attachments/{comment_attachment}/replace
+     *
+     * Swaps one file of a posted update for a new one, e.g. a video recorded
+     * again. Author only. The old file is deleted from the disk when it exists.
+     */
+    public function replaceAttachment(ReplaceCommentAttachmentRequest $request, WorkspaceNavigationItem $item, BoardItem $board_item, BoardItemComment $comment, BoardItemCommentAttachment $comment_attachment): JsonResponse
+    {
+        $this->ensureItemBelongsToBoard($item, $board_item);
+        $this->ensureCommentBelongsToItem($board_item, $comment);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+
+        $this->comment_attachments->replaceAttachment(
+            comment: $comment,
+            attachment: $comment_attachment,
+            file: $request->file('file'),
+            directory: "board-comment-attachments/{$board_item->id}",
+            uploader: $request->user(),
+        );
+
+        return response()->json([
+            'message' => 'File replaced.',
             'comment' => new BoardItemCommentResource($comment->fresh($this->eagerLoads())),
         ]);
     }

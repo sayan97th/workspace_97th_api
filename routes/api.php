@@ -726,6 +726,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                 Route::post('{comment}/bookmark', [BoardItemCommentController::class, 'toggleBookmark']);
                 Route::patch('{comment}/schedule', [BoardItemCommentController::class, 'updateSchedule']);
                 Route::get('{comment}/revisions', [BoardItemCommentController::class, 'revisions']);
+                Route::delete('{comment}/attachments/{comment_attachment}', [BoardItemCommentController::class, 'destroyAttachment']);
+                Route::post('{comment}/attachments/{comment_attachment}/replace', [BoardItemCommentController::class, 'replaceAttachment']);
             });
 
             Route::prefix('{board_item}/checklist-items')->group(function () {
@@ -817,6 +819,8 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::post('{comment}/bookmark', [BoardCommentController::class, 'toggleBookmark']);
             Route::patch('{comment}/schedule', [BoardCommentController::class, 'updateSchedule']);
             Route::get('{comment}/revisions', [BoardCommentController::class, 'revisions']);
+            Route::delete('{comment}/attachments/{comment_attachment}', [BoardCommentController::class, 'destroyAttachment']);
+            Route::post('{comment}/attachments/{comment_attachment}/replace', [BoardCommentController::class, 'replaceAttachment']);
         });
     });
 

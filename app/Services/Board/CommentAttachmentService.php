@@ -5,11 +5,14 @@ namespace App\Services\Board;
 use App\Http\Controllers\Board\BoardCommentController;
 use App\Http\Controllers\Board\BoardItemCommentController;
 use App\Models\BoardComment;
+use App\Models\BoardCommentAttachment;
 use App\Models\BoardItemComment;
+use App\Models\BoardItemCommentAttachment;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -113,14 +116,100 @@ class CommentAttachmentService
         $comment->attachments()->whereIn('id', $attachments->modelKeys())->delete();
 
         DB::afterCommit(function () use ($file_paths) {
-            $disk = Storage::disk(config('filesystems.app_disk'));
             foreach ($file_paths as $file_path) {
-                if ($disk->exists($file_path)) {
-                    $disk->delete($file_path);
-                }
+                $this->deleteStoredFile($file_path);
             }
         });
 
         return $attachments->count();
+    }
+
+    /**
+     * Takes one file off a posted update (the "Delete" action on a video or
+     * image of a sent update). The update must keep some text or another
+     * file, an empty update is deleted as a whole instead. The stored file
+     * (S3 in production) is removed once the change commits, only when it is
+     * still there.
+     */
+    public function removeAttachment(BoardItemComment|BoardComment $comment, BoardItemCommentAttachment|BoardCommentAttachment $attachment): void
+    {
+        $this->ensureAttachmentBelongsTo($comment, $attachment);
+
+        $is_last_file = $comment->attachments()->whereKeyNot($attachment->id)->doesntExist();
+        if ($is_last_file && trim((string) $comment->body) === '') {
+            throw ValidationException::withMessages([
+                'attachment' => 'This is the only content of the update. Delete the update instead.',
+            ]);
+        }
+
+        DB::transaction(function () use ($comment, $attachment) {
+            $this->removeByIds($comment, collect([$attachment->id]));
+            $comment->update(['edited_at' => now()]);
+        });
+    }
+
+    /**
+     * Swaps the file of a posted attachment for a new one (a re-recorded
+     * video, for example). The attachment keeps its id and its place in the
+     * update; the old file is deleted from the disk after the change commits,
+     * when it exists, so a failed upload never loses the original.
+     */
+    public function replaceAttachment(
+        BoardItemComment|BoardComment $comment,
+        BoardItemCommentAttachment|BoardCommentAttachment $attachment,
+        UploadedFile $file,
+        string $directory,
+        ?User $uploader,
+    ): void {
+        $this->ensureAttachmentBelongsTo($comment, $attachment);
+
+        $extension = $file->getClientOriginalExtension();
+        $new_path = $file->storeAs($directory, Str::uuid().'.'.$extension, config('filesystems.app_disk'));
+        $old_path = $attachment->file_path;
+
+        try {
+            DB::transaction(function () use ($comment, $attachment, $file, $new_path, $extension, $uploader, $old_path) {
+                $attachment->update([
+                    'uploaded_by_id' => $uploader?->id ?? $attachment->uploaded_by_id,
+                    'file_name' => $file->getClientOriginalName(),
+                    'file_path' => $new_path,
+                    'extension' => $extension,
+                    'mime_type' => $file->getMimeType() ?? 'application/octet-stream',
+                    'size_bytes' => $file->getSize() ?? 0,
+                ]);
+                $comment->update(['edited_at' => now()]);
+
+                DB::afterCommit(fn () => $this->deleteStoredFile($old_path));
+            });
+        } catch (\Throwable $exception) {
+            // The row still points at the old file, so the upload that just landed is the orphan.
+            $this->deleteStoredFile($new_path);
+            throw $exception;
+        }
+    }
+
+    /**
+     * Deletes a stored file when it exists. A file that is already gone (or a
+     * disk that fails to answer) never breaks the request, it is only logged.
+     */
+    public function deleteStoredFile(?string $file_path): void
+    {
+        if (! $file_path) {
+            return;
+        }
+
+        try {
+            $disk = Storage::disk(config('filesystems.app_disk'));
+            if ($disk->exists($file_path)) {
+                $disk->delete($file_path);
+            }
+        } catch (\Throwable $exception) {
+            Log::warning('Could not delete a comment attachment file.', ['file_path' => $file_path, 'error' => $exception->getMessage()]);
+        }
+    }
+
+    private function ensureAttachmentBelongsTo(BoardItemComment|BoardComment $comment, BoardItemCommentAttachment|BoardCommentAttachment $attachment): void
+    {
+        abort_if($attachment->comment_id !== $comment->id || $attachment::class !== $comment->attachments()->getRelated()::class, 404);
     }
 }

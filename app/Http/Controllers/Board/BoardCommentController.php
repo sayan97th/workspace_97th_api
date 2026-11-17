@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Board;
 
 use App\Events\BoardCommentPosted;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Board\ReplaceCommentAttachmentRequest;
 use App\Http\Requests\Board\StoreBoardCommentRequest;
 use App\Http\Requests\Board\ToggleBoardCommentReactionRequest;
 use App\Http\Requests\Board\UpdateBoardCommentRequest;
 use App\Http\Resources\BoardCommentResource;
 use App\Http\Resources\CommentRevisionResource;
 use App\Models\BoardComment;
+use App\Models\BoardCommentAttachment;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
@@ -142,6 +144,49 @@ class BoardCommentController extends Controller
             'message' => 'Update posted successfully.',
             'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
         ], 201);
+    }
+
+    /**
+     * DELETE /api/boards/{item}/comments/{comment}/attachments/{comment_attachment}
+     *
+     * Takes one file off a posted board update. Author only. The stored file
+     * is deleted from the disk when it exists.
+     */
+    public function destroyAttachment(Request $request, WorkspaceNavigationItem $item, BoardComment $comment, BoardCommentAttachment $comment_attachment): JsonResponse
+    {
+        $this->ensureCommentBelongsToBoard($item, $comment);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+
+        $this->comment_attachments->removeAttachment($comment, $comment_attachment);
+
+        return response()->json([
+            'message' => 'File removed from the update.',
+            'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
+    }
+
+    /**
+     * POST /api/boards/{item}/comments/{comment}/attachments/{comment_attachment}/replace
+     *
+     * Swaps one file of a posted board update for a new one. Author only.
+     */
+    public function replaceAttachment(ReplaceCommentAttachmentRequest $request, WorkspaceNavigationItem $item, BoardComment $comment, BoardCommentAttachment $comment_attachment): JsonResponse
+    {
+        $this->ensureCommentBelongsToBoard($item, $comment);
+        abort_if($comment->user_id !== $request->user()?->id, 403);
+
+        $this->comment_attachments->replaceAttachment(
+            comment: $comment,
+            attachment: $comment_attachment,
+            file: $request->file('file'),
+            directory: "board-discussion-attachments/{$item->id}",
+            uploader: $request->user(),
+        );
+
+        return response()->json([
+            'message' => 'File replaced.',
+            'comment' => new BoardCommentResource($comment->fresh($this->eagerLoads())),
+        ]);
     }
 
     /**
