@@ -4,6 +4,7 @@ namespace App\Http\Requests\Board;
 
 use App\Http\Requests\Concerns\NormalizesCommentBody;
 use App\Models\BoardItem;
+use App\Rules\CommentAttachmentFile;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -48,11 +49,7 @@ class StoreBoardItemCommentRequest extends FormRequest
             // Held back and published by `feed:publish-scheduled` once due, see ScheduledCommentService.
             'scheduled_at' => ['sometimes', 'nullable', 'date', 'after:now'],
             'attachments' => ['sometimes', 'array'],
-            'attachments.*' => [
-                'file',
-                'mimes:pdf,xlsx,xls,csv,docx,doc,pptx,ppt,png,jpg,jpeg,gif,webp',
-                'max:51200',
-            ],
+            'attachments.*' => CommentAttachmentFile::rules(),
         ];
     }
 }
