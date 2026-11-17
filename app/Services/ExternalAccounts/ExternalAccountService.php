@@ -57,6 +57,8 @@ class ExternalAccountService
                 'access_type' => 'offline',
                 'prompt' => 'consent select_account',
                 'include_granted_scopes' => 'true',
+                // Preselects the address the member signed in with, so the usual case is one click.
+                'login_hint' => $user->email,
                 'state' => $state,
             ],
             ExternalProvider::Microsoft => [

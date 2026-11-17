@@ -418,7 +418,7 @@ trait ValidatesAutomationDefinition
         }
 
         if ($trigger_type === BoardAutomation::TRIGGER_EMAIL_RECEIVED) {
-            $this->validateExternalAccount($validator, $config['external_account_id'] ?? null, ExternalService::mailServices(), 'trigger_config.external_account_id', 'Choose the Gmail or Outlook account whose inbox this automation reads.');
+            $this->validateExternalAccount($validator, $config['external_account_id'] ?? null, ExternalService::mailServices(), 'trigger_config.external_account_id', 'Choose the Gmail account whose inbox this automation reads.');
         }
 
         if (in_array($trigger_type, BoardAutomation::itemlessTriggers(), true)) {
@@ -837,7 +837,7 @@ trait ValidatesAutomationDefinition
             $this->validateSlackConnection($validator, $params, $prefix);
         }
         if ($type === BoardAutomation::ACTION_SEND_EMAIL && ! empty($params['external_account_id'])) {
-            $this->validateExternalAccount($validator, $params['external_account_id'], ExternalService::mailServices(), "{$prefix}.external_account_id", 'Choose one of your connected Gmail or Outlook accounts to send from.');
+            $this->validateExternalAccount($validator, $params['external_account_id'], ExternalService::mailServices(), "{$prefix}.external_account_id", 'Choose one of your connected Gmail accounts to send from.');
         }
         if ($type === BoardAutomation::ACTION_GOOGLE_CALENDAR_SYNC) {
             $this->validateExternalAccount($validator, $params['external_account_id'] ?? null, [ExternalService::GoogleCalendar], "{$prefix}.external_account_id", 'Choose one of your connected Google Calendar accounts.');

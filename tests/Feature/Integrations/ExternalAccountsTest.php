@@ -122,14 +122,40 @@ test('a member gets the google consent url with offline access and the gmail sco
         ->and($query['state'])->not->toBeEmpty();
 });
 
-test('outlook uses the microsoft consent page of the saved tenant', function () {
-    IntegrationAppSetting::query()->where('provider', 'microsoft')->update(['tenant_id' => 'contoso.onmicrosoft.com']);
+test('google calendar connects through the sign in with google app when no app was saved', function () {
+    IntegrationAppSetting::query()->where('provider', 'google')->delete();
+    config(['services.google.client_id' => 'sign-in-client', 'services.google.client_secret' => 'sign-in-secret']);
+    $member = integrationMember();
 
-    $url = $this->actingAs(integrationMember(), 'api')->postJson('/api/integrations/accounts/url', ['service' => 'outlook'])->assertOk()->json('url');
+    $url = $this->actingAs($member, 'api')->postJson('/api/integrations/accounts/url', ['service' => 'google_calendar'])->assertOk()->json('url');
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
 
-    expect($url)->toStartWith('https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize?')
-        ->toContain('Mail.Read')
-        ->toContain('offline_access');
+    expect($query['client_id'])->toBe('sign-in-client')
+        ->and($query['login_hint'])->toBe($member->email)
+        ->and($query['scope'])->toContain('https://www.googleapis.com/auth/calendar.events');
+
+    // The code is exchanged with the same app.
+    Http::fake([
+        'oauth2.googleapis.com/token' => Http::response(['access_token' => 'access', 'refresh_token' => 'refresh', 'expires_in' => 3600, 'scope' => 'openid email https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events']),
+        'openidconnect.googleapis.com/*' => Http::response(['sub' => 'google-1', 'email' => 'ada@gmail.com', 'name' => 'Ada']),
+    ]);
+    $this->get('/api/integrations/accounts/callback?'.http_build_query(['code' => 'auth-code', 'state' => $query['state']]));
+
+    Http::assertSent(fn (HttpRequest $request) => str_contains($request->url(), 'oauth2.googleapis.com/token') && $request['client_id'] === 'sign-in-client' && $request['client_secret'] === 'sign-in-secret');
+    expect(ExternalAccount::query()->where('user_id', $member->id)->first()?->supports(ExternalService::GoogleCalendar))->toBeTrue();
+});
+
+test('a saved google app wins over the sign in with google app', function () {
+    config(['services.google.client_id' => 'sign-in-client', 'services.google.client_secret' => 'sign-in-secret']);
+
+    $url = $this->actingAs(integrationMember(), 'api')->postJson('/api/integrations/accounts/url', ['service' => 'google_calendar'])->assertOk()->json('url');
+
+    expect($url)->toContain('client_id=google-client');
+});
+
+test('outlook is switched off, it can no longer be connected or listed', function () {
+    $this->actingAs(integrationMember(), 'api')->postJson('/api/integrations/accounts/url', ['service' => 'outlook'])->assertJsonValidationErrors('service');
+    $this->actingAs(integrationMember(), 'api')->getJson('/api/integrations/accounts?service=outlook')->assertJsonValidationErrors('service');
 });
 
 test('the consent url is refused while the provider app is not set up, and respects the integrations permission', function () {
@@ -141,7 +167,7 @@ test('the consent url is refused while the provider app is not set up, and respe
         ->assertJsonPath('code', 'not_configured');
 
     AccountSetting::current()->update(['account_permissions' => ['client' => ['use_integrations' => false]]]);
-    $this->actingAs($member, 'api')->postJson('/api/integrations/accounts/url', ['service' => 'outlook'])->assertForbidden();
+    $this->actingAs($member, 'api')->postJson('/api/integrations/accounts/url', ['service' => 'gmail'])->assertForbidden();
 });
 
 test('the callback stores the account with its tokens and reports back to the tab', function () {
@@ -229,24 +255,27 @@ test('calendars and disconnect only work on the caller own account', function ()
     Http::assertSent(fn (HttpRequest $request) => str_contains($request->url(), 'oauth2.googleapis.com/revoke'));
 });
 
-test('only administrators manage the google and microsoft apps and the secret never comes back', function () {
+test('only administrators manage the google app and the secret never comes back', function () {
     $admin = User::factory()->create();
     $admin->assignRole('admin');
 
     $this->actingAs(integrationMember(), 'api')->getJson('/api/integrations/apps')->assertForbidden();
 
-    $this->actingAs($admin, 'api')->putJson('/api/integrations/apps/microsoft', ['client_id' => 'new-ms', 'client_secret' => 'super-secret-1234', 'tenant_id' => 'organizations'])
+    $this->actingAs($admin, 'api')->putJson('/api/integrations/apps/google', ['client_id' => 'new-google', 'client_secret' => 'super-secret-1234'])
         ->assertOk()
-        ->assertJsonPath('client_id', 'new-ms')
-        ->assertJsonPath('tenant_id', 'organizations')
+        ->assertJsonPath('client_id', 'new-google')
+        ->assertJsonPath('source', 'saved')
         ->assertJsonPath('client_secret_hint', '••••1234')
         ->assertJsonMissingPath('client_secret');
+
+    // Microsoft is switched off with Outlook.
+    $this->actingAs($admin, 'api')->putJson('/api/integrations/apps/microsoft', ['client_id' => 'new-ms', 'client_secret' => 'super-secret-1234'])->assertNotFound();
 
     // A different client id needs its own secret.
     $this->actingAs($admin, 'api')->putJson('/api/integrations/apps/google', ['client_id' => 'another-google'])->assertJsonValidationErrors('client_secret');
     $this->actingAs($admin, 'api')->putJson('/api/integrations/apps/github', ['client_id' => 'x'])->assertNotFound();
 
-    $this->actingAs($admin, 'api')->getJson('/api/integrations/apps')->assertOk()->assertJsonCount(2, 'data')->assertJsonPath('data.0.provider', 'google');
+    $this->actingAs($admin, 'api')->getJson('/api/integrations/apps')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.provider', 'google');
 });
 
 // ── Automations ───────────────────────────────────────────────────────────────

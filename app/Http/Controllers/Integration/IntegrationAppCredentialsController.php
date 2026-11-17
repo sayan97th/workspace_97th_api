@@ -12,9 +12,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * Administration > Integrations, Google and Microsoft (administrators and the account owner). Each
- * provider's OAuth app is saved here once, so members can connect Gmail, Google Calendar and
- * Outlook from the Automations center. Secrets are write only, only their last four characters
+ * Administration > Integrations, Google (administrators and the account owner). Saving an app is
+ * optional: without one, Gmail and Google Calendar use the "Sign in with Google" app of the API
+ * environment, see `ExternalAppCredentials`. Microsoft answers 404 while Outlook is switched off. Secrets are write only, only their last four characters
  * ever come back.
  */
 class IntegrationAppCredentialsController extends Controller
@@ -26,7 +26,7 @@ class IntegrationAppCredentialsController extends Controller
      */
     public function index(): JsonResponse
     {
-        return response()->json(['data' => array_map(fn (ExternalProvider $provider) => $this->credentials->describe($provider), ExternalProvider::cases())]);
+        return response()->json(['data' => array_map(fn (ExternalProvider $provider) => $this->credentials->describe($provider), ExternalProvider::enabled())]);
     }
 
     /**
@@ -65,6 +65,9 @@ class IntegrationAppCredentialsController extends Controller
 
     private function resolveProvider(string $provider): ExternalProvider
     {
-        return ExternalProvider::tryFrom($provider) ?? abort(404);
+        $resolved = ExternalProvider::tryFrom($provider);
+        abort_unless($resolved?->isEnabled(), 404);
+
+        return $resolved;
     }
 }

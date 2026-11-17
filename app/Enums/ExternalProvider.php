@@ -72,6 +72,23 @@ enum ExternalProvider: string
     }
 
     /**
+     * Whether at least one of the provider's services can be connected. Microsoft is off while
+     * Outlook is, so Administration > Integrations stops asking for an Azure app.
+     */
+    public function isEnabled(): bool
+    {
+        return array_filter($this->services(), fn (ExternalService $service) => $service->isEnabled()) !== [];
+    }
+
+    /**
+     * @return array<int, self>
+     */
+    public static function enabled(): array
+    {
+        return array_values(array_filter(self::cases(), fn (self $provider) => $provider->isEnabled()));
+    }
+
+    /**
      * @return array<int, string>
      */
     public static function values(): array

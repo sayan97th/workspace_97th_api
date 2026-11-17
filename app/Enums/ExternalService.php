@@ -52,13 +52,41 @@ enum ExternalService: string
     }
 
     /**
+     * Whether members can pick and connect the service. Outlook is switched off until the client
+     * asks for it: its accounts, automations and enum value stay, so existing rows keep loading,
+     * but it is never offered or connected again.
+     */
+    public function isEnabled(): bool
+    {
+        return $this !== self::Outlook;
+    }
+
+    /**
      * Services whose accounts can be read for new emails or used to send them.
      *
      * @return array<int, self>
      */
     public static function mailServices(): array
     {
-        return [self::Gmail, self::Outlook];
+        return array_values(array_filter([self::Gmail, self::Outlook], fn (self $service) => $service->isEnabled()));
+    }
+
+    /**
+     * The services members can connect today, in the order the Integrations dialog lists them.
+     *
+     * @return array<int, self>
+     */
+    public static function enabled(): array
+    {
+        return array_values(array_filter(self::cases(), fn (self $service) => $service->isEnabled()));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function enabledValues(): array
+    {
+        return array_map(fn (self $service) => $service->value, self::enabled());
     }
 
     /**

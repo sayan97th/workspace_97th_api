@@ -23,13 +23,13 @@ test('every app needs setup until an administrator saves its app, email is alway
     $this->actingAs(overviewUser(), 'api')->getJson('/api/integrations/overview')
         ->assertOk()
         ->assertJsonPath('can_manage', false)
-        ->assertJsonCount(5, 'data')
-        ->assertJsonPath('data.*.key', ['email', 'slack', 'gmail', 'outlook', 'google_calendar'])
+        ->assertJsonCount(4, 'data')
+        ->assertJsonPath('data.*.key', ['email', 'slack', 'gmail', 'google_calendar'])
         ->assertJsonPath('data.0.status', 'ready')
         ->assertJsonPath('data.1.status', 'needs_setup')
         ->assertJsonPath('data.1.can_connect', false)
         ->assertJsonPath('data.2.status', 'needs_setup')
-        ->assertJsonPath('data.4.category', 'calendar');
+        ->assertJsonPath('data.3.category', 'calendar');
 });
 
 test('apps are available once set up and connected once the caller has an account of their own', function () {
@@ -59,10 +59,19 @@ test('apps are available once set up and connected once the caller has an accoun
         ->assertJsonPath('data.1.accounts.0.label', 'Ada (Acme)')
         ->assertJsonPath('data.2.status', 'connected')
         ->assertJsonPath('data.2.accounts.0.label', 'ada@example.com')
-        ->assertJsonPath('data.3.status', 'needs_setup')
         // Google is set up, but this Google account was never granted the Calendar scopes.
-        ->assertJsonPath('data.4.status', 'available')
-        ->assertJsonPath('data.4.can_connect', true);
+        ->assertJsonPath('data.3.status', 'available')
+        ->assertJsonPath('data.3.can_connect', true);
+});
+
+test('google apps are available with the sign in with google app alone, nothing saved in administration', function () {
+    config(['services.google.client_id' => 'sign-in-client', 'services.google.client_secret' => 'sign-in-secret']);
+
+    $this->actingAs(overviewUser(), 'api')->getJson('/api/integrations/overview')
+        ->assertOk()
+        ->assertJsonPath('data.2.status', 'available')
+        ->assertJsonPath('data.3.status', 'available')
+        ->assertJsonPath('data.3.can_connect', true);
 });
 
 test('administrators are told they can set the apps up', function () {

@@ -14,7 +14,7 @@ use App\Support\AccountPermissions;
 /**
  * Every app of the board's Integrations dialog and where the caller stands with
  * each one, so the sidebar and the overview can show it with a single request: Email is built in,
- * Slack, Gmail, Outlook and Google Calendar need the caller's own account.
+ * Slack, Gmail and Google Calendar need the caller's own account.
  *
  * A status is `ready` (nothing to connect), `connected` (the caller has an account), `available`
  * (the app is set up, the caller can connect one) or `needs_setup` (an administrator must set up
@@ -47,7 +47,7 @@ class IntegrationOverview
             'data' => [
                 $this->email(),
                 $this->slack($user, $can_use_integrations),
-                ...array_map(fn (ExternalService $service) => $this->external($user, $service, $can_use_integrations), [ExternalService::Gmail, ExternalService::Outlook, ExternalService::GoogleCalendar]),
+                ...array_map(fn (ExternalService $service) => $this->external($user, $service, $can_use_integrations), ExternalService::enabled()),
             ],
         ];
     }

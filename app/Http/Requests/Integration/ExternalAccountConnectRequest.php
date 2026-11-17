@@ -13,8 +13,8 @@ class ExternalAccountConnectRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * `service` is what the account will be used for (`gmail`, `google_calendar`, `outlook`), it
-     * decides the provider and the permissions asked for. `return_path` must be a path inside the
+     * `service` is what the account will be used for (`gmail` or `google_calendar`, Outlook is
+     * switched off, see `ExternalService::isEnabled()`), it decides the provider and the permissions asked for. `return_path` must be a path inside the
      * app, the same rule the Slack flows use, so the callback can never become an open redirect.
      *
      * @return array<string, ValidationRule|array<mixed>|string>
@@ -22,7 +22,7 @@ class ExternalAccountConnectRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'service' => ['required', 'string', Rule::in(ExternalService::values())],
+            'service' => ['required', 'string', Rule::in(ExternalService::enabledValues())],
             'return_path' => ['sometimes', 'nullable', 'string', 'max:255', 'regex:#^/(?!/)[^\s\\\\]*$#'],
             'display' => ['sometimes', 'nullable', 'string', Rule::in([ExternalAccountService::DISPLAY_TAB, ExternalAccountService::DISPLAY_PAGE])],
         ];

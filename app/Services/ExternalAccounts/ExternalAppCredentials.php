@@ -7,19 +7,39 @@ use App\Models\IntegrationAppSetting;
 use App\Models\User;
 
 /**
- * The Google and Microsoft OAuth apps, saved by an administrator from Administration >
- * Integrations. Like the Slack app, nothing is read from the API environment.
+ * The Google and Microsoft OAuth apps members connect Gmail and Google Calendar through.
+ *
+ * An administrator may save a dedicated app from Administration > Integrations. Without one,
+ * Google falls back to the "Sign in with Google" app of the API environment (`services.google`),
+ * so connecting Google Calendar is one click for members and needs no Google Cloud setup from the
+ * account owner. Microsoft has no such fallback.
  */
 class ExternalAppCredentials
 {
     /** Where the shared callback route lives, relative to APP_URL. */
     private const CALLBACK_PATH = '/api/integrations/accounts/callback';
 
+    /** The app was saved by an administrator. */
+    public const SOURCE_SAVED = 'saved';
+
+    /** The app is the "Sign in with Google" app of the API environment. */
+    public const SOURCE_SIGN_IN = 'sign_in';
+
     public function isConfigured(ExternalProvider $provider): bool
     {
-        $setting = IntegrationAppSetting::forProvider($provider);
+        return $this->resolve($provider) !== null;
+    }
 
-        return $setting !== null && filled($setting->client_id) && filled($setting->client_secret);
+    /**
+     * Where the app in use comes from, null when there is none.
+     */
+    public function source(ExternalProvider $provider): ?string
+    {
+        if ($this->savedSetting($provider) !== null) {
+            return self::SOURCE_SAVED;
+        }
+
+        return $this->signInSetting($provider) !== null ? self::SOURCE_SIGN_IN : null;
     }
 
     /**
@@ -27,9 +47,9 @@ class ExternalAppCredentials
      */
     public function require(ExternalProvider $provider): IntegrationAppSetting
     {
-        $setting = IntegrationAppSetting::forProvider($provider);
+        $setting = $this->resolve($provider);
 
-        if (! $setting || ! filled($setting->client_id) || ! filled($setting->client_secret)) {
+        if (! $setting) {
             throw new ExternalAccountException(ExternalAccountException::CODE_NOT_CONFIGURED, "The {$provider->label()} app is not set up yet. Ask an account administrator to set it up in Administration > Integrations.", 503);
         }
 
@@ -42,7 +62,7 @@ class ExternalAppCredentials
      */
     public function redirectUri(ExternalProvider $provider): string
     {
-        return IntegrationAppSetting::forProvider($provider)?->redirect_uri ?: $this->defaultRedirectUri();
+        return $this->savedSetting($provider)?->redirect_uri ?: $this->defaultRedirectUri();
     }
 
     public function defaultRedirectUri(): string
@@ -87,6 +107,44 @@ class ExternalAppCredentials
     }
 
     /**
+     * The saved app when complete, otherwise the sign in fallback.
+     */
+    private function resolve(ExternalProvider $provider): ?IntegrationAppSetting
+    {
+        return $this->savedSetting($provider) ?? $this->signInSetting($provider);
+    }
+
+    private function savedSetting(ExternalProvider $provider): ?IntegrationAppSetting
+    {
+        $setting = IntegrationAppSetting::forProvider($provider);
+
+        return $setting && filled($setting->client_id) && filled($setting->client_secret) ? $setting : null;
+    }
+
+    /**
+     * The "Sign in with Google" app as an unsaved setting, so every caller reads it the same way.
+     */
+    private function signInSetting(ExternalProvider $provider): ?IntegrationAppSetting
+    {
+        if ($provider !== ExternalProvider::Google) {
+            return null;
+        }
+
+        $client_id = (string) config('services.google.client_id');
+        $client_secret = (string) config('services.google.client_secret');
+
+        if ($client_id === '' || $client_secret === '') {
+            return null;
+        }
+
+        return (new IntegrationAppSetting)->forceFill([
+            'provider' => $provider,
+            'client_id' => $client_id,
+            'client_secret' => $client_secret,
+        ]);
+    }
+
+    /**
      * What the administration page shows. Never the secret, only its last four characters.
      *
      * @return array<string, mixed>
@@ -94,16 +152,19 @@ class ExternalAppCredentials
     public function describe(ExternalProvider $provider): array
     {
         $setting = IntegrationAppSetting::forProvider($provider);
+        $services = array_values(array_filter($provider->services(), fn ($service) => $service->isEnabled()));
         $scopes = $provider->signInScopes();
-        foreach ($provider->services() as $service) {
+        foreach ($services as $service) {
             $scopes = [...$scopes, ...$service->scopes()];
         }
 
         return [
             'provider' => $provider->value,
             'label' => $provider->label(),
-            'services' => array_map(fn ($service) => ['id' => $service->value, 'label' => $service->label()], $provider->services()),
+            'services' => array_map(fn ($service) => ['id' => $service->value, 'label' => $service->label()], $services),
             'is_configured' => $this->isConfigured($provider),
+            'source' => $this->source($provider),
+            'can_use_sign_in_app' => $this->signInSetting($provider) !== null,
             'client_id' => $setting?->client_id,
             'client_secret_hint' => $setting?->client_secret ? '••••'.substr($setting->client_secret, -4) : null,
             'tenant_id' => $setting?->tenant_id,

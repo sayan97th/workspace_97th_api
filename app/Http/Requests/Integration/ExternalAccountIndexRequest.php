@@ -19,7 +19,7 @@ class ExternalAccountIndexRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'service' => ['sometimes', 'nullable', 'string', Rule::in(ExternalService::values())],
+            'service' => ['sometimes', 'nullable', 'string', Rule::in(ExternalService::enabledValues())],
         ];
     }
 
