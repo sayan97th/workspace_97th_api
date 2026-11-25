@@ -9,6 +9,7 @@ use App\Models\BoardItem;
 use App\Models\User;
 use App\Services\Board\BoardAutomationActionOutcome;
 use App\Services\Board\BoardAutomationActionRunner;
+use App\Support\ColorPalette;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -19,9 +20,6 @@ use Illuminate\Support\Facades\DB;
  */
 trait RunsGroupActions
 {
-    /** Group colors a new group cycles through, the same palette the board offers. */
-    private const GROUP_COLORS = ['#579bfc', '#a25ddc', '#00c875', '#fdab3d', '#e2445c', '#66ccff', '#784bd1', '#ff642e'];
-
     /** Most items one "duplicate group" copies, so a runaway schedule cannot fill the board. */
     private const MAX_DUPLICATED_ITEMS = 500;
 
@@ -35,7 +33,7 @@ trait RunsGroupActions
         $is_top = ($params['position'] ?? 'top') === 'top';
         $color = is_string($params['accent_color'] ?? null) && $params['accent_color'] !== ''
             ? $params['accent_color']
-            : self::GROUP_COLORS[BoardGroup::where('board_view_id', $automation->board_view_id)->count() % count(self::GROUP_COLORS)];
+            : ColorPalette::cycle(BoardGroup::where('board_view_id', $automation->board_view_id)->count());
 
         $group = DB::transaction(function () use ($automation, $name, $is_top, $color) {
             if ($is_top) {

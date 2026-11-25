@@ -19,6 +19,7 @@ use App\Services\Board\BoardActivityLogger;
 use App\Services\Board\BoardAutomationService;
 use App\Services\Board\BoardViewResolver;
 use App\Support\BoardEditGate;
+use App\Support\ColorPalette;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -100,7 +101,7 @@ class BoardGroupController extends Controller
         $group = $view->groups()->create([
             'board_id' => $item->id,
             'name' => $validated['name'],
-            'accent_color' => $validated['accent_color'] ?? '#579bfc',
+            'accent_color' => $validated['accent_color'] ?? ColorPalette::BLUE,
             'is_priority' => $validated['is_priority'] ?? false,
             'position' => $position,
         ]);

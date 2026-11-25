@@ -8,6 +8,7 @@ use App\Models\BoardItemValue;
 use App\Models\User;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
+use App\Support\ColorPalette;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 
@@ -25,8 +26,8 @@ class MyWorkService
     /** Status labels that count as finished work. */
     private const DONE_LABELS = ['done', 'complete', 'completed', 'finished', 'closed'];
 
-    /** monday.com's "Done" green. */
-    private const DONE_COLOR = '#00c875';
+    /** "Done" greens: Tonk's palette green, plus monday's green still saved on older labels. */
+    private const DONE_COLORS = [ColorPalette::GREEN, '#00c875'];
 
     /** A Status column whose label contains this word is shown as the Priority column. */
     private const PRIORITY_LABEL = 'priority';
@@ -336,6 +337,6 @@ class MyWorkService
     private function isDoneStatus(array $status): bool
     {
         return in_array(strtolower(trim($status['label'])), self::DONE_LABELS, true)
-            || strtolower($status['color']) === self::DONE_COLOR;
+            || in_array(strtolower($status['color']), self::DONE_COLORS, true);
     }
 }

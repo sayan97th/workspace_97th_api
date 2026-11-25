@@ -8,6 +8,7 @@ use App\Models\BoardItem;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\ColorPalette;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -88,7 +89,7 @@ class BoardContentSeeder extends Seeder
         foreach ($group_names as $position => $name) {
             $groups[] = $board->groups()->create([
                 'name' => $name,
-                'accent_color' => ['#00c875', '#579bfc', '#a25ddc', '#fdab3d'][$position % 4],
+                'accent_color' => ColorPalette::cycle($position),
                 'position' => $position,
             ]);
         }
@@ -117,9 +118,9 @@ class BoardContentSeeder extends Seeder
             ['key' => 'notes', 'label' => 'Notes', 'type' => BoardColumn::TYPE_TEXT, 'width' => 220],
             ['key' => 'status', 'label' => 'Status', 'type' => BoardColumn::TYPE_STATUS, 'width' => 140, 'config' => [
                 'options' => [
-                    ['id' => 'not_started', 'label' => 'Not Started', 'color' => '#c4c4c4'],
-                    ['id' => 'in_progress', 'label' => 'Working on it', 'color' => '#fdab3d'],
-                    ['id' => 'done', 'label' => 'Done', 'color' => '#00c875'],
+                    ['id' => 'not_started', 'label' => 'Not Started', 'color' => ColorPalette::SLATE],
+                    ['id' => 'in_progress', 'label' => 'Working on it', 'color' => ColorPalette::AMBER],
+                    ['id' => 'done', 'label' => 'Done', 'color' => ColorPalette::GREEN],
                 ],
             ]],
             ['key' => 'owner', 'label' => 'Owner', 'type' => BoardColumn::TYPE_PEOPLE, 'width' => 130],
@@ -149,9 +150,9 @@ class BoardContentSeeder extends Seeder
     private function seedTags(WorkspaceNavigationItem $board): array
     {
         $definitions = [
-            'design' => ['label' => '#design', 'color' => '#a25ddc'],
-            'backend' => ['label' => '#backend', 'color' => '#579bfc'],
-            'urgent' => ['label' => '#urgent', 'color' => '#e2445c'],
+            'design' => ['label' => '#design', 'color' => ColorPalette::PLUM],
+            'backend' => ['label' => '#backend', 'color' => ColorPalette::BLUE],
+            'urgent' => ['label' => '#urgent', 'color' => ColorPalette::RED],
         ];
 
         $tag_ids = [];

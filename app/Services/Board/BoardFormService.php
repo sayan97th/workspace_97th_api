@@ -8,6 +8,7 @@ use App\Models\BoardGroup;
 use App\Models\BoardItem;
 use App\Models\BoardView;
 use App\Models\WorkspaceNavigationItem;
+use App\Support\ColorPalette;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -426,7 +427,7 @@ class BoardFormService
             'name_label' => $saved['name_label'] ?? 'Name',
             'submit_label' => $saved['submit_label'] ?? 'Submit',
             'success_message' => $saved['success_message'] ?? 'Thank you, your response was submitted.',
-            'accent_color' => $saved['accent_color'] ?? '#6161ff',
+            'accent_color' => $saved['accent_color'] ?? ColorPalette::BLUE,
             'is_active' => (bool) ($saved['is_active'] ?? true),
             'questions' => $questions->all(),
         ];
@@ -480,7 +481,7 @@ class BoardFormService
             ?? $source_view->groups()->create([
                 'board_id' => $source_view->board_id,
                 'name' => 'Form submissions',
-                'accent_color' => '#579bfc',
+                'accent_color' => ColorPalette::BLUE,
                 'position' => 0,
             ]);
     }
