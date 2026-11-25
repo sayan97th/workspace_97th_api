@@ -218,3 +218,23 @@ test('the original file name and size picked in the browser are kept', function 
         ->assertJsonPath('personal.original_name', 'brand.svg')
         ->assertJsonPath('personal.original_size', 5242880);
 });
+
+test('the gradient color can be customized and reset to automatic', function () {
+    $this->actingAs($this->member, 'api')
+        ->post('/api/profile/home-banner', [
+            'file' => UploadedFile::fake()->image('banner.png', 1600, 400),
+            'overlay_color' => '#E53E2E',
+        ], ['Accept' => 'application/json'])
+        ->assertOk()
+        ->assertJsonPath('personal.overlay_color', '#e53e2e');
+
+    $this->actingAs($this->member, 'api')
+        ->patchJson('/api/profile/home-banner', ['overlay_color' => null])
+        ->assertOk()
+        ->assertJsonPath('personal.overlay_color', null);
+
+    $this->actingAs($this->member, 'api')
+        ->patchJson('/api/profile/home-banner', ['overlay_color' => 'red'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['overlay_color']);
+});

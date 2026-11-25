@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Storage;
  * @property float $zoom
  * @property string $text_tone
  * @property int $overlay_opacity
+ * @property string|null $overlay_color
  * @property int|null $updated_by
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -43,7 +44,7 @@ use Illuminate\Support\Facades\Storage;
 #[Fillable([
     'user_id', 'image_path', 'image_small_path', 'width', 'height', 'stored_size',
     'original_name', 'original_size', 'placeholder', 'dominant_color', 'luminance',
-    'focal_x', 'focal_y', 'zoom', 'text_tone', 'overlay_opacity', 'updated_by',
+    'focal_x', 'focal_y', 'zoom', 'text_tone', 'overlay_opacity', 'overlay_color', 'updated_by',
 ])]
 class HomeBanner extends Model
 {
@@ -63,6 +64,7 @@ class HomeBanner extends Model
         'zoom' => 1,
         'text_tone' => 'auto',
         'overlay_opacity' => 35,
+        'overlay_color' => null,
     ];
 
     /**

@@ -159,6 +159,10 @@ class HomeBannerService
         if (isset($framing['text_tone']) && in_array($framing['text_tone'], HomeBanner::TEXT_TONES, true)) {
             $normalized['text_tone'] = $framing['text_tone'];
         }
+        if (array_key_exists('overlay_color', $framing)) {
+            $color = is_string($framing['overlay_color']) ? strtolower($framing['overlay_color']) : null;
+            $normalized['overlay_color'] = $color && preg_match('/^#[0-9a-f]{6}$/', $color) ? $color : null;
+        }
         if (isset($framing['overlay_opacity'])) {
             $normalized['overlay_opacity'] = max(0, min(HomeBanner::MAX_OVERLAY_OPACITY, (int) $framing['overlay_opacity']));
         }

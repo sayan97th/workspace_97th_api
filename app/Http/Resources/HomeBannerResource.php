@@ -37,6 +37,7 @@ class HomeBannerResource extends JsonResource
             'zoom' => $this->zoom,
             'text_tone' => $this->text_tone,
             'overlay_opacity' => $this->overlay_opacity,
+            'overlay_color' => $this->overlay_color,
             'updated_by' => $this->whenLoaded('editor', fn () => $this->editor ? [
                 'id' => $this->editor->id,
                 'full_name' => $this->editor->full_name,

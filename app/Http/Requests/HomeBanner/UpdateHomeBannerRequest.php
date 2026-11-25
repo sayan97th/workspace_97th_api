@@ -33,6 +33,8 @@ class UpdateHomeBannerRequest extends FormRequest
             'zoom' => [$presence, 'numeric', 'between:'.HomeBanner::MIN_ZOOM.','.HomeBanner::MAX_ZOOM],
             'text_tone' => [$presence, 'string', Rule::in(HomeBanner::TEXT_TONES)],
             'overlay_opacity' => [$presence, 'integer', 'between:0,'.HomeBanner::MAX_OVERLAY_OPACITY],
+            // Null keeps the automatic gradient color.
+            'overlay_color' => ['sometimes', 'nullable', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
         ];
     }
 
