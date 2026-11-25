@@ -17,6 +17,7 @@ use App\Http\Controllers\Admin\Impersonation\ImpersonationController;
 use App\Http\Controllers\Admin\Invitation\StaffInvitationController as AdminStaffInvitationController;
 use App\Http\Controllers\Admin\Organization\OrganizationAssetController;
 use App\Http\Controllers\Admin\Organization\OrganizationController;
+use App\Http\Controllers\Admin\Organization\OrganizationHomeBannerController;
 use App\Http\Controllers\Admin\ProfileField\UserProfileFieldController;
 use App\Http\Controllers\Admin\Role\RoleController;
 use App\Http\Controllers\Admin\SessionController as AdminSessionController;
@@ -76,6 +77,7 @@ use App\Http\Controllers\Favorite\FavoriteController;
 use App\Http\Controllers\Feed\FeedUpdateController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\Home\RecentBoardController;
+use App\Http\Controllers\HomeBanner\HomeBannerController;
 use App\Http\Controllers\InlineUploadController;
 use App\Http\Controllers\Integration\ExternalAccountController;
 use App\Http\Controllers\Integration\ExternalOAuthCallbackController;
@@ -243,6 +245,11 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
     // Managed at `/administration?section=organization`.
     Route::get('branding', [PublicBrandingController::class, 'show']);
 
+    // Home welcome banner: the caller's own background image and the organization one, Home shows
+    // the personal banner first. Personal changes live under `profile/home-banner` below, the
+    // organization banner under `admin/organization/home-banner`.
+    Route::get('home-banner', [HomeBannerController::class, 'show']);
+
     // The caller's own account permissions (Administration > Permissions), so the app can hide
     // controls such as "New workspace" that the API would reject for their role.
     Route::get('account-permissions/me', [AccountPermissionsController::class, 'mine']);
@@ -405,6 +412,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
         Route::put('password', [PasswordController::class, 'update']);
         Route::post('photo', [ProfilePhotoController::class, 'store']);
         Route::delete('photo', [ProfilePhotoController::class, 'destroy']);
+        Route::post('home-banner', [HomeBannerController::class, 'store'])->middleware('throttle:20,1');
+        Route::patch('home-banner', [HomeBannerController::class, 'update'])->middleware('throttle:60,1');
+        Route::delete('home-banner', [HomeBannerController::class, 'destroy']);
 
         Route::patch('working-status', [WorkingStatusController::class, 'update']);
         Route::patch('notifications', [NotificationPreferenceController::class, 'update']);
@@ -944,6 +954,9 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
                     ->middleware('throttle:30,1');
                 Route::delete('assets/{asset}', [OrganizationAssetController::class, 'destroy'])
                     ->whereIn('asset', array_keys(AccountSetting::BRANDING_ASSET_COLUMNS));
+                Route::post('home-banner', [OrganizationHomeBannerController::class, 'store'])->middleware('throttle:20,1');
+                Route::patch('home-banner', [OrganizationHomeBannerController::class, 'update'])->middleware('throttle:60,1');
+                Route::delete('home-banner', [OrganizationHomeBannerController::class, 'destroy']);
             });
         });
 
