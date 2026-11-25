@@ -6,7 +6,6 @@ use App\Models\BoardView;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceNavigationItem;
-use App\Support\ColorPalette;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use PhpOffice\PhpSpreadsheet\Cell\DataValidation;
@@ -129,7 +128,7 @@ test('analyze lists the sheets, skips FALSE-only rows and reads dropdown lists a
         ->and(array_column($columns['Type']['declared_options'], 'label'))->toBe(['Bug Fix', 'Feature Request', 'Other'])
         ->and($columns['Priority']['suggested_type'])->toBe(BoardColumn::TYPE_STATUS)
         ->and($columns['Priority']['option_preset'])->toBe('priority')
-        ->and(collect($columns['Priority']['declared_options'])->firstWhere('label', 'High')['color'])->toBe(ColorPalette::PLUM)
+        ->and(collect($columns['Priority']['declared_options'])->firstWhere('label', 'High')['color'])->toBe('#401694')
         ->and($columns['Screenshot']['suggested_type'])->toBe(BoardColumn::TYPE_FILES)
         ->and($columns['Screenshot']['filled_count'])->toBe(2)
         ->and($columns['Screenshot']['assets']['image_count'])->toBe(2)
@@ -175,7 +174,7 @@ test('commit uploads embedded screenshots into a Files column and keeps every dr
 
     $priority = $column('Priority');
     expect($priority->type)->toBe(BoardColumn::TYPE_STATUS)
-        ->and(collect($priority->config['options'])->pluck('color', 'label')->all())->toBe(['High' => ColorPalette::PLUM, 'Medium' => ColorPalette::LAVENDER, 'Low' => ColorPalette::BLUE]);
+        ->and(collect($priority->config['options'])->pluck('color', 'label')->all())->toBe(['High' => '#401694', 'Medium' => '#5559df', 'Low' => '#579bfc']);
 
     expect($column('Type')->type)->toBe(BoardColumn::TYPE_DROPDOWN)
         ->and(array_column($column('Type')->config['options'], 'label'))->toBe(['Bug Fix', 'Feature Request', 'Other'])

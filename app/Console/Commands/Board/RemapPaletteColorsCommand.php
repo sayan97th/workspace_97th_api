@@ -10,13 +10,10 @@ use App\Support\ColorPalette;
 use Illuminate\Console\Command;
 
 /**
- * Moves colors saved from the old monday.com palette onto Tonk's palette
- * ({@see ColorPalette}): Status, Label and Dropdown options, Button columns,
- * board tags, group colors and sidebar folder colors. Each color becomes the
- * palette color it looks closest to (see {@see ColorPalette::nearest()}), so a
- * "Done" green stays green and a "Stuck" red stays red. Colors already in the
- * palette are left alone, so running it twice is safe. Opt in: new records get
- * palette colors anyway, this only restyles what was saved before.
+ * Rolls colors saved from Tonk's palette back to the original palette
+ * ({@see ColorPalette::fromTonk()}): Status, Label and Dropdown options, Button
+ * columns, board tags, group colors and sidebar folder colors. Any color that is
+ * not one of Tonk's is left alone, so running it twice is safe.
  */
 // php artisan board:remap-palette-colors --board=4767811559 --dry-run
 class RemapPaletteColorsCommand extends Command
@@ -25,7 +22,7 @@ class RemapPaletteColorsCommand extends Command
         {--board=* : Only these board ids, every board (and every sidebar folder) when omitted}
         {--dry-run : Print what would change without writing to the database}';
 
-    protected $description = 'Move saved status, label, tag, group and folder colors onto the Tonk palette';
+    protected $description = 'Move status, label, tag, group and folder colors saved from the Tonk palette back to the original palette';
 
     /** Column types whose `config.options[].color` a person picks. */
     private const OPTION_COLUMN_TYPES = [BoardColumn::TYPE_STATUS, BoardColumn::TYPE_LABEL, BoardColumn::TYPE_DROPDOWN];
@@ -155,14 +152,10 @@ class RemapPaletteColorsCommand extends Command
             });
     }
 
-    /** The palette color to store instead, or null when the value is already in the palette (or not a color). */
+    /** The original color to store instead, or null when the value is not a Tonk color. */
     private function remappedColor(mixed $color): ?string
     {
-        if (! is_string($color) || ColorPalette::contains($color)) {
-            return null;
-        }
-
-        return ColorPalette::nearest($color);
+        return is_string($color) ? ColorPalette::fromTonk($color) : null;
     }
 
     private function report(string $record, string $from, string $to): void

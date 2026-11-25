@@ -6,7 +6,6 @@ use App\Models\BoardColumn;
 use App\Models\BoardItemValue;
 use App\Models\BoardTag;
 use App\Services\Search\TagCatalog;
-use App\Support\ColorPalette;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -26,6 +25,8 @@ class BackfillBoardTagsCommand extends Command
         {--dry-run : Print what would change without writing to the database}';
 
     protected $description = 'Convert legacy Tags cell values (option ids or raw labels) into board tags';
+
+    private const FALLBACK_COLORS = ['#579bfc', '#00c875', '#fdab3d', '#e2445c', '#a25ddc', '#ff642e', '#037f4c', '#9cd326'];
 
     public function handle(): int
     {
@@ -74,7 +75,7 @@ class BackfillBoardTagsCommand extends Command
                         $key = TagCatalog::normalizeLabel($label);
 
                         if (! isset($tag_id_by_key[$key])) {
-                            $color = (string) ($option['color'] ?? ColorPalette::cycle($next_position));
+                            $color = (string) ($option['color'] ?? self::FALLBACK_COLORS[$next_position % count(self::FALLBACK_COLORS)]);
                             $tag_id_by_key[$key] = $is_dry_run
                                 ? "new:{$key}"
                                 : BoardTag::create(['board_id' => $column->board_id, 'label' => $label, 'color' => $color, 'position' => $next_position])->id;

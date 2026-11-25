@@ -2,36 +2,26 @@
 
 use App\Support\ColorPalette;
 
-test('the palette holds Tonk\'s 18 colors and the cycle uses each once', function () {
-    expect(ColorPalette::COLORS)->toHaveCount(18)
-        ->and(collect(ColorPalette::CYCLE)->sort()->values()->all())->toBe(collect(ColorPalette::COLORS)->sort()->values()->all());
+test('the palette holds the original 18 status colors', function () {
+    expect(ColorPalette::COLORS)->toBe([
+        '#2074d4', '#1071c4', '#3a8fc9', '#7b3f98', '#7b52c9', '#12c46b',
+        '#12724a', '#2f9e78', '#f2a53c', '#f2662a', '#e04455', '#f453b0',
+        '#8a6248', '#3a3a3a', '#9dd6f2', '#6b7189', '#e2b203', '#c9ccd4',
+    ]);
 });
 
-test('cycle wraps around in both directions', function () {
-    expect(ColorPalette::cycle(0))->toBe(ColorPalette::GREEN)
-        ->and(ColorPalette::cycle(18))->toBe(ColorPalette::GREEN)
-        ->and(ColorPalette::cycle(-1))->toBe(ColorPalette::CHARCOAL);
-});
-
-test('nearest keeps palette colors and maps old monday colors by hue', function (string $old, string $expected) {
-    expect(ColorPalette::nearest($old))->toBe($expected);
+test('fromTonk rolls a Tonk color back to the color it replaced', function (string $tonk, string $original) {
+    expect(ColorPalette::fromTonk($tonk))->toBe($original);
 })->with([
-    'palette color, any case' => ['#E53E2E', ColorPalette::RED],
-    'monday done green' => ['#00c875', ColorPalette::GREEN],
-    'monday working orange' => ['#fdab3d', ColorPalette::AMBER],
-    'monday stuck red' => ['#e2445c', ColorPalette::RED],
-    'monday purple' => ['#a25ddc', ColorPalette::LAVENDER],
-    'monday pink' => ['#ff158a', ColorPalette::ROSE],
-    'old In Prod green' => ['#12724a', ColorPalette::MOSS],
-    'old Testing blue stays apart from Ready to start' => ['#1071c4', ColorPalette::TEAL],
-    'unknown wine falls back to the closest color' => ['#7a1f3d', ColorPalette::CRIMSON],
-    'unknown sea green falls back to the closest color' => ['#3cb371', ColorPalette::GREEN],
-    'monday light gray' => ['#c4c4c4', ColorPalette::SLATE],
-    'monday dark gray' => ['#333333', ColorPalette::CHARCOAL],
+    'Done green' => ['#60943f', ColorPalette::GREEN],
+    'Stuck red, any case' => ['#E53E2E', ColorPalette::RED],
+    'In Prod moss' => ['#567460', ColorPalette::FOREST],
+    'Pending deep teal' => ['#2c6776', '#1f5b9e'],
+    'Critical crimson' => ['#800f12', '#b02f43'],
 ]);
 
-test('nearest ignores values that are not hex colors', function () {
-    expect(ColorPalette::nearest(null))->toBeNull()
-        ->and(ColorPalette::nearest('red'))->toBeNull()
-        ->and(ColorPalette::nearest('#fff'))->toBeNull();
+test('fromTonk leaves every other color alone', function () {
+    expect(ColorPalette::fromTonk('#00c875'))->toBeNull()
+        ->and(ColorPalette::fromTonk(ColorPalette::BLUE))->toBeNull()
+        ->and(ColorPalette::fromTonk(null))->toBeNull();
 });

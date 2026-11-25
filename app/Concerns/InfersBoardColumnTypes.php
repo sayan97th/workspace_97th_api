@@ -8,7 +8,6 @@ use App\Models\User;
 use App\Services\Board\BoardItemImportService;
 use App\Services\Board\ImportedCellValueCaster;
 use App\Services\Board\MondayBoardImportService;
-use App\Support\ColorPalette;
 use App\Support\CountryCatalog;
 use DateTimeZone;
 use Illuminate\Support\Carbon;
@@ -35,44 +34,47 @@ use Throwable;
  */
 trait InfersBoardColumnTypes
 {
-    /** Option colors an imported column cycles through when a label has no usual color, Tonk's palette. */
-    private const OPTION_COLOR_PALETTE = ColorPalette::CYCLE;
+    /** @var array<int, string> */
+    private const OPTION_COLOR_PALETTE = [
+        '#00c875', '#579bfc', '#a25ddc', '#fdab3d', '#e2445c',
+        '#66ccff', '#ff642e', '#7f5347', '#bb3354', '#0086c0', '#9d99b9',
+    ];
 
-    /** Familiar monday.com status/priority labels (matched case-insensitively) get their usual color, in Tonk's palette, instead of a palette-cycled one. */
+    /** Familiar monday.com status/priority labels (matched case-insensitively) get their usual color instead of a palette-cycled one. */
     private const KNOWN_OPTION_COLORS = [
-        'done' => ColorPalette::GREEN,
-        'working on it' => ColorPalette::AMBER,
-        'stuck' => ColorPalette::RED,
-        'on hold' => ColorPalette::SLATE,
-        'hold' => ColorPalette::SLATE,
-        'on track' => ColorPalette::GREEN,
-        'ready for dev' => ColorPalette::BLUE,
-        'ready to start' => ColorPalette::BLUE,
-        'waiting for deployment' => ColorPalette::PLUM,
-        'outlining' => ColorPalette::LAVENDER,
-        'backlog' => ColorPalette::SLATE,
-        'resources' => ColorPalette::AQUA,
-        'in progress' => ColorPalette::AMBER,
-        'progressing' => ColorPalette::AMBER,
-        'stalled' => ColorPalette::RED,
-        "haven't started" => ColorPalette::SLATE,
-        'not started' => ColorPalette::SLATE,
-        'critical' => ColorPalette::CRIMSON,
-        'high' => ColorPalette::RED,
-        'medium' => ColorPalette::AMBER,
-        'low' => ColorPalette::BLUE,
-        'open' => ColorPalette::SLATE,
-        'to do' => ColorPalette::SLATE,
-        'blocked' => ColorPalette::RED,
-        'closed' => ColorPalette::LAVENDER,
-        'cancelled' => ColorPalette::CHARCOAL,
-        'canceled' => ColorPalette::CHARCOAL,
-        'completed' => ColorPalette::GREEN,
-        'approved' => ColorPalette::GREEN,
-        'needs approval' => ColorPalette::PLUM,
-        'in review' => ColorPalette::PLUM,
-        'review' => ColorPalette::PLUM,
-        'feedback needed' => ColorPalette::ORANGE,
+        'done' => '#00c875',
+        'working on it' => '#fdab3d',
+        'stuck' => '#e2445c',
+        'on hold' => '#797e93',
+        'hold' => '#797e93',
+        'on track' => '#00c875',
+        'ready for dev' => '#579bfc',
+        'ready to start' => '#579bfc',
+        'waiting for deployment' => '#a25ddc',
+        'outlining' => '#9d99b9',
+        'backlog' => '#c4c4c4',
+        'resources' => '#66ccff',
+        'in progress' => '#fdab3d',
+        'progressing' => '#fdab3d',
+        'stalled' => '#e2445c',
+        "haven't started" => '#c4c4c4',
+        'not started' => '#c4c4c4',
+        'critical' => '#bb3354',
+        'high' => '#e2445c',
+        'medium' => '#fdab3d',
+        'low' => '#579bfc',
+        'open' => '#c4c4c4',
+        'to do' => '#c4c4c4',
+        'blocked' => '#e2445c',
+        'closed' => '#9d99b9',
+        'cancelled' => '#797e93',
+        'canceled' => '#797e93',
+        'completed' => '#00c875',
+        'approved' => '#00c875',
+        'needs approval' => '#a25ddc',
+        'in review' => '#a25ddc',
+        'review' => '#a25ddc',
+        'feedback needed' => '#ff642e',
     ];
 
     /**
@@ -81,20 +83,20 @@ trait InfersBoardColumnTypes
      * column gallery.
      */
     private const PRIORITY_OPTION_COLORS = [
-        'critical' => ColorPalette::CHARCOAL,
-        'urgent' => ColorPalette::CHARCOAL,
-        'highest' => ColorPalette::CHARCOAL,
-        'p0' => ColorPalette::CHARCOAL,
-        'high' => ColorPalette::PLUM,
-        'p1' => ColorPalette::PLUM,
-        'medium' => ColorPalette::LAVENDER,
-        'normal' => ColorPalette::LAVENDER,
-        'p2' => ColorPalette::LAVENDER,
-        'low' => ColorPalette::BLUE,
-        'lowest' => ColorPalette::BLUE,
-        'p3' => ColorPalette::BLUE,
-        'p4' => ColorPalette::BLUE,
-        'best effort' => ColorPalette::BLUE,
+        'critical' => '#333333',
+        'urgent' => '#333333',
+        'highest' => '#333333',
+        'p0' => '#333333',
+        'high' => '#401694',
+        'p1' => '#401694',
+        'medium' => '#5559df',
+        'normal' => '#5559df',
+        'p2' => '#5559df',
+        'low' => '#579bfc',
+        'lowest' => '#579bfc',
+        'p3' => '#579bfc',
+        'p4' => '#579bfc',
+        'best effort' => '#579bfc',
     ];
 
     /** Labels that read as a workflow status, so a dropdown list holding them becomes a Status column. */

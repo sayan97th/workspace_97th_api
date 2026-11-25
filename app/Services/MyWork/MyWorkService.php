@@ -8,7 +8,6 @@ use App\Models\BoardItemValue;
 use App\Models\User;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
-use App\Support\ColorPalette;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 
@@ -26,8 +25,8 @@ class MyWorkService
     /** Status labels that count as finished work. */
     private const DONE_LABELS = ['done', 'complete', 'completed', 'finished', 'closed'];
 
-    /** "Done" greens: Tonk's palette green, plus monday's green still saved on older labels. */
-    private const DONE_COLORS = [ColorPalette::GREEN, '#00c875'];
+    /** "Done" greens: monday's green, plus Tonk's green still saved on labels from when its palette was live. */
+    private const DONE_COLORS = ['#00c875', '#60943f'];
 
     /** A Status column whose label contains this word is shown as the Priority column. */
     private const PRIORITY_LABEL = 'priority';

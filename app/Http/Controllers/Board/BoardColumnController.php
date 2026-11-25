@@ -22,7 +22,6 @@ use App\Services\Board\BoardPeopleAutoAssigner;
 use App\Services\Board\BoardViewResolver;
 use App\Services\Board\ColumnPermissionService;
 use App\Support\BoardEditGate;
-use App\Support\ColorPalette;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -533,9 +532,9 @@ class BoardColumnController extends Controller
         if ($type === BoardColumn::TYPE_STATUS) {
             return [
                 'options' => [
-                    ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => ColorPalette::AMBER, 'is_active' => true],
-                    ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => ColorPalette::GREEN, 'is_active' => true],
-                    ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => ColorPalette::RED, 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Working on it', 'color' => '#fdab3d', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Done', 'color' => '#00c875', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Stuck', 'color' => '#e2445c', 'is_active' => true],
                 ],
             ];
         }
@@ -543,16 +542,16 @@ class BoardColumnController extends Controller
         if ($type === BoardColumn::TYPE_LABEL) {
             return [
                 'options' => [
-                    ['id' => (string) Str::uuid(), 'label' => 'Low', 'color' => ColorPalette::SLATE, 'is_active' => true],
-                    ['id' => (string) Str::uuid(), 'label' => 'Medium', 'color' => ColorPalette::AMBER, 'is_active' => true],
-                    ['id' => (string) Str::uuid(), 'label' => 'High', 'color' => ColorPalette::PLUM, 'is_active' => true],
-                    ['id' => (string) Str::uuid(), 'label' => 'Critical', 'color' => ColorPalette::CRIMSON, 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Low', 'color' => '#5b6180', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Medium', 'color' => '#8a6d1f', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'High', 'color' => '#5b3fbd', 'is_active' => true],
+                    ['id' => (string) Str::uuid(), 'label' => 'Critical', 'color' => '#b02f43', 'is_active' => true],
                 ],
             ];
         }
 
         if ($type === BoardColumn::TYPE_BUTTON) {
-            return ['button_label' => 'Click me', 'button_color' => ColorPalette::BLUE];
+            return ['button_label' => 'Click me', 'button_color' => '#579bfc'];
         }
 
         return null;

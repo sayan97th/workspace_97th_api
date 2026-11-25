@@ -17,7 +17,6 @@ use App\Models\User;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\Import\SpreadsheetEmbeddedAssetReader;
 use App\Services\Board\Import\SpreadsheetListOptionsReader;
-use App\Support\ColorPalette;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -1440,7 +1439,7 @@ class BoardItemImportService
             return [$view->groups()->findOrFail($options['target_group_id']), 0];
         }
 
-        return [$this->createGroup($board, $view, $options['new_group_name'] ?: 'Imported items', ColorPalette::BLUE), 1];
+        return [$this->createGroup($board, $view, $options['new_group_name'] ?: 'Imported items', '#579bfc'), 1];
     }
 
     /**
@@ -1480,7 +1479,7 @@ class BoardItemImportService
         $first_group = reset($groups_by_name);
 
         if ($first_group === false) {
-            $first_group = $this->createGroup($board, $view, $fallback_name ?: 'Imported items', ColorPalette::BLUE);
+            $first_group = $this->createGroup($board, $view, $fallback_name ?: 'Imported items', '#579bfc');
             $groups_by_name[''] = $first_group;
             $created++;
         }
