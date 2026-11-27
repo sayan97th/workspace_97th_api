@@ -772,6 +772,7 @@ Route::middleware(['auth:api', 'active', 'session.active', 'panic.mode', 'ip.all
             Route::put('preferences', [BoardViewController::class, 'updatePersonalPreferences']);
             Route::put('{board_view}/personal-state', [BoardViewController::class, 'updatePersonalState']);
             Route::delete('{board_view}/personal-state', [BoardViewController::class, 'destroyPersonalState']);
+            Route::put('{board_view}/visit', [BoardViewController::class, 'recordVisit'])->middleware('throttle:120,1');
             Route::patch('{board_view}', [BoardViewController::class, 'update']);
             Route::delete('{board_view}', [BoardViewController::class, 'destroy']);
             Route::post('{board_view}/duplicate', [BoardViewController::class, 'duplicate']);

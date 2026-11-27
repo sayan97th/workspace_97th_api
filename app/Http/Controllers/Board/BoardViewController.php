@@ -14,6 +14,7 @@ use App\Http\Resources\BoardViewResource;
 use App\Models\BoardView;
 use App\Models\BoardViewUserOrder;
 use App\Models\BoardViewUserState;
+use App\Models\BoardVisit;
 use App\Models\WorkspaceNavigationItem;
 use App\Services\Board\BoardDuplicationService;
 use App\Services\Board\ChartDataService;
@@ -381,6 +382,21 @@ class BoardViewController extends Controller
             'message' => 'View changes remembered.',
             'personal_state' => $state->toPayload(),
         ]);
+    }
+
+    /**
+     * PUT /api/boards/{item}/views/{board_view}/visit
+     *
+     * Remembers the tab the viewer has open, so the Home page's "Recently
+     * visited" card previews that tab (a Kanban, a Gantt, a Chart, …).
+     */
+    public function recordVisit(Request $request, WorkspaceNavigationItem $item, BoardView $board_view): JsonResponse
+    {
+        $this->ensureViewBelongsToBoard($item, $board_view);
+
+        BoardVisit::recordView($request->user()->id, $item->id, $board_view->id);
+
+        return response()->json(['message' => 'Visit recorded.']);
     }
 
     /**

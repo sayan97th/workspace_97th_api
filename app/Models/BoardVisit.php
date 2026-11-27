@@ -14,11 +14,13 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property int $user_id
  * @property int $board_id
+ * @property int|null $board_view_id
  * @property Carbon $visited_at
  * @property-read WorkspaceNavigationItem $board
+ * @property-read BoardView|null $boardView
  * @property-read User|null $user
  */
-#[Fillable(['user_id', 'board_id', 'visited_at'])]
+#[Fillable(['user_id', 'board_id', 'board_view_id', 'visited_at'])]
 class BoardVisit extends Model
 {
     /**
@@ -38,6 +40,29 @@ class BoardVisit extends Model
     public function board(): BelongsTo
     {
         return $this->belongsTo(WorkspaceNavigationItem::class, 'board_id');
+    }
+
+    /**
+     * Records the tab `$user` has open on `$board`, which the Home card
+     * previews. Also counts as a visit, so switching tabs keeps the board
+     * at the top of "Recently visited".
+     */
+    public static function recordView(int $user_id, int $board_id, int $board_view_id): void
+    {
+        static::query()->updateOrCreate(
+            ['user_id' => $user_id, 'board_id' => $board_id],
+            ['board_view_id' => $board_view_id, 'visited_at' => now()]
+        );
+    }
+
+    /**
+     * The tab open on the last visit, null when unknown or deleted.
+     *
+     * @return BelongsTo<BoardView, $this>
+     */
+    public function boardView(): BelongsTo
+    {
+        return $this->belongsTo(BoardView::class);
     }
 
     /**

@@ -19,8 +19,9 @@ class RecentBoardController extends Controller
      * GET /api/home/recent-boards
      *
      * The boards the user opened most recently, newest first. Archived and
-     * deleted boards drop out on their own. Each board carries a small
-     * `preview` (its first groups and item counts) for the card snapshot.
+     * deleted boards drop out on their own. Each board carries a `preview`
+     * of the tab the user last had open (a Table, Kanban, Gantt, Chart, Doc,
+     * …), shaped for that tab's kind, see {@see RecentBoardPreviewService}.
      */
     public function index(Request $request, UserFavoriteService $favorites, RecentBoardPreviewService $previews): JsonResponse
     {
@@ -29,12 +30,12 @@ class RecentBoardController extends Controller
         $visits = BoardVisit::query()
             ->where('user_id', $user->id)
             ->whereHas('board', fn ($query) => VisibleBoards::withoutHiddenPrivate($query->where('is_archived', false), $user))
-            ->with('board.workspace:id,name,slug,color,mono,avatar_path,avatar_thumbnail_path')
+            ->with('board.workspace:id,name,slug,color,mono,avatar_path,avatar_thumbnail_path,cover_path')
             ->orderByDesc('visited_at')
             ->limit(self::LIMIT)
             ->get();
 
-        $board_previews = $previews->previewsFor($visits->map(fn (BoardVisit $visit) => (int) $visit->board->id)->all());
+        $board_previews = $previews->previewsFor($visits);
 
         return response()->json([
             'data' => $visits->map(fn (BoardVisit $visit) => [
