@@ -4,12 +4,8 @@ namespace App\Support;
 
 /**
  * The colors the frontend's pickers offer (the original Status palette), mirrored
- * from `src/lib/color-palette.ts`; keep both in sync.
- *
- * Tonk's palette replaced it for a short while and was then rolled back by client
- * request, so {@see TONK_COLORS} pairs each of its colors with the original color
- * it replaced. `board:remap-palette-colors` uses that map to move anything saved
- * during that period back.
+ * from `src/lib/color-palette.ts`; keep both in sync. Tonk's alternative palette,
+ * and the maps between the two, live in {@see TonkPalette}.
  */
 final class ColorPalette
 {
@@ -59,39 +55,4 @@ final class ColorPalette
         self::FOREST, self::JADE, self::AMBER, self::ORANGE, self::RED, self::PINK,
         self::BROWN, self::CHARCOAL, self::LIGHT_BLUE, self::SLATE, self::MUSTARD, self::SILVER,
     ];
-
-    /**
-     * Tonk's palette color => the original color it stood in for, picked by
-     * meaning (Done green, Stuck red, In Prod forest green) so a rollback keeps
-     * what a team gave each label. Crimson and Deep teal go back to the old
-     * Critical and Pending defaults, which were never in the picker.
-     *
-     * @var array<string, string>
-     */
-    private const TONK_COLORS = [
-        '#e53e2e' => self::RED,
-        '#800f12' => '#b02f43',
-        '#ab350d' => self::BROWN,
-        '#d55b08' => self::ORANGE,
-        '#e29703' => self::AMBER,
-        '#567460' => self::FOREST,
-        '#60943f' => self::GREEN,
-        '#8fac87' => self::JADE,
-        '#8cd1cb' => self::LIGHT_BLUE,
-        '#0499b1' => self::OCEAN,
-        '#2c6776' => '#1f5b9e',
-        '#2783c5' => self::BLUE,
-        '#e697b2' => self::PINK,
-        '#9a7ab6' => self::VIOLET,
-        '#7f2b81' => self::PLUM,
-        '#c9b893' => self::MUSTARD,
-        '#7e8889' => self::SLATE,
-        '#2b3c40' => self::CHARCOAL,
-    ];
-
-    /** The original color a Tonk color replaced, or null when the color is not one of Tonk's. */
-    public static function fromTonk(?string $hex): ?string
-    {
-        return $hex === null ? null : self::TONK_COLORS[strtolower($hex)] ?? null;
-    }
 }
