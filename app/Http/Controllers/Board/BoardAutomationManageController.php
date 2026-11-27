@@ -348,7 +348,7 @@ class BoardAutomationManageController extends Controller
         $validated = $request->validate([
             'view_id' => ['sometimes', 'nullable', 'integer'],
             'file' => ['required', 'array'],
-            'file.format' => ['required', 'string', Rule::in([AutomationTransfer::FORMAT])],
+            'file.format' => ['required', 'string', Rule::in([AutomationTransfer::FORMAT, ...AutomationTransfer::LEGACY_FORMATS])],
             'file.version' => ['required', 'integer', Rule::in([AutomationTransfer::VERSION])],
             'file.source' => ['sometimes', 'array'],
             'file.source.board_id' => ['sometimes', 'nullable', 'integer'],

@@ -101,7 +101,7 @@ class WorkspaceController extends Controller
             'name' => $name,
             'mono' => $validated['mono'] ?? Str::upper(Str::substr($name, 0, 1)) ?: 'W',
             'color' => $validated['color'] ?? '#e53e2e',
-            'product' => $validated['product'] ?? 'Workspace 97th',
+            'product' => $validated['product'] ?? Workspace::DEFAULT_PRODUCT,
             'privacy' => $validated['privacy'] ?? 'open',
             'description' => $validated['description'] ?? null,
             'invite_generated_by' => $user->id,

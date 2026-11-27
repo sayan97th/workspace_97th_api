@@ -61,6 +61,9 @@ class Workspace extends Model
 {
     use HasFactory, HasRandomBigId, SoftDeletes;
 
+    /** Product label every new workspace gets when none is given, the app's own name. */
+    public const DEFAULT_PRODUCT = 'Blueprint';
+
     /** The id is a randomly-generated 10-digit number, not an auto-increment. */
     public $incrementing = false;
 

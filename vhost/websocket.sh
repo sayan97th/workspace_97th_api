@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Vhost deployment script — Workspace 97th API (WebSockets)
+# Vhost deployment script — Blueprint API (WebSockets)
 # Domain  : ws.workspace97th.97dev.com
 #
 # Usage:

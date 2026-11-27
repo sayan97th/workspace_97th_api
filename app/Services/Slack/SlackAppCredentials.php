@@ -354,7 +354,7 @@ class SlackAppCredentials
      */
     public function manifest(): array
     {
-        $app_name = (string) config('app.name', 'Workspace');
+        $app_name = (string) config('app.name', 'Blueprint');
 
         return [
             'display_information' => [
@@ -364,7 +364,7 @@ class SlackAppCredentials
             ],
             'features' => [
                 // Slack shows the bot as @display_name, so it is kept to a mention friendly slug.
-                'bot_user' => ['display_name' => mb_substr(Str::slug($app_name, '_') ?: 'workspace_bot', 0, 80), 'always_online' => true],
+                'bot_user' => ['display_name' => mb_substr(Str::slug($app_name, '_') ?: 'blueprint_bot', 0, 80), 'always_online' => true],
                 'app_home' => ['messages_tab_enabled' => true, 'messages_tab_read_only_enabled' => true],
             ],
             'oauth_config' => [

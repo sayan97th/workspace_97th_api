@@ -435,7 +435,7 @@ test('automations are exported to a file and imported into another board by name
     ]);
 
     $file = $this->actingAs($user, 'api')->postJson("/api/boards/{$board->id}/automations/export", ['view_id' => $view->id])
-        ->assertOk()->assertJsonPath('data.format', 'workspace97.automations')->json('data');
+        ->assertOk()->assertJsonPath('data.format', 'blueprint.automations')->json('data');
 
     $response = $this->actingAs($user, 'api')->postJson("/api/boards/{$target->id}/automations/import", ['view_id' => $target_view->id, 'file' => $file])
         ->assertCreated()->assertJsonPath('data.0.unmapped', []);
@@ -445,6 +445,10 @@ test('automations are exported to a file and imported into another board by name
     expect($imported->is_enabled)->toBeFalse();
     expect($imported->trigger_column_id)->toBe($target_status->id);
     expect($imported->resolvedActions()[0]['params']['target_group_id'])->toBe(BoardGroup::where('board_view_id', $target_view->id)->where('name', 'Shipped')->value('id'));
+
+    // Files exported before the rename to Blueprint keep importing.
+    $this->actingAs($user, 'api')->postJson("/api/boards/{$target->id}/automations/import", ['view_id' => $target_view->id, 'file' => [...$file, 'format' => 'workspace97.automations']])
+        ->assertCreated();
 
     $this->actingAs($user, 'api')->postJson("/api/boards/{$target->id}/automations/import", ['file' => ['format' => 'other', 'version' => 1, 'automations' => []]])
         ->assertStatus(422);

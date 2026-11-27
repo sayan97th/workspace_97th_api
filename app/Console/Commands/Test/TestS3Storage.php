@@ -30,7 +30,7 @@ class TestS3Storage extends Command
 
         $token = (string) Str::uuid();
         $path = "test/{$token}.txt";
-        $contents = "97th Floor Workspace S3 connectivity test\nUploaded at: ".now()->toIso8601String()."\nToken: {$token}\n";
+        $contents = "Blueprint S3 connectivity test\nUploaded at: ".now()->toIso8601String()."\nToken: {$token}\n";
 
         try {
             $this->components->task('Uploading test file', function () use ($disk, $path, $contents) {

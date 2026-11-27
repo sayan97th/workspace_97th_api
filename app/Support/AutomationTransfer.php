@@ -16,7 +16,7 @@ use Illuminate\Support\Collection;
  * {@see AutomationCopier}. Nothing secret is written, webhook tokens and run history stay behind.
  *
  * ```json
- * {"format": "workspace97.automations", "version": 1, "exported_at": "...",
+ * {"format": "blueprint.automations", "version": 1, "exported_at": "...",
  *  "source": {"board_id": 1, "board_name": "Marketing", "view_id": 3},
  *  "columns": [{"id": 12, "label": "Status", "type": "status", "scope": "item", "options": [{"id": "1", "label": "Done"}]}],
  *  "groups": [{"id": 5, "name": "To do"}],
@@ -25,7 +25,15 @@ use Illuminate\Support\Collection;
  */
 final class AutomationTransfer
 {
-    public const FORMAT = 'workspace97.automations';
+    public const FORMAT = 'blueprint.automations';
+
+    /**
+     * Formats written before the app was renamed to Blueprint, still accepted by "Import" so
+     * files exported earlier keep working.
+     *
+     * @var list<string>
+     */
+    public const LEGACY_FORMATS = ['workspace97.automations'];
 
     public const VERSION = 1;
 

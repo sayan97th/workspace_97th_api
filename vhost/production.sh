@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Vhost deployment script — Workspace 97th API (Production)
+# Vhost deployment script — Blueprint API (Production)
 # Domain  : api.workspace97th.97dev.com
 #
 # Usage:

@@ -426,7 +426,7 @@ test('connect my slack points to the setup until slack is configured and a works
 
 test('the owner creates the slack app in one step with a configuration token', function () {
     SlackAppSetting::query()->delete();
-    config(['app.url' => 'http://localhost', 'app.name' => 'Workspace 97th']);
+    config(['app.url' => 'http://localhost', 'app.name' => 'Blueprint']);
     $owner = makeWorkspaceOwner();
 
     Http::fake(['slack.com/api/apps.manifest.create' => Http::response([
@@ -456,7 +456,7 @@ test('the owner creates the slack app in one step with a configuration token', f
             && $request->hasHeader('Authorization', 'Bearer xoxe.xoxp-1-configtoken')
             && $manifest['oauth_config']['redirect_urls'] === ['http://localhost/api/integrations/slack/callback']
             && $manifest['oauth_config']['scopes']['bot'] === SlackService::BOT_SCOPES
-            && $manifest['features']['bot_user']['display_name'] === 'workspace_97th'
+            && $manifest['features']['bot_user']['display_name'] === 'blueprint'
             // A local API cannot answer Slack's URL check, so events are left out instead of failing the manifest.
             && ! isset($manifest['settings']['event_subscriptions']);
     });

@@ -30,11 +30,14 @@
             <td align="center" style="padding:44px 16px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;">
                     <tr>
-                        <td style="padding:0 4px 28px; text-align:center;">
-                            <span style="display:inline-block; font-size:15px; font-weight:800; letter-spacing:0.01em; color:#0a1717;">
-                                <span style="display:inline-block; width:8px; height:8px; margin-right:8px; border-radius:50%; background-color:#e53e2e; vertical-align:middle;"></span>
-                                <span style="vertical-align:middle;">{{ config('app.name') }}</span>
-                            </span>
+                        <td align="center" style="padding:0 4px 28px;">
+                            {{-- App lockup: a brand tile with the initial and the wordmark. Tables keep it aligned in Outlook. --}}
+                            <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                                <tr>
+                                    <td width="28" height="28" align="center" valign="middle" style="width:28px; height:28px; border-radius:8px; background-color:#e53e2e; color:#ffffff; font-size:15px; font-weight:800; line-height:28px; text-align:center;">{{ mb_strtoupper(mb_substr((string) config('app.name'), 0, 1)) }}</td>
+                                    <td valign="middle" style="padding-left:10px; font-size:17px; font-weight:800; letter-spacing:-0.015em; color:#0a1717;">{{ config('app.name') }}</td>
+                                </tr>
+                            </table>
                         </td>
                     </tr>
                     <tr>

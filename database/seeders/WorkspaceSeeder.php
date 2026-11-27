@@ -19,13 +19,13 @@ class WorkspaceSeeder extends Seeder
      * @var array<int, array<string, mixed>>
      */
     private array $workspaces = [
-        ['name' => 'Fulfillment', 'slug' => 'fulfillment', 'mono' => '97', 'color' => '#e53e2e', 'product' => 'Workspace 97th', 'is_home' => true],
-        ['name' => 'BASE', 'slug' => 'base', 'mono' => 'B', 'color' => '#2f6fed', 'product' => 'Workspace 97th'],
+        ['name' => 'Fulfillment', 'slug' => 'fulfillment', 'mono' => '97', 'color' => '#e53e2e', 'product' => Workspace::DEFAULT_PRODUCT, 'is_home' => true],
+        ['name' => 'BASE', 'slug' => 'base', 'mono' => 'B', 'color' => '#2f6fed', 'product' => Workspace::DEFAULT_PRODUCT],
         ['name' => 'CRM', 'slug' => 'crm', 'mono' => 'C', 'color' => '#4cc3e0', 'product' => 'Sales CRM'],
-        ['name' => 'Decision Priority Matrix', 'slug' => 'decision-priority-matrix', 'mono' => 'D', 'color' => '#6b7280', 'product' => 'Workspace 97th'],
-        ['name' => 'Highrise', 'slug' => 'highrise', 'mono' => 'H', 'color' => '#26312f', 'product' => 'Workspace 97th'],
-        ['name' => 'Partnerships', 'slug' => 'partnerships', 'mono' => 'P', 'color' => '#2f9e68', 'product' => 'Workspace 97th'],
-        ['name' => 'Personal', 'slug' => 'personal', 'mono' => 'P', 'color' => '#e8a317', 'product' => 'Workspace 97th'],
+        ['name' => 'Decision Priority Matrix', 'slug' => 'decision-priority-matrix', 'mono' => 'D', 'color' => '#6b7280', 'product' => Workspace::DEFAULT_PRODUCT],
+        ['name' => 'Highrise', 'slug' => 'highrise', 'mono' => 'H', 'color' => '#26312f', 'product' => Workspace::DEFAULT_PRODUCT],
+        ['name' => 'Partnerships', 'slug' => 'partnerships', 'mono' => 'P', 'color' => '#2f9e68', 'product' => Workspace::DEFAULT_PRODUCT],
+        ['name' => 'Personal', 'slug' => 'personal', 'mono' => 'P', 'color' => '#e8a317', 'product' => Workspace::DEFAULT_PRODUCT],
     ];
 
     /**
